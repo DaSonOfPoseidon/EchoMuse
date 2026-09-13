@@ -3682,25 +3682,59 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
       }
       addLog(`Unlock check: TWRP ${twrp || 'unknown'}, expdb ${expdb || 'unreadable'}`);
     }
+    // A v2 device is refused by the FireOS flow and ACCEPTED by the emOS one,
+    // and that split is the point rather than a loosening.
+    //
+    // amonet-biscuit v2.0.0 writes a newer preloader, LK and TrustZone, and
+    // FireOS 5 does not boot on them — so the FireOS flow, which patches and
+    // boots the device's own Android 5, still cannot work and still refuses.
+    //
+    // What changed is emOS. It ran on FireOS 5's 64-bit kernel only, which is
+    // why this used to say "emOS included"; it now also runs on FireOS 6's
+    // 32-bit kernel, which is the only FireOS v2 boots. So refusing a v2 device
+    // here would refuse exactly the devices emOS newly supports, and the
+    // escrow-build-flash sequence the emOS flow runs is not FireOS-5-specific at
+    // any step: it reads the device's own boot image, rebuilds it with an init
+    // matching that image's kernel, and writes it back.
     const unlock = _unlockVerdict({ release: effRelease, expdb, twrp });
-    if (unlock.v2) {
+    if (unlock.v2 && !isEmos) {
       expectDisconnect.current = true;
       try { await c.close(); } catch {}
       setAdb(null);
       throw new Error(
         `This Echo was unlocked with amonet-biscuit v2.0.0 or later (${unlock.evidence.join('; ')}). `
-        + 'v2.0.0 replaces the Echo\'s bootloaders and FireOS 5 does not boot on them, and '
-        + 'EchoMuse, emOS included, needs FireOS 5 — so nothing has been written. Do not try '
-        + 'to go back by flashing FireOS 5 or an older amonet: that means writing bootloaders '
-        + 'by hand, which is how an Echo gets hard-bricked. See the warning at the top of '
-        + 'docs/rooting.md.');
+        + 'v2.0.0 replaces the Echo\'s bootloaders and FireOS 5 does not boot on them, so the '
+        + 'FireOS flow cannot work on this device — nothing has been written. Use the emOS flow '
+        + 'instead, which runs on the FireOS 6 kernel this device has. Do not try to go back by '
+        + 'flashing FireOS 5 or an older amonet: that means writing bootloaders by hand, which is '
+        + 'how an Echo gets hard-bricked. See the warning at the top of docs/rooting.md.');
     }
-    if ((!inRecovery || effRelease) && !effRelease.startsWith('5.')) {
-      throw new Error(`Expected FireOS 5 (Android 5.x), got Android ${effRelease}. Wrong device?`);
+    if (unlock.v2) {
+      // Said loudly, and not as a refusal. The operator is about to have their
+      // boot partition rewritten on a device class that has not been through
+      // this wizard before, and the thing that makes that recoverable is the
+      // escrow two steps away — so it is named here, while they can still stop.
+      addLog(`This Echo was unlocked with amonet-biscuit v2.0.0 or later `
+           + `(${unlock.evidence.join('; ')}), so it runs FireOS 6. emOS supports that `
+           + `kernel, and the wizard will build a 32-bit image to match it.`, 'warn');
+      addLog('No Echo unlocked with v2 has been through this wizard before. The '
+           + 'Escrow Boot Image step is the way back — keep that file.', 'warn');
+    }
+    // Which releases each flow can work with. FireOS 6 is Android 7.1, and there
+    // is no FireOS on this board reporting 6.x, so the emOS flow accepts 5 and 7
+    // by name rather than "not 5" — an unexpected release is still a wrong
+    // device, and the point of this check is to catch that before anything is
+    // written.
+    const okRelease = isEmos ? ['5.', '7.'] : ['5.'];
+    if ((!inRecovery || effRelease)
+        && !okRelease.some(p => effRelease.startsWith(p))) {
+      throw new Error(
+        `Expected ${isEmos ? 'FireOS 5 or 6 (Android 5.x or 7.x)' : 'FireOS 5 (Android 5.x)'}`
+        + `, got Android ${effRelease}. Wrong device?`);
     }
     if (fwBuild && fwBuild !== _TESTED_FIREOS_BUILD) {
       addLog(`Untested firmware — EchoMuse is developed against ${_TESTED_FIREOS_NAME} `
-           + `(${_TESTED_FIREOS_BUILD}). Other FireOS 5 builds may behave differently, `
+           + `(${_TESTED_FIREOS_BUILD}). Other builds may behave differently, `
            + `particularly around USB and ADB.`, 'warn');
     }
     // The emOS flow REFUSES a board it does not recognise, where the FireOS
@@ -5440,27 +5474,36 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
       throw new Error('No escrowed boot image — run the Escrow Boot Image step first.');
     }
 
-    // The init comes from the latest emOS release by default. It is the only
-    // part of an emOS image that CAN be distributed — the kernel and device
-    // trees in a built image are the user's own — so this is the whole of
-    // what the wizard needs to fetch.
-    let initBlob = initFile;
-    let version = '0.1';
+    // The init comes from the latest emOS release by default, and the CONTROLLER
+    // resolves it rather than the wizard fetching it first.
+    //
+    // That is not a tidying-up. The init must match the escrowed image's KERNEL
+    // architecture — FireOS 5 boots a 64-bit kernel and FireOS 6 a 32-bit one,
+    // and an init of the wrong one takes the flash and then produces no output
+    // at all — and the only thing that knows which is the image itself. Choosing
+    // here would mean a second copy of the sniffer in JavaScript, against the
+    // one in em_emos_build.py, and the two could disagree with no test able to
+    // see it. The image is going to the controller anyway, so the question is
+    // answered where the evidence is.
+    //
+    // It also keeps ~3.5MB out of a request that has already been too big once:
+    // HA's ingress caps the body well below what the controller accepts, and the
+    // reference plus an init was refused with a 413 that never reached the
+    // add-on at all (2026-09-06).
+    // useLatest OVERRIDES a chosen file, as it did before: it is a separate
+    // button, so clicking it after picking a file means the operator changed
+    // their mind. The old code overrode by overwriting initBlob with what it
+    // fetched; nothing is fetched now, so the override has to be explicit.
+    let initBlob = useLatest ? null : initFile;
+    // Only sent for a hand-picked init, where nothing else knows what it is. On
+    // the latest-release path the controller stamps the release's own tag, which
+    // is the version the image actually is — sending a placeholder here would
+    // override it and put "0.1" in /etc/os-release on every provisioned device.
+    let version = useLatest ? '' : '0.1';
     if (useLatest) {
-      addLog('Fetching the emOS init from the latest release…');
-      const resp = await fetch(ingressPath('/api/provision/emos_init'),
-                               { headers: { Authorization: `Bearer ${token}` } });
-      if (!resp.ok) {
-        let detail = `HTTP ${resp.status}`;
-        try { const j = await resp.json(); detail = j.message || j.error || detail; } catch {}
-        throw new Error(detail);
-      }
-      const bytes = new Uint8Array(await resp.arrayBuffer());
-      version = resp.headers.get('X-Emos-Version') || version;
-      initBlob = new Blob([bytes]);
-      addLog(`  ${version}, ${(bytes.length/1024/1024).toFixed(1)} MB`);
+      addLog('The controller will pick the init matching this image’s kernel.');
     }
-    if (!initBlob) {
+    if (!useLatest && !initBlob) {
       throw new Error('Choose an emOS init binary to build with, or use the '
         + 'latest release. Build one from emos/ with build.sh if you need a '
         + 'specific version.');
@@ -5486,7 +5529,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
            + `${(emosRef.bytes.length/1024/1024).toFixed(1)} MB partition — sending that`);
     }
     addLog(`Sending the escrowed image (${(reference.length/1024/1024).toFixed(1)} MB) `
-         + `and the init to the controller…`);
+         + `to the controller…`);
 
     const fd = new FormData();
     fd.append('reference', new Blob([reference]), 'reference.img');
@@ -5495,8 +5538,17 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     // provide one as a side effect of reproducing the boot header's SHA1, and
     // that had to be relaxed for images carrying a stale id.
     fd.append('reference_md5', await _md5Hex(reference));
-    fd.append('init', initBlob, 'init');
-    fd.append('version', version);
+    // One or the other, never both: the controller resolves the init from the
+    // reference's own kernel when asked, and an explicit part wins when the
+    // operator picked a file by hand.
+    if (initBlob) {
+      fd.append('init', initBlob, 'init');
+    } else {
+      fd.append('use_latest_init', '1');
+    }
+    if (version) {
+      fd.append('version', version);
+    }
     const resp = await fetch(ingressPath('/api/provision/emos_image'), {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },

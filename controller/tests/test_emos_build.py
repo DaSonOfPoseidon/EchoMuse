@@ -16,7 +16,10 @@ and a raw ramdisk.
 
 import hashlib
 import importlib.util
+import io
 import struct
+import zipfile
+import zlib
 import sys
 from pathlib import Path
 
@@ -82,6 +85,27 @@ def fake_init(machine=183, elf_class=2, e_type=2, size=4096):
     b += struct.pack("<HH", e_type, machine)
     b += b"\0" * (size - len(b))
     return bytes(b)
+
+
+def arm_zimage(size=2400):
+    """An ARM zImage: a self-decompressing stub carrying 0x016f2818 at 0x24."""
+    b = bytearray(b"\x00" * size)
+    b[0x24:0x28] = b"\x18\x28\x6f\x01"
+    return bytes(b)
+
+
+def arm64_zimage(size=2400):
+    """An AArch64 kernel: a raw gzip stream whose Image carries "ARM\\x64" at 0x38.
+
+    Compressed here rather than pasted as a blob so the test reads the same way
+    the sniffer does, and so a change to either end has to survive a real
+    decompress rather than a fixture somebody hand-edited.
+    """
+    image = bytearray(b"\x00" * 0x100)
+    image[0x38:0x3c] = b"ARM\x64"
+    co = zlib.compressobj(9, zlib.DEFLATED, 31)
+    out = co.compress(bytes(image) + b"\x00" * size) + co.flush()
+    return out
 
 
 # ── The cross-implementation contract ────────────────────────────────────────
@@ -295,14 +319,83 @@ def test_a_good_init_has_no_problems():
     assert eb.init_binary_problems(fake_init()) == []
 
 
-def test_an_arm32_init_is_refused():
+def test_an_arm32_init_is_refused_for_a_64_bit_kernel():
     """
-    The mistake that cost five flashed images: biscuit boots ARM64, and an
-    ARM32 kernel never executed an instruction. The same error in an init is
-    just as silent.
+    The mistake that cost five flashed images: FireOS 5's biscuit boots ARM64,
+    and an ARM32 kernel never executed an instruction. The same error in an init
+    is just as silent.
     """
     problems = eb.init_binary_problems(fake_init(machine=40))   # EM_ARM
     assert any("AArch64" in p for p in problems)
+
+
+# ── Which architecture the reference wants ────────────────────────────────────
+#
+# The init must match the reference's KERNEL. Getting it wrong is silent: the
+# flash succeeds and the device then produces no output at all.
+
+def test_reference_kernel_arch_reads_both_shapes():
+    assert eb.reference_kernel_arch(
+        make_reference(zimage=arm_zimage())) == eb.ARCH_ARM
+    assert eb.reference_kernel_arch(
+        make_reference(zimage=arm64_zimage())) == eb.ARCH_ARM64
+
+
+def test_reference_kernel_arch_says_nothing_rather_than_guessing():
+    """"" never an architecture: a caller can refuse on "", but cannot recover
+    from being told the wrong thing confidently."""
+    assert eb.reference_kernel_arch(make_reference(zimage=b"NEITHER" * 300)) == ""
+    assert eb.reference_kernel_arch(b"not a boot image at all" * 200) == ""
+    assert eb.reference_kernel_arch(b"") == ""
+    # A gzip stream that cannot be decompressed is not evidence of anything.
+    assert eb.reference_kernel_arch(
+        make_reference(zimage=b"\x1f\x8b" + b"\x00" * 600)) == ""
+    # Gzip that decompresses but is not an AArch64 Image.
+    co = zlib.compressobj(9, zlib.DEFLATED, 31)
+    notimage = co.compress(b"\x00" * 0x200) + co.flush()
+    assert eb.reference_kernel_arch(make_reference(zimage=notimage)) == ""
+
+
+def test_a_32_bit_init_is_accepted_for_a_32_bit_kernel():
+    """FireOS 6 boots a 32-bit kernel, so there the ARM init is the right one."""
+    assert eb.init_binary_problems(
+        fake_init(machine=40, elf_class=1), eb.ARCH_ARM) == []
+
+
+def test_a_64_bit_init_is_refused_for_a_32_bit_kernel():
+    """The other direction, which nothing checked before FireOS 6 existed."""
+    problems = eb.init_binary_problems(fake_init(), eb.ARCH_ARM)
+    assert any("not ARM" in p for p in problems)
+    assert any("32-bit" in p for p in problems)
+
+
+def test_the_build_checks_the_init_against_the_reference_it_was_given():
+    """Each arch's init accepted with its own reference, refused with the
+    other's — the reference being the only thing that knows which."""
+    arm_ref = make_reference(zimage=arm_zimage())
+    arm64_ref = make_reference(zimage=arm64_zimage())
+    arm_init = fake_init(machine=40, elf_class=1)
+    arm64_init = fake_init()
+
+    # Right pairings build.
+    assert eb.build_emos_image(arm_ref, arm_init, "0.1")["image"]
+    assert eb.build_emos_image(arm64_ref, arm64_init, "0.1")["image"]
+
+    # Wrong pairings refuse, in both directions.
+    with pytest.raises(eb.BuildError, match="ARM"):
+        eb.build_emos_image(arm_ref, arm64_init, "0.1")
+    with pytest.raises(eb.BuildError, match="AArch64"):
+        eb.build_emos_image(arm64_ref, arm_init, "0.1")
+
+
+def test_an_unreadable_reference_keeps_demanding_the_fireos5_arch():
+    """Absence is not evidence, so the fallback is the old behaviour — correct
+    on the existing fleet, and a refusal rather than a bad flash elsewhere."""
+    unreadable = make_reference(zimage=b"NEITHER" * 300)
+    assert eb.reference_kernel_arch(unreadable) == ""
+    assert eb.build_emos_image(unreadable, fake_init(), "0.1")["image"]
+    with pytest.raises(eb.BuildError, match="AArch64"):
+        eb.build_emos_image(unreadable, fake_init(machine=40, elf_class=1), "0.1")
 
 
 def test_a_dynamically_linked_init_is_refused():
@@ -366,6 +459,216 @@ def test_the_build_is_reproducible():
 def test_an_empty_init_is_refused():
     with pytest.raises(eb.BuildError, match="no init binary"):
         eb.build_ramdisk(b"", "0.1")
+
+
+# ── The payload bundle ────────────────────────────────────────────────────────
+#
+# One archive per release, with a manifest of sha256s. Four assets fetched
+# separately could each fail on their own; the manifest is also the first
+# publisher-side digest in this path.
+
+def _bundle_files():
+    return {"init": b"AARCH64INIT" * 40, "init32": b"ARMINIT" * 40,
+            "wpa_supplicant": b"SUPP" * 90, "wpa_cli": b"CLI" * 70,
+            "em-wifi": b"#!/system/bin/sh\nexit 0\n"}
+
+
+def test_the_bundle_round_trips_every_file():
+    files = _bundle_files()
+    got = eb.read_payload_bundle(eb.build_payload_bundle(files, "emos-v0.5"))
+    assert got["version"] == "emos-v0.5"
+    assert got["files"] == files
+
+
+def test_the_bundle_is_deterministic():
+    """Same inputs, same bytes — zipfile stamps the clock otherwise, and a
+    bundle that differs run to run cannot be troubleshot against."""
+    files = _bundle_files()
+    a = eb.build_payload_bundle(files, "emos-v0.5")
+    # Rebuilt from a dict in a different order, since insertion order must not
+    # reach the archive either.
+    b = eb.build_payload_bundle(dict(reversed(list(files.items()))), "emos-v0.5")
+    assert a == b
+
+
+def test_a_file_that_disagrees_with_the_manifest_is_refused():
+    """The manifest is all that stands between a corrupt download and a partition
+    write, so a mismatch refuses. Good manifest, different bytes."""
+    files = _bundle_files()
+    good = eb.build_payload_bundle(files, "emos-v0.5")
+    src = zipfile.ZipFile(io.BytesIO(good))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for n in src.namelist():
+            z.writestr(n, b"SUBSTITUTED" * 9 if n == "init32" else src.read(n))
+    with pytest.raises(eb.BuildError, match="does not match its manifest"):
+        eb.read_payload_bundle(buf.getvalue())
+
+
+def test_a_structurally_corrupt_entry_refuses_rather_than_raising():
+    """A flipped byte in a file header makes zipfile raise rather than mismatch.
+    Callers handle BuildError only, so anything else is a 500. Found the gap."""
+    raw = bytearray(eb.build_payload_bundle(_bundle_files(), "emos-v0.5"))
+    raw[-40] ^= 0xFF
+    with pytest.raises(eb.BuildError):
+        eb.read_payload_bundle(bytes(raw))
+
+
+def test_a_manifest_naming_a_missing_file_is_refused():
+    """A release built wrong, rather than a download that went wrong."""
+    files = _bundle_files()
+    data = eb.build_payload_bundle(files, "emos-v0.5")
+    # Rebuild the archive with the manifest intact but one file left out.
+    src = zipfile.ZipFile(io.BytesIO(data))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for n in src.namelist():
+            if n != "init32":
+                z.writestr(n, src.read(n))
+    with pytest.raises(eb.BuildError, match="not in the archive"):
+        eb.read_payload_bundle(buf.getvalue())
+
+
+def test_a_bundle_with_no_manifest_is_refused():
+    """No manifest means the archive proves only that it unzipped."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("init", b"X" * 64)
+    with pytest.raises(eb.BuildError, match="no manifest.json"):
+        eb.read_payload_bundle(buf.getvalue())
+
+
+def test_rubbish_is_refused_rather_than_raising_a_zip_error():
+    """Callers catch BuildError; anything else reaches the operator as a 500."""
+    with pytest.raises(eb.BuildError, match="not a readable archive"):
+        eb.read_payload_bundle(b"this is not a zip file" * 20)
+
+
+def test_entries_outside_the_manifest_are_never_read():
+    """Reading is driven by the manifest, so a smuggled entry is never read —
+    and nothing is extracted to disk, so there is no path to traverse."""
+    files = _bundle_files()
+    data = eb.build_payload_bundle(files, "emos-v0.5")
+    src = zipfile.ZipFile(io.BytesIO(data))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for n in src.namelist():
+            z.writestr(n, src.read(n))
+        z.writestr("../../etc/passwd", b"root::0:0::/:/bin/sh\n")
+        z.writestr("extra", b"unlisted")
+    got = eb.read_payload_bundle(buf.getvalue())
+    assert set(got["files"]) == set(files), \
+        "only the manifest's files may be returned"
+
+
+def test_the_builder_refuses_a_path_as_a_name():
+    """Flat by construction; a path here is a caller bug."""
+    for bad in ("a/b", "..", "", "manifest.json"):
+        with pytest.raises(eb.BuildError):
+            eb.build_payload_bundle({bad: b"X" * 8}, "emos-v0.5")
+
+
+def test_an_empty_bundle_is_refused():
+    with pytest.raises(eb.BuildError, match="no files to bundle"):
+        eb.build_payload_bundle({}, "emos-v0.5")
+
+
+# ── /sbin: the wpa tools and the console's network tool ───────────────────────
+#
+# This path had no test and the parameter behind it was dead, which is how it
+# kept an inode bug and could not express wpa_cli or em-wifi at all.
+
+def _newc_entries(archive: bytes) -> list:
+    """Parse a newc cpio, so tests read the archive rather than grep its bytes."""
+    out, off = [], 0
+    while True:
+        assert archive[off:off + 6] == b"070701", "not a newc header"
+        f = [int(archive[off + 6 + i * 8: off + 14 + i * 8], 16) for i in range(13)]
+        ino, mode, nlink, size, namesize = f[0], f[1], f[4], f[6], f[11]
+        name_off = off + 110
+        name = archive[name_off:name_off + namesize - 1].decode()
+        data_off = name_off + namesize
+        data_off += -data_off % 4
+        data = archive[data_off:data_off + size]
+        if name == "TRAILER!!!":
+            return out
+        out.append((name, mode, ino, data, nlink))
+        off = data_off + size
+        off += -off % 4
+
+
+def test_the_ramdisk_carries_all_three_sbin_tools():
+    import gzip
+    supp, cli, emwifi = b"SUPPLICANT" * 40, b"WPACLI" * 30, b"#!/system/bin/sh\n"
+    raw = gzip.decompress(eb.build_ramdisk(fake_init(), "0.1", sbin={
+        "wpa_supplicant": supp, "wpa_cli": cli, "em-wifi": emwifi}))
+    entries = {n: (m, i, d) for n, m, i, d, _ in _newc_entries(raw)}
+
+    assert "sbin" in entries, "/sbin must exist before anything inside it"
+    assert entries["sbin"][0] & eb._S_IFDIR, "/sbin must be a directory"
+    for name, data in (("wpa_supplicant", supp), ("wpa_cli", cli),
+                       ("em-wifi", emwifi)):
+        key = f"sbin/{name}"
+        assert key in entries, f"{key} missing — emos/build.sh installs it"
+        mode, _, got = entries[key]
+        assert got == data, f"{key} contents differ from what was passed"
+        # init execs these directly; a non-executable one is a boot that reaches
+        # the network stage and stops there.
+        assert mode & 0o111, f"{key} is not executable (mode {mode:o})"
+
+
+def test_the_sbin_directory_comes_before_its_contents():
+    """cpio applies in order: a file before its parent cannot be placed."""
+    import gzip
+    raw = gzip.decompress(eb.build_ramdisk(
+        fake_init(), "0.1", sbin={"wpa_cli": b"X" * 64}))
+    names = [n for n, *_ in _newc_entries(raw)]
+    assert names.index("sbin") < names.index("sbin/wpa_cli")
+
+
+def test_every_ramdisk_entry_has_its_own_inode():
+    """Shared inodes are a malformed archive an extractor may read as hardlinks.
+    The first /sbin version gave five entries the same one."""
+    import gzip
+    raw = gzip.decompress(eb.build_ramdisk(fake_init(), "0.1", sbin={
+        "wpa_supplicant": b"S" * 64, "wpa_cli": b"C" * 64, "em-wifi": b"E" * 64}))
+    entries = _newc_entries(raw)
+    inodes = [i for _, _, i, _, _ in entries]
+    assert len(set(inodes)) == len(inodes), (
+        "duplicate inodes: " + ", ".join(
+            f"{n}={i}" for n, _, i, _, _ in entries))
+    assert all(nlink == 1 for *_, nlink in entries), \
+        "nlink must be 1 — nothing here is a hardlink"
+
+
+def test_no_sbin_directory_when_there_are_no_tools():
+    """build.sh produces no /sbin for FireOS 5, and this archive is compared
+    byte for byte against that one."""
+    import gzip
+    for sbin in (None, {}, {"wpa_cli": b""}):
+        raw = gzip.decompress(eb.build_ramdisk(fake_init(), "0.1", sbin=sbin))
+        names = [n for n, *_ in _newc_entries(raw)]
+        assert not any(n == "sbin" or n.startswith("sbin/") for n in names), \
+            f"sbin appeared for sbin={sbin!r}: {names}"
+
+
+def test_the_sbin_tools_do_not_break_reproducibility():
+    """Insertion order at the call site must not reach the archive."""
+    a = eb.build_ramdisk(fake_init(), "0.1", sbin={
+        "wpa_supplicant": b"S" * 64, "wpa_cli": b"C" * 64, "em-wifi": b"E" * 64})
+    b = eb.build_ramdisk(fake_init(), "0.1", sbin={
+        "em-wifi": b"E" * 64, "wpa_cli": b"C" * 64, "wpa_supplicant": b"S" * 64})
+    assert a == b
+
+
+def test_the_image_build_carries_the_sbin_tools_through():
+    """build_emos_image is what the wizard calls, so it must pass them too."""
+    import gzip
+    info = eb.build_emos_image(make_reference(), fake_init(), "0.1",
+                               sbin={"wpa_cli": b"CLI" * 40})
+    parts = eb.split_reference(info["image"])
+    names = [n for n, *_ in _newc_entries(gzip.decompress(parts["ramdisk"]))]
+    assert "sbin/wpa_cli" in names
 
 
 # ── The built image ──────────────────────────────────────────────────────────

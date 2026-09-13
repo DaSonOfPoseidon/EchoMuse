@@ -18,9 +18,11 @@ Nothing of Amazon's is stored here or shipped in this image; what we add is the
 static `init` and a ramdisk of empty mountpoints. The artifact never leaves the
 user's own infrastructure.
 
-THE INIT BINARY IS AN INPUT, NOT SOMETHING THIS BUILDS. It is aarch64 static,
-and the controller image has no NDK — see `init_binary_problems()` for the
-checks applied to whatever it is handed.
+THE INIT BINARY IS AN INPUT, NOT SOMETHING THIS BUILDS — the controller image
+has no NDK. It is static, and its ARCHITECTURE must match the reference image's
+KERNEL rather than being fixed: FireOS 5 boots a 64-bit kernel and FireOS 6 a
+32-bit one. `reference_kernel_arch()` reads that off the reference and
+`init_binary_problems()` checks the init against it.
 
 Pure standard library on purpose, so the whole packer is unit-testable without
 aiohttp. See controller/CLAUDE.md.
@@ -29,7 +31,10 @@ aiohttp. See controller/CLAUDE.md.
 import gzip
 import hashlib
 import io
+import json
 import struct
+import zipfile
+import zlib
 
 MTK_MAGIC = 0x58881688
 PAGE = 2048
@@ -44,19 +49,130 @@ RAMOOPS_CMDLINE = (
     "ramoops.dump_oops=1"
 )
 
-# ELF header bytes for a 64-bit little-endian AArch64 executable. Checked
-# rather than assumed because the failure it prevents is silent and expensive:
-# an init of the wrong architecture flashes fine, and the device then produces
-# no output at all, which is indistinguishable from a kernel that never
-# started. See emos/README.md.
+# ELF header bytes. Checked rather than assumed because the failure they
+# prevent is silent and expensive: an init of the wrong architecture flashes
+# fine, and the device then produces no output at all, which is
+# indistinguishable from a kernel that never started. See emos/README.md.
 _ELF_MAGIC = b"\x7fELF"
+_ELF_CLASS32 = 1
 _ELF_CLASS64 = 2
 _ELF_LITTLE = 1
+_EM_ARM = 40
 _EM_AARCH64 = 183
+
+# The init must match the KERNEL, not the userspace: FireOS 5 boots 64-bit,
+# FireOS 6 a 32-bit build of the same 3.18.19 source. The firmware is armv7a on
+# both. Getting this wrong cost five flashed images that never executed.
+ARCH_ARM = "arm"
+ARCH_ARM64 = "arm64"
+_ARCH_ELF = {
+    ARCH_ARM:   (_ELF_CLASS32, _EM_ARM,     "32-bit", "ARM"),
+    ARCH_ARM64: (_ELF_CLASS64, _EM_AARCH64, "64-bit", "AArch64"),
+}
 
 
 class BuildError(Exception):
     """Anything that should stop the build with something a person can act on."""
+
+
+# ── The payload bundle ───────────────────────────────────────────────────────
+#
+# One archive per release: both inits, the WiFi userspace, and a manifest of
+# sha256s. Four separate assets could each be missing or fail on their own, so a
+# partially published release could hand a build a mismatched set. The manifest
+# is also the first publisher-side digest in this path — em_firmware's md5 only
+# compares a cached file against bytes we downloaded ourselves.
+#
+# The loose `init` asset stays published alongside: _fetch_latest_emos_release
+# matches it by exact name, so dropping it strands every fielded controller.
+PAYLOAD_MANIFEST = "manifest.json"
+
+# zipfile stamps the clock into every entry otherwise; 1980 is the zip minimum.
+_ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
+
+
+def build_payload_bundle(files: dict, version: str) -> bytes:
+    """The bundle for one emOS release: `files` is name -> bytes.
+
+    Deterministic: fixed timestamps, sorted entries, fixed compression.
+    """
+    if not files:
+        raise BuildError("no files to bundle")
+    for name in files:
+        # Flat by construction, so nothing downstream reasons about traversal.
+        if "/" in name or "\\" in name or name in ("", ".", "..") \
+                or name == PAYLOAD_MANIFEST:
+            raise BuildError(f"bad name for a bundle entry: {name!r}")
+
+    manifest = {
+        "version": version,
+        "files": {n: {"sha256": hashlib.sha256(d).hexdigest(), "size": len(d)}
+                  for n, d in sorted(files.items())},
+    }
+    body = json.dumps(manifest, indent=2, sort_keys=True).encode()
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        for name, data in [(PAYLOAD_MANIFEST, body)] + sorted(files.items()):
+            info = zipfile.ZipInfo(name, date_time=_ZIP_EPOCH)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o755 << 16
+            z.writestr(info, data)
+    return buf.getvalue()
+
+
+def read_payload_bundle(data: bytes) -> dict:
+    """Open a bundle: {"version": str, "files": {name: bytes}}.
+
+    Files are read by name from the manifest and checked against its sha256s;
+    nothing is extracted to disk, so entries not in the manifest are never
+    touched. Every fault raises BuildError — the caller's next move is a
+    partition write.
+    """
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as e:
+        raise BuildError(f"the emOS payload is not a readable archive: {e}")
+
+    try:
+        manifest = json.loads(z.read(PAYLOAD_MANIFEST))
+    except KeyError:
+        raise BuildError(
+            f"the emOS payload carries no {PAYLOAD_MANIFEST}, so there is "
+            f"nothing to check its contents against")
+    except (ValueError, zipfile.BadZipFile) as e:
+        raise BuildError(f"the emOS payload's manifest is unreadable: {e}")
+
+    entries = manifest.get("files")
+    if not isinstance(entries, dict) or not entries:
+        raise BuildError("the emOS payload's manifest lists no files")
+
+    out = {}
+    for name, meta in entries.items():
+        try:
+            blob = z.read(name)
+        except KeyError:
+            raise BuildError(
+                f"the emOS payload's manifest names {name!r}, which is not in "
+                f"the archive")
+        except (zipfile.BadZipFile, zlib.error, EOFError, ValueError) as e:
+            # Callers handle BuildError and nothing else; zipfile's own
+            # exception would surface as a 500 pointing at nothing.
+            raise BuildError(
+                f"{name} in the emOS payload could not be read ({e}) — the "
+                f"download is corrupt")
+        want = (meta or {}).get("sha256")
+        if not want:
+            raise BuildError(f"the manifest records no sha256 for {name!r}")
+        got = hashlib.sha256(blob).hexdigest()
+        if got != want:
+            raise BuildError(
+                f"{name} in the emOS payload does not match its manifest "
+                f"(sha256 {got[:16]}… against {want[:16]}…) — the download is "
+                f"corrupt or the release was built wrong")
+        out[name] = blob
+
+    return {"version": manifest.get("version", ""), "files": out}
 
 
 # ── cpio (newc), written here rather than shelled out ────────────────────────
@@ -88,13 +204,19 @@ _S_IFDIR = 0o040000
 _S_IFREG = 0o100000
 
 
-def build_ramdisk(init_binary: bytes, version: str, build_id: str = "") -> bytes:
+def build_ramdisk(init_binary: bytes, version: str, build_id: str = "",
+                  sbin: dict = None) -> bytes:
     """The gzipped cpio the boot image carries: init, mountpoints, os-release.
 
     The mountpoints have to exist in the ramdisk because there is no devtmpfs
     and nothing populates anything on its own — see emos/README.md. Everything
     the running system uses beyond this is mounted from the device's own
     /system, which is why no Amazon code is redistributed.
+
+    `sbin` maps name -> bytes for what emOS carries in /sbin: `wpa_supplicant`,
+    `wpa_cli`, `em-wifi`. Optional — a FireOS 5 image falls back to
+    /system/bin/wpa_supplicant, which the fleet runs today. FireOS 6 needs ours,
+    since Amazon's aborts under emOS before main() (it opens /dev/binder).
     """
     if not init_binary:
         raise BuildError("no init binary was supplied")
@@ -117,6 +239,7 @@ def build_ramdisk(init_binary: bytes, version: str, build_id: str = "") -> bytes
 
     out = io.BytesIO()
     ino = 1
+    _sbin_written = False
     # Sorted and fixed, so the archive is byte-stable across Python versions
     # and filesystems. `find` order is not a promise.
     for d in ("dev", "proc", "sys", "system", "data", "etc"):
@@ -126,6 +249,25 @@ def build_ramdisk(init_binary: bytes, version: str, build_id: str = "") -> bytes
     ino += 1
     out.write(_newc_entry("init", _S_IFREG | 0o755, init_binary, ino))
     ino += 1
+
+    # /sbin only if something goes in it: build.sh produces none for FireOS 5,
+    # and this archive is compared byte for byte against that one.
+    #
+    # Every entry needs its OWN inode — in newc, c_ino plus c_nlink is how
+    # hardlinks are represented, so shared inodes are a malformed archive an
+    # extractor may read as links to one file. Sorted, so a dict's insertion
+    # order cannot reach the image.
+    for name in sorted((sbin or {})):
+        data = (sbin or {})[name]
+        if not data:
+            continue
+        if not _sbin_written:
+            out.write(_newc_entry("sbin", _S_IFDIR | 0o755, b"", ino))
+            ino += 1
+            _sbin_written = True
+        out.write(_newc_entry(f"sbin/{name}", _S_IFREG | 0o755, data, ino))
+        ino += 1
+
     out.write(_newc_entry("TRAILER!!!", 0, b"", ino))
     # The archive is padded to a 512-byte boundary by convention; the kernel
     # does not require it and LK never looks, but tools that read the image
@@ -217,6 +359,36 @@ def split_reference(ref: bytes) -> dict:
         kaddr=kaddr, raddr=raddr, saddr=saddr, tags=tags, hdrv=hdrv, osv=osv,
         cmdline=ref[64:64 + 512].rstrip(b"\0"),
     )
+
+
+def reference_kernel_arch(ref: bytes) -> str:
+    """Which architecture the reference image's KERNEL is, or "" if unreadable.
+
+    Read off the reference for split_reference's reason: the device's own image
+    is the only thing that knows. An ARM zImage carries 0x016f2818 at 0x24; an
+    AArch64 kernel is a gzip stream whose Image carries "ARM\\x64" at 0x38.
+
+    "" must not be read as either architecture — build.sh refuses on it and
+    init_binary_problems keeps demanding AArch64, so it costs a refusal, never a
+    wrong flash.
+    """
+    if len(ref) < PAGE or ref[:8] != b"ANDROID!":
+        return ""
+    ksz = struct.unpack("<I", ref[8:12])[0]
+    payload = ref[PAGE:PAGE + ksz][0x200:]
+    if payload[0x24:0x28] == b"\x18\x28\x6f\x01":
+        return ARCH_ARM
+    if payload[:2] == b"\x1f\x8b":
+        try:
+            # 31 = gzip wrapper. Only the first 0x40 bytes are needed, and a
+            # truncated stream raises rather than answering — an Image whose
+            # head cannot be decompressed is not evidence of anything.
+            head = zlib.decompressobj(31).decompress(payload, 0x40)
+        except zlib.error:
+            return ""
+        if head[0x38:0x3c] == b"ARM\x64":
+            return ARCH_ARM64
+    return ""
 
 
 def pack(parts: dict, zimage: bytes, dtbs: bytes, ramdisk: bytes,
@@ -347,24 +519,30 @@ def pack_kernel_of(parts: dict) -> bytes:
                     parts.get("mtkhdr", b""))
 
 
-def init_binary_problems(init_binary: bytes) -> list:
+def init_binary_problems(init_binary: bytes, arch: str = ARCH_ARM64) -> list:
     """Everything wrong with a candidate init, as sentences, or an empty list.
 
     Both properties are silent when wrong and fatal on the device: there is no
     dynamic loader at PID 1 time, and an init of the wrong architecture leaves
     a box that boots to nothing at all. Neither is worth discovering after a
     partition write.
+
+    `arch` is the REFERENCE KERNEL's architecture, from reference_kernel_arch.
+    It defaults to the FireOS 5 answer — what this checked unconditionally before
+    FireOS 6 — so a caller without a reference keeps the old behaviour.
     """
     problems = []
     if len(init_binary) < 64 or init_binary[:4] != _ELF_MAGIC:
         return ["the init binary is not an ELF executable"]
-    if init_binary[4] != _ELF_CLASS64 or init_binary[5] != _ELF_LITTLE:
-        problems.append("the init binary is not 64-bit little-endian")
+    elf_class, e_machine_want, width, machine_name = _ARCH_ELF.get(
+        arch, _ARCH_ELF[ARCH_ARM64])
+    if init_binary[4] != elf_class or init_binary[5] != _ELF_LITTLE:
+        problems.append(f"the init binary is not {width} little-endian")
     e_machine = struct.unpack("<H", init_binary[18:20])[0]
-    if e_machine != _EM_AARCH64:
+    if e_machine != e_machine_want:
         problems.append(
-            f"the init binary is not AArch64 (ELF machine {e_machine}); "
-            "biscuit boots an ARM64 kernel")
+            f"the init binary is not {machine_name} (ELF machine {e_machine}); "
+            f"this device's kernel is {arch}")
     e_type = struct.unpack("<H", init_binary[16:18])[0]
     # ET_EXEC (2) is what -static produces. ET_DYN (3) is a PIE, which needs an
     # interpreter this system does not have at PID 1.
@@ -377,13 +555,16 @@ def init_binary_problems(init_binary: bytes) -> list:
 
 
 def build_emos_image(reference: bytes, init_binary: bytes, version: str,
-                     build_id: str = "") -> dict:
+                     build_id: str = "", sbin: dict = None) -> dict:
     """Build the image, refusing rather than warning at every gate.
 
     Returns the image and what went into it, so the wizard can show the user
     the numbers it decided on rather than asking them to trust the result.
     """
-    problems = init_binary_problems(init_binary)
+    # Against the REFERENCE's kernel, not a constant: the same function builds
+    # for both, and only the user's own image knows which.
+    arch = reference_kernel_arch(reference)
+    problems = init_binary_problems(init_binary, arch or ARCH_ARM64)
     if problems:
         raise BuildError("; ".join(problems))
 
@@ -438,7 +619,7 @@ def build_emos_image(reference: bytes, init_binary: bytes, version: str,
             "flash something assembled by a parser already shown to be wrong."
             + detail)
 
-    ramdisk = build_ramdisk(init_binary, version, build_id)
+    ramdisk = build_ramdisk(init_binary, version, build_id, sbin)
     image = pack(parts, parts["zimage"], parts["dtbs"], ramdisk)
     return dict(
         image=image,
