@@ -965,6 +965,98 @@ static int wr(const char *path, const char *val)
     return n > 0 ? 0 : -1;
 }
 
+/* ── Which /system this image was built against ───────────────────────────
+ *
+ * `emos.system=` is stamped onto the cmdline by the packer at BUILD time and
+ * names the partition holding the FireOS userspace this image was built from.
+ *
+ * It is a build-time fact on purpose. emOS carries Amazon's kernel and its own
+ * ramdisk, and nothing else: bionic, the linker, tinyalsa, /system/bin/sh and
+ * the WiFi firmware all come from /system at runtime, which is 768MB of
+ * Amazon's code we neither ship nor could. So an image is a PAIR -- a kernel
+ * and the system it was taken beside -- and the pairing has to travel with the
+ * image rather than be guessed at each boot.
+ *
+ * Do NOT derive this from the boot slot. Once emOS is installed beside a
+ * preserved stock image the two are DELIBERATELY different: stock keeps its
+ * slot, emOS goes in the other, and the bootloader is pointed at emOS. The
+ * slot says where these bytes live; it says nothing about which userspace they
+ * were built against.
+ *
+ * Absent means an image built before this existed: fall back to p13, which is
+ * what those images hardcoded, so they keep booting exactly as they did.
+ */
+#define SYSTEM_PART_DEFAULT 13
+
+/* The value of `key` on the cmdline, copied into `out`. NULL when absent.
+ *
+ * Matched at a TOKEN BOUNDARY, unlike the strstr() below: a bare substring
+ * search for "emos.system=" is also satisfied by "xemos.system=", and the
+ * value it would then return belongs to a parameter we know nothing about.
+ * Mounting the wrong partition on the strength of that is not a failure
+ * anybody could read off the symptom.
+ */
+static const char *cmdline_value(const char *cmdline, const char *key,
+                                 char *out, size_t outlen)
+{
+    size_t klen = strlen(key);
+    for (const char *p = cmdline; *p; ) {
+        while (*p == ' ' || *p == '\t' || *p == '\n')
+            p++;
+        if (!*p)
+            break;
+        const char *end = p;
+        while (*end && *end != ' ' && *end != '\t' && *end != '\n')
+            end++;
+        if ((size_t)(end - p) > klen && !strncmp(p, key, klen)) {
+            size_t vlen = (size_t)(end - p) - klen;
+            if (vlen >= outlen)
+                return NULL;              /* too long to be one of ours */
+            memcpy(out, p + klen, vlen);
+            out[vlen] = 0;
+            return out;
+        }
+        p = end;
+    }
+    return NULL;
+}
+
+/* The mmcblk0 partition minor named by emos.system=, or SYSTEM_PART_DEFAULT.
+ *
+ * The value is a full device path rather than a bare number so it reads as
+ * what it is in a header dump and in /proc/cmdline -- this is the one field
+ * somebody supporting a device will be asked to read out loud.
+ *
+ * Anything that is not exactly /dev/block/mmcblk0p<N> falls back rather than
+ * being interpreted generously. A stamp we do not recognise means the image
+ * was built by something we do not know, and guessing at its intent is how a
+ * wrong partition gets mounted and reported as a healthy boot.
+ */
+static int cmdline_system_part(const char *cmdline)
+{
+    char val[64];
+    if (!cmdline_value(cmdline, "emos.system=", val, sizeof val))
+        return SYSTEM_PART_DEFAULT;
+
+    static const char pfx[] = "/dev/block/mmcblk0p";
+    size_t plen = sizeof pfx - 1;
+    if (strncmp(val, pfx, plen))
+        return SYSTEM_PART_DEFAULT;
+
+    const char *d = val + plen;
+    if (!*d)
+        return SYSTEM_PART_DEFAULT;
+    int n = 0;
+    for (; *d; d++) {
+        if (*d < '0' || *d > '9')
+            return SYSTEM_PART_DEFAULT;
+        n = n * 10 + (*d - '0');
+        if (n > 127)                      /* minor 0 is the whole device */
+            return SYSTEM_PART_DEFAULT;
+    }
+    return n > 0 ? n : SYSTEM_PART_DEFAULT;
+}
+
 /* The device's serial, read from androidboot.serialno on the kernel cmdline.
  *
  * LK puts it there (confirmed in /proc/cmdline on this board), which is the
@@ -1089,14 +1181,34 @@ static const char *first_exec(const char *const cands[])
     return NULL;
 }
 
-/* busybox: from /system on FireOS 5; on FireOS 6, which has none, a static
- * copy placed on /data. NULL when there is none, and every caller then falls
- * back to the FireOS 5 path, so a missing busybox fails exactly as it always
- * did rather than in some new way. Only meaningful once /system and /data are
- * mounted. */
+/* busybox. OURS FIRST, on every layout. NULL when the image carries none, and
+ * every caller then falls back as it always did, so an old image behaves
+ * exactly as before rather than losing the network outright. Only meaningful
+ * once /system and /data are mounted.
+ *
+ * The ordering is the point. Every other candidate here belongs to somebody
+ * else: /system's copy is Amazon's on FireOS 5 and does not exist on FireOS 6,
+ * and /data/local/bin is where a third-party root leaves one -- amonet v2's
+ * OPTIONAL component, or a root zip from the XDA thread. Searching those first
+ * means DHCP, ntpd and the system log are served by a binary of unknown
+ * vintage that the user can remove by reflashing, and nothing reports the
+ * swap. That is precisely how #524 happened: FireOS 6 appeared to work because
+ * amonet had left a busybox behind, and the first clean install had no udhcpc
+ * at all.
+ *
+ * So the answer is not "prefer ours where theirs is missing" but "use ours,
+ * full stop". It is the one we build, pin, and test: 1.38.0, static, and
+ * verified on hardware to bring up DHCP, the log and ~300 applets.
+ *
+ * This DOES change FireOS 5, which has run on Amazon's copy until now, and
+ * that is deliberate rather than incidental. It is not a change under a
+ * running device: a device only gets ours by being flashed with an image that
+ * carries it, which is the same act that delivers the rest of the release.
+ */
 static const char *busybox_path(void)
 {
-    static const char *const c[] = { "/system/bin/busybox", "/system/xbin/busybox",
+    static const char *const c[] = { "/sbin/busybox", "/system/bin/busybox",
+                                     "/system/xbin/busybox",
                                      "/data/local/bin/busybox", NULL };
     return first_exec(c);
 }
@@ -1106,7 +1218,10 @@ static pid_t spawn(char *const argv[])
 {
     pid_t pid = fork();
     if (pid == 0) {
-        char *envp[] = { "HOME=/", "ANDROID_ROOT=/system",
+        /* ANDROID_DATA: see start_console(). Services inherit this too, so
+         * without it the tzdata warning lands in the log rather than on a
+         * terminal, two lines per exec. */
+        char *envp[] = { "HOME=/", "ANDROID_ROOT=/system", "ANDROID_DATA=/data",
                          "PATH=/sbin:/system/bin:/system/xbin", NULL };
         int n = netlog_open();
         if (n < 0)
@@ -1986,8 +2101,22 @@ int main(int argc, char **argv)
     /* /system read-only: this is a diagnostic boot and nothing here should be
      * able to damage the Android install we still rely on for recovery. */
     mkdir("/system", 0755);
-    mknod("/dev/block/mmcblk0p13", S_IFBLK | 0600, makedev(179, 13));
-    int r = mount("/dev/block/mmcblk0p13", "/system", "ext4", MS_RDONLY, NULL);
+    /* Which partition, from the stamp the packer put on our own cmdline --
+     * see cmdline_system_part(). Read here rather than at the top of main so
+     * the number appears in the stage line beside the mount it explains. */
+    char cmdl[2048] = "";
+    int cfd = open("/proc/cmdline", O_RDONLY);
+    if (cfd >= 0) {
+        ssize_t cn = read(cfd, cmdl, sizeof cmdl - 1);
+        close(cfd);
+        if (cn > 0)
+            cmdl[cn] = 0;
+    }
+    int sysp = cmdline_system_part(cmdl);
+    char sysdev[48];
+    snprintf(sysdev, sizeof sysdev, "/dev/block/mmcblk0p%d", sysp);
+    mknod(sysdev, S_IFBLK | 0600, makedev(179, sysp));
+    int r = mount(sysdev, "/system", "ext4", MS_RDONLY, NULL);
 
     /* FireOS 6 is SYSTEM-AS-ROOT: the partition's root is the Android root
      * filesystem — init, init.rc, fstab.mt8163, sbin — with the real tree in a
@@ -2020,7 +2149,8 @@ int main(int argc, char **argv)
         if (!nested)
             note("stage=mount_system bind_errno=%d\n", errno);
     }
-    note("stage=mount_system rc=%d errno=%d nested=%d sh=%d\n", r, r ? errno : 0,
+    note("stage=mount_system part=%d rc=%d errno=%d nested=%d sh=%d\n",
+         sysp, r, r ? errno : 0,
          nested, access("/system/bin/sh", X_OK));
 
     /* A mount that landed on a tree with no shell is not a working /system,
@@ -2298,7 +2428,15 @@ int main(int argc, char **argv)
      * controller to reach when it does start. */
     svc_add("echomuse", echomuse, "/data/local/bin/start_server.sh",
             "/run/net-up");
-    svc_add("console", NULL, NULL, NULL);   /* needs the tty as its stdio */
+    /* `req` is given even though start_console() supplies its own argv: the
+     * supervisor's absent-check reads req, falling back to argv[0], and this
+     * service has neither. Without it an unexecutable shell is respawned every
+     * few seconds for ever, which on the USB console looks like the banner
+     * cycling rather than like a failure -- and that is exactly how the FireOS
+     * 6 system-as-root layout hid for a day, with /system mounted, stage 2
+     * passed and the ring throbbing happily. Every other service would have
+     * said `svc <name> absent` once and stopped. */
+    svc_add("console", NULL, "/system/bin/sh", NULL);  /* tty is its stdio */
 
     supervise();
     return 0;
@@ -2844,12 +2982,19 @@ static pid_t start_console(void)
          * depends on a check in another function is one refactor from
          * truncating. */
         char tmout[32];
+        /* ANDROID_DATA is set because bionic looks for tzdata under it before
+         * falling back to ANDROID_ROOT, and without it EVERY command run on
+         * this console prints two lines of
+         * `__bionic_open_tzdata_path: ANDROID_DATA not set!` before its own
+         * output. Harmless, and it made the one channel available on a broken
+         * device unreadable. */
         char *envp[] = { "HOME=/", "TERM=vt100", "ANDROID_ROOT=/system",
+                         "ANDROID_DATA=/data",
                          "PATH=/sbin:/system/bin:/system/xbin", NULL, NULL };
         long tsec = console_timeout_secs();
         if (tsec > 0) {
             snprintf(tmout, sizeof tmout, "TMOUT=%ld", tsec);
-            envp[4] = tmout;
+            envp[5] = tmout;
         }
         execve("/system/bin/sh", argv, envp);
         _exit(127);

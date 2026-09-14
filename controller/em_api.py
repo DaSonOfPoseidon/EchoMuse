@@ -4822,10 +4822,19 @@ EMOS_INIT_ASSETS = {
     em_emos_build.ARCH_ARM: "init32",
 }
 
-# emOS's own WiFi userspace, installed into the image's /sbin. ONE build serves
+# emOS's own userspace, installed into the image's /sbin. ONE build serves
 # both kernels — these are ordinary processes, and a 64-bit kernel runs 32-bit
 # binaries — so unlike the init there is nothing per-architecture here.
-EMOS_SBIN_ASSETS = ("wpa_supplicant", "wpa_cli", "em-wifi")
+#
+# busybox is here for the same reason the supplicant is: a FireOS 6 /system
+# ships toybox and no busybox at all, so without ours there is no udhcpc and
+# the image boots, associates, and never gets an address — plus no ntpd, no
+# syslogd/klogd, and no awk for em-wifi to read a scan with.
+#
+# This tuple is an allowlist and a payload missing any member is REFUSED, so
+# adding a name here strands every emOS release cut before it. Tag emOS first,
+# then the controller.
+EMOS_SBIN_ASSETS = ("wpa_supplicant", "wpa_cli", "em-wifi", "busybox")
 
 # One archive with a manifest of sha256s — see build_payload_bundle.
 EMOS_PAYLOAD_ASSET = "emos-payload.zip"
@@ -4920,9 +4929,10 @@ async def _fetch_emos_payload(arch: str) -> tuple:
             return None, {}, version, _error(
                 "no_wifi_tools_for_arch",
                 f"emOS release {version} carries no {', '.join(missing)}. A "
-                f"FireOS 6 image needs emOS's own WiFi tools — Amazon's "
-                f"supplicant cannot run under emOS — so there is nothing to "
-                f"build a working image from. Cut a newer emos-v* tag.", 404)
+                f"FireOS 6 image needs emOS's own userspace — Amazon's "
+                f"supplicant cannot run under emOS and its /system has no "
+                f"busybox — so there is nothing to build a working image "
+                f"from. Cut a newer emos-v* tag.", 404)
         sbin = {n: files[n] for n in EMOS_SBIN_ASSETS}
 
     return init, sbin, version, None
@@ -5118,6 +5128,26 @@ async def _post_provision_emos_image(request: web.Request) -> web.Response:
         # A hand-picked init carries no WiFi tools, matching emos/build.sh.
         sbin = {}
 
+        # Which FireOS userspace this reference was read beside, stamped onto
+        # the image so emOS mounts that one rather than assuming. The WIZARD
+        # resolves it, because system_a/system_b are names and TWRP's by-name
+        # map is the only place those names exist — this end never guesses.
+        #
+        # Absent is allowed: an image with no stamp falls back to the partition
+        # emOS hardcoded before this existed, so an older wizard keeps working.
+        # A value we cannot read is refused rather than dropped, because
+        # silently omitting it builds an image that mounts the wrong userspace
+        # and boots.
+        system_part = None
+        raw_part = (parts.get("system_part") or "").strip()
+        if raw_part:
+            if not raw_part.isdigit() or not 1 <= int(raw_part) <= 127:
+                return _error(
+                    "bad_system_part",
+                    f"system_part must be an mmcblk0 partition number (1-127), "
+                    f"not {raw_part!r}. Nothing has been built.", 400)
+            system_part = int(raw_part)
+
         # Also keeps ~3.5MB out of a request that has already hit HA ingress's
         # 413 once (2026-09-06).
         if parts.get("use_latest_init"):
@@ -5145,9 +5175,12 @@ async def _post_provision_emos_image(request: web.Request) -> web.Response:
         # through this process while somebody provisions a new one.
         info = await loop.run_in_executor(
             None, em_emos_build.build_emos_image, reference, init_bin, version,
-            "", sbin)
+            "", sbin, system_part)
 
-        log.info(f"[api] emOS image built: {info['size']:,} bytes "
+        log.info(f"[api] emOS image built"
+                 + (f" for /system on p{system_part}" if system_part else
+                    " with no /system stamp (older wizard)")
+                 + f": {info['size']:,} bytes "
                  f"md5={info['md5'][:8]}… from a {info['reference_size']:,} "
                  f"byte reference (md5 {info['reference_md5'][:8]}…)")
 

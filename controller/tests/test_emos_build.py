@@ -145,6 +145,78 @@ def test_agrees_with_mkboot(tmp_path):
         "module docstring in em_emos_build.py")
 
 
+def test_the_two_packers_stamp_the_system_partition_identically(tmp_path):
+    """The stamp decides which FireOS userspace emOS mounts, so the wizard's
+    packer and the standalone tool must write it the same way.
+
+    Drift here is invisible: both images boot, and the one built by the wrong
+    tool mounts a different Amazon userspace than it was built beside."""
+    import os
+    mkboot = _load_mkboot()
+    ref = make_reference()
+    parts = eb.split_reference(ref)
+    ramdisk = eb.build_ramdisk(fake_init(), "0.1-test")
+
+    mine = eb.pack(parts, parts["zimage"], parts["dtbs"], ramdisk,
+                   system_part=14)
+
+    ref_p, z_p = tmp_path / "ref.img", tmp_path / "zimage"
+    rd_p, out_p = tmp_path / "ramdisk.gz", tmp_path / "out.img"
+    ref_p.write_bytes(ref)
+    z_p.write_bytes(parts["zimage"])
+    rd_p.write_bytes(ramdisk)
+    argv, env = sys.argv, os.environ.get("EMOS_SYSTEM_PART")
+    sys.argv = ["mkboot.py", str(ref_p), str(z_p), str(rd_p), str(out_p)]
+    os.environ["EMOS_SYSTEM_PART"] = "14"
+    try:
+        mkboot.main()
+    finally:
+        sys.argv = argv
+        if env is None:
+            os.environ.pop("EMOS_SYSTEM_PART", None)
+        else:
+            os.environ["EMOS_SYSTEM_PART"] = env
+
+    assert out_p.read_bytes() == mine, (
+        "the two packers stamp emos.system= differently")
+    cmdline = mine[64:64 + 512].split(b"\0")[0].decode()
+    assert "emos.system=/dev/block/mmcblk0p14" in cmdline
+    # Exactly one. The kernel takes the last of a repeated parameter, so a
+    # second stamp is an image that works and reads as whichever you looked at.
+    assert cmdline.count("emos.system=") == 1
+
+
+def test_restamping_replaces_rather_than_appends():
+    """Rebuilding an emOS image for a different slot is the case that produces
+    two stamps, and it is reachable — the packer already handles rebuilding
+    from an emOS image for the ramoops block."""
+    once = eb._stamp_cmdline_key(b"ro init=/init", eb.SYSTEM_CMDLINE_KEY,
+                                 "/dev/block/mmcblk0p13")
+    twice = eb._stamp_cmdline_key(once, eb.SYSTEM_CMDLINE_KEY,
+                                  "/dev/block/mmcblk0p14")
+    assert twice.decode().count("emos.system=") == 1
+    assert b"mmcblk0p14" in twice and b"mmcblk0p13" not in twice
+
+
+def test_the_system_stamp_key_is_the_same_string():
+    """Two packers, one key — and init.c's parser matches on it exactly."""
+    assert eb.SYSTEM_CMDLINE_KEY == _load_mkboot().SYSTEM_CMDLINE_KEY
+    init_c = (REPO / "emos" / "init" / "init.c").read_text()
+    assert f'"{eb.SYSTEM_CMDLINE_KEY}"' in init_c, (
+        "init.c does not parse the key the packers write")
+
+
+def test_an_impossible_system_partition_is_refused():
+    """A wrong partition mounts a different userspace and boots, so this is
+    refused at build time rather than discovered on a device."""
+    parts = eb.split_reference(make_reference())
+    ramdisk = eb.build_ramdisk(fake_init(), "0.1")
+    for bad in (0, -1, 128, 999):
+        with pytest.raises(eb.BuildError, match="mmcblk0 partition number"):
+            eb.pack(parts, parts["zimage"], parts["dtbs"], ramdisk,
+                    system_part=bad)
+
+
 def test_the_ramoops_cmdline_is_the_same_string():
     """It names a physical address the vendor device tree reserves; a copy that
     drifts points the crash log at memory something else owns."""
@@ -615,6 +687,50 @@ def test_the_ramdisk_carries_all_three_sbin_tools():
         # init execs these directly; a non-executable one is a boot that reaches
         # the network stage and stops there.
         assert mode & 0o111, f"{key} is not executable (mode {mode:o})"
+
+
+def test_busybox_brings_a_udhcpc_symlink():
+    """init execs /sbin/udhcpc by PATH and busybox picks its applet from
+    argv[0], so without this a FireOS 6 image associates and never gets an
+    address. It is written into the archive rather than left to init's applet
+    stage, because DHCP must not depend on that stage having succeeded."""
+    import gzip
+    raw = gzip.decompress(eb.build_ramdisk(
+        fake_init(), "0.1", sbin={"busybox": b"BUSYBOX" * 64}))
+    entries = {n: (m, i, d) for n, m, i, d, _ in _newc_entries(raw)}
+
+    assert "sbin/udhcpc" in entries, "no udhcpc — FireOS 6 gets no address"
+    mode, _, target = entries["sbin/udhcpc"]
+    assert mode & eb._S_IFLNK == eb._S_IFLNK, \
+        f"sbin/udhcpc must be a symlink, not mode {mode:o}"
+    assert target == b"busybox", \
+        f"udhcpc must point at busybox, not {target!r}"
+    # Relative, so it resolves inside the ramdisk rather than against a
+    # /sbin that is only there once the boot has got that far.
+    assert not target.startswith(b"/"), "the link target must be relative"
+
+
+def test_no_udhcpc_symlink_without_busybox():
+    """A dangling /sbin/udhcpc would make init exec something that is not
+    there, which reads as a DHCP failure rather than as a missing binary."""
+    import gzip
+    for sbin in (None, {}, {"wpa_cli": b"C" * 64}, {"busybox": b""}):
+        raw = gzip.decompress(eb.build_ramdisk(fake_init(), "0.1", sbin=sbin))
+        names = [n for n, *_ in _newc_entries(raw)]
+        assert "sbin/udhcpc" not in names, f"udhcpc appeared for sbin={sbin!r}"
+
+
+def test_the_udhcpc_symlink_has_its_own_inode():
+    """The symlink is an entry like any other — sharing busybox's inode would
+    make it a hardlink to a 1MB binary in any extractor that honours nlink."""
+    import gzip
+    raw = gzip.decompress(eb.build_ramdisk(fake_init(), "0.1", sbin={
+        "busybox": b"B" * 64, "wpa_supplicant": b"S" * 64,
+        "wpa_cli": b"C" * 64, "em-wifi": b"E" * 64}))
+    entries = _newc_entries(raw)
+    inodes = [i for _, _, i, _, _ in entries]
+    assert len(set(inodes)) == len(inodes), "duplicate inodes with busybox in"
+    assert all(nlink == 1 for *_, nlink in entries), "nothing here is a hardlink"
 
 
 def test_the_sbin_directory_comes_before_its_contents():
