@@ -1026,6 +1026,13 @@ async def _delete_device(request: web.Request) -> web.Response:
     # silently. Lazy import — em_esphome imports em_api at module level.
     import em_esphome
     await em_esphome.device_deleted(device_id)
+    # Free the device's cached OWW models (#512), or a deleted device keeps its
+    # models — and their ONNX sessions — for the life of the process. Resolve
+    # the RUNNING controller module (not a fresh import) for the same reason
+    # _running_controller_module exists.
+    ctrl = _running_controller_module()
+    if ctrl is not None:
+        ctrl._forget_oww_models(device_id)
     # A re-added device is the one whose payloads are least likely to be
     # right, so it must not inherit the deleted row's debounce and skip its
     # first reconcile — the bounce below has it redialling within seconds.

@@ -566,8 +566,9 @@ class Device:
         # wake threshold during thinking); on detection it sets
         # barge_detected + cancel_event (plus speaker_flush or HA pipeline
         # cancel, phase-dependent) and the turn loop re-enters a fresh
-        # turn. _barge_model is a dedicated OWW instance (the main wake
-        # listener task is blocked awaiting the turn).
+        # turn. The barge watcher uses a dedicated OWW instance (the main wake
+        # listener task is blocked awaiting the turn), cached module-side per
+        # device_id and reused across reconnects — see _acquire_barge_model.
         self.barge_in_enabled = False
         # False until config is pushed, so a device connecting before then
         # keeps the historical tap-starts-a-turn behaviour.
@@ -587,8 +588,6 @@ class Device:
         # barge_ceded says this device must not run the interrupting turn.
         # Folding them into one flag is how both devices answered.
         self.barge_ceded      = False
-        self._barge_model     = None
-        self._barge_model_key = None
 
         # Recent voice-turn traces (dicts derived from TurnTrace at emit
         # time in em_esphome) — powers the Status tab's observability panel.
@@ -1221,6 +1220,83 @@ class Device:
 # em_api receives a reference to this dict at startup.
 _devices: dict[str, Device] = {}
 
+# OWW model caches — keyed by device_id ALONE (#512).
+#
+# An OWWModel is expensive: three ONNX InferenceSessions (melspectrogram,
+# embedding, wakeword), tens of MB. A NEW Device object is created per
+# connection (see handle_control), so a model held on the Device is thrown
+# away and rebuilt on every reconnect. On a flaky link that is a leak — 34
+# reconnects built 34 models in 2.8 days and none were freed, ~1 GB retained.
+#
+# Caching module-side, keyed by device_id, lets a reconnecting device reuse its
+# model. openwakeword's AudioFeatures.reset() clears the buffers and re-seeds
+# feature_buffer with random-noise embeddings exactly as the constructor does,
+# so a reset+reused model is equivalent to a freshly built one (and the
+# un-warmed WarmupGate beside it stays correct — a reset model is noise-seeded
+# just like a fresh one).
+#
+# device_id ALONE, with the variant stored beside the model: keying by
+# (device_id, model_name[, speex]) would leave a renamed wake word's old model
+# cached for the life of the process — a smaller version of the same leak.
+# Changing the wake word therefore REPLACES the entry, dropping the old model.
+# Evicted on device delete (see _forget_oww_models, called from em_api).
+#
+# The wake listener and the barge watcher get SEPARATE slots: they build the
+# model differently (the wake listener with enable_speex_noise_suppression, the
+# barge watcher without) and can be live at once, so they must not share one.
+_oww_models:       dict[str, tuple[str, bool, "OWWModel"]] = {}   # id -> (name, speex, model)
+_oww_barge_models: dict[str, tuple[str, "OWWModel"]]       = {}   # id -> (name, model)
+
+
+def _forget_oww_models(device_id: str) -> None:
+    """Drop a device's cached OWW models. Called when a device is deleted, so a
+    removed device does not keep its models (and their ONNX sessions) for the
+    life of the process."""
+    _oww_models.pop(device_id, None)
+    _oww_barge_models.pop(device_id, None)
+
+
+async def _acquire_wake_model(device: "Device", name: str, speex: bool):
+    """Return the device's wake model, reusing the cached one when the wake word
+    and speex setting are unchanged, else building a fresh one and replacing any
+    previous entry for this device (#512).
+
+    A cache hit is reset() so a reused model is indistinguishable from a fresh
+    build; a miss is a freshly constructed model (already noise-seeded), so it
+    is NOT reset. Either way the caller's WarmupGate stays un-warmed, which is
+    correct for both."""
+    loop = asyncio.get_event_loop()
+    cached = _oww_models.get(device.device_id)
+    if cached is not None and cached[0] == name and cached[1] == speex:
+        model = cached[2]
+        model.reset()
+        return model
+    model = await loop.run_in_executor(
+        None,
+        lambda: OWWModel(
+            wakeword_models=[name],
+            enable_speex_noise_suppression=speex,
+        ),
+    )
+    _oww_models[device.device_id] = (name, speex, model)
+    return model
+
+
+async def _acquire_barge_model(device: "Device", name: str):
+    """Return the device's barge-in model, reusing the cached one when the wake
+    word is unchanged, else building a fresh one and replacing any previous
+    entry (#512). The barge watcher resets the model itself after acquiring it,
+    so no reset here. The barge watcher is gated by voice_lock (one turn per
+    device), so two barge watchers never score one model concurrently."""
+    cached = _oww_barge_models.get(device.device_id)
+    if cached is not None and cached[0] == name:
+        return cached[1]
+    model = await asyncio.get_event_loop().run_in_executor(
+        None, lambda: OWWModel(wakeword_models=[name])
+    )
+    _oww_barge_models[device.device_id] = (name, model)
+    return model
+
 # Peak event-loop lag observed since start, in ms (see
 # event_loop_lag_monitor). Read by the API for /api/system/status.
 _loop_lag_peak_ms: float = 0.0
@@ -1435,17 +1511,13 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
     HA pipeline is cancelled (local-only; any late HA result is discarded).
     """
     loop = asyncio.get_event_loop()
-    if device._barge_model is None or device._barge_model_key != device.oww_model:
-        name = device.oww_model
-        log.info(f"[{device.device_id}] Barge-in: loading watcher model {name}")
-        device._barge_model = await loop.run_in_executor(
-            None, lambda: OWWModel(wakeword_models=[name])
-        )
-        device._barge_model_key = name
-    model = device._barge_model
-    # _barge_model_key stays the raw owwModel value (staleness compare
-    # above); scoring needs the openwakeword prediction key (path → stem).
-    barge_pred_key = em_oww_models.prediction_key(device._barge_model_key)
+    # Reused across reconnects via the module cache (#512): a new Device is
+    # created per connection, so caching on the Device rebuilt this every time.
+    name = device.oww_model
+    model = await _acquire_barge_model(device, name)
+    # name is the raw owwModel value; scoring needs the openwakeword prediction
+    # key (path → stem).
+    barge_pred_key = em_oww_models.prediction_key(name)
     model.reset()
     # reset() seeds the classifier's window with embeddings of random noise,
     # so the first FEATURE_WINDOW chunks score that noise as much as the room.
@@ -2527,11 +2599,22 @@ def _supervise_wake_listener(device: "Device", failures: int = 0) -> asyncio.Tas
     def _restart(task: asyncio.Task) -> None:
         if task.cancelled():
             return                      # ordinary teardown
+        # A superseded listener stands down by returning cleanly (see the guard
+        # at the top of wake_word_listener): the device reconnected and a newer
+        # listener already owns it. That is ordinary teardown, not a death — so
+        # neither log it as one nor restart (restarting would leave an orphan
+        # scoring frames for a device this object no longer represents).
+        if _devices.get(device.device_id) is not device:
+            log.info(
+                f"[{device.device_id}] wake word listener superseded by a "
+                f"newer connection — standing down"
+            )
+            return
         ran_for = asyncio.get_event_loop().time() - started
         exc = task.exception()
         if exc is None:
-            # Returned normally, which the loop never does — it is `while
-            # True`. Still a death, so treat it as one.
+            # A current listener's loop is `while True` and never returns on its
+            # own, so a normal return here is still a death.
             log.error(
                 f"[{device.device_id}] wake word listener returned "
                 f"unexpectedly after {ran_for:.0f}s — restarting. The device "
@@ -2543,16 +2626,6 @@ def _supervise_wake_listener(device: "Device", failures: int = 0) -> asyncio.Tas
                 f"{ran_for:.0f}s — restarting. The device was deaf until now.",
                 exc_info=exc,
             )
-        if _devices.get(device.device_id) is not device:
-            # Gone, or replaced by a newer connection that has its own
-            # listener. Restarting here would leave an orphan scoring frames
-            # for a device this object no longer represents.
-            log.warning(
-                f"[{device.device_id}] not restarting the wake listener — "
-                f"the device is no longer connected"
-            )
-            return
-
         # A listener that ran a while and then fell over is a fresh incident;
         # one that dies instantly, every time, is a loop. Only the second
         # needs slowing down, and conflating them would make an occasional
@@ -2589,13 +2662,10 @@ async def wake_word_listener(device: Device):
         f"[{device.device_id}] OWW: loading model {current_model_name} "
         f"(speex_ns={current_speex_ns})"
     )
-    model = await loop.run_in_executor(
-        None,
-        lambda: OWWModel(
-            wakeword_models=[current_model_name],
-            enable_speex_noise_suppression=current_speex_ns,
-        ),
-    )
+    # Reused across reconnects via the module cache (#512): a fresh Device is
+    # created per connection, so building on the Device leaked a model per
+    # reconnect. A cache hit is reset() to match a fresh build.
+    model = await _acquire_wake_model(device, current_model_name, current_speex_ns)
     # NB: for custom models owwModel is a file path but openwakeword keys
     # the prediction dict by the filename stem — never score by the raw name.
     model_key = em_oww_models.prediction_key(current_model_name)
@@ -2615,6 +2685,16 @@ async def wake_word_listener(device: Device):
     dead_streak = 0   # consecutive 10s mic_queue timeouts (resets on any frame)
     try:
         while True:
+            # Now that the model is shared via the module cache (#512), a
+            # superseded listener must not score into it: on a reconnect the
+            # old listener can still loop for a moment before its connection's
+            # teardown cancels it, and two listeners scoring one stateful model
+            # corrupt each other's feature window. Only the current connection's
+            # listener (the one still in _devices) may touch the model; a
+            # superseded one stands down here. The replacement listener reset()s
+            # the model on acquire, wiping any residue from this one.
+            if _devices.get(device.device_id) is not device:
+                return
             if device.oww_model != current_model_name or device.oww_speex_ns != current_speex_ns:
                 new_name  = device.oww_model
                 new_speex = device.oww_speex_ns
@@ -2624,14 +2704,10 @@ async def wake_word_listener(device: Device):
                     f"(speex_ns {current_speex_ns} → {new_speex})"
                 )
                 try:
-                    _n = new_name
-                    _s = new_speex
-                    new_model = await loop.run_in_executor(
-                        None,
-                        lambda: OWWModel(
-                            wakeword_models=[_n],
-                            enable_speex_noise_suppression=_s,
-                        ),
+                    # Replaces this device's cached model (dropping the old
+                    # one), so a changed wake word does not accumulate models.
+                    new_model = await _acquire_wake_model(
+                        device, new_name, new_speex
                     )
                     model             = new_model
                     model_key         = em_oww_models.prediction_key(new_name)
