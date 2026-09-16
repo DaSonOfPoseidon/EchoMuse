@@ -41,17 +41,43 @@ import (
 )
 
 // Write is one `tinymix -D 0 <ctl> <value>` invocation.
+//
+// NAME is authoritative and Ctl is the id measured on a FireOS 5 board, kept
+// as documentation and as the fallback for a mixer whose control list cannot
+// be read at all.
 type Write struct {
 	Ctl   string
 	Value string
-	Name  string // the control's mixer name, for the log line and for grep
+	Name  string // the control's mixer name — what this route actually means
 }
 
 // Routes is every DAPM switch that must be closed for audio to flow.
 //
-// Control IDs are positional and specific to this board, like the ones in the
-// speaker package's jack routing — the name is carried alongside so a mismatch
-// is greppable rather than a bare number nobody can check.
+// RESOLVED BY NAME AT RUNTIME. The ids below are what a FireOS 5 board gives
+// these controls; a FireOS 6 board gives them different ones, because its
+// kernel exposes two extra controls early in the list and everything after
+// shifts by two. Measured 2026-09-16 on two Dots running emOS side by side:
+//
+//	                                 FireOS 5   FireOS 6
+//	  controls in the mixer             239        241
+//	  HPR Output Mixer R_DAC Switch     234        236
+//	  ADC_A Left ... DIF1_L switch      223        225
+//
+// So on every FireOS 6 device all ten writes landed two places early. 234 set
+// "Left Input Mixer IN3_L P Switch" and the DAC was never connected to the
+// output mixer, which is silence; the eight capture writes set the
+// single-ended IN2 inputs while the microphone array is on the differential
+// DIF1 ones. Reported as #546 by @jthoward64 and reproduced here.
+//
+// IT FAILS SILENTLY BY CONSTRUCTION, which is why it took a user to find it:
+// writing 1 to the WRONG control is a perfectly valid write, so tinymix exits
+// 0, the failure count stays 0, and the "audio may be silent" warning below
+// never fires. The device logs a clean boot and plays nothing. Resolving by
+// name is what makes a mismatch loud — a name that is not in the mixer's own
+// list is reported, where a wrong number never could be.
+//
+// The whole fleet was FireOS 5 until amonet v2 made FireOS 6 devices usable,
+// which is why this shipped working and broke for new users only.
 //
 // CAPTURE: the microphone array reaches the codec on the DIFFERENTIAL inputs,
 // not the single-ended ones. Nothing routed DIF1 into any of the four ADCs, so
@@ -77,6 +103,65 @@ var Routes = []Write{
 
 var once sync.Once
 
+// resolveIDs maps each wanted control NAME to the id this board gives it, from
+// the mixer's own listing. Pure, so the board difference is testable off-target
+// against captured output from both kernels.
+//
+// A line is "<id>\t<type>\t<num>\t<name><padding><value>", and where the name
+// ends is NOT recoverable from the padding: the longest names leave a single
+// space before the value, exactly like the space inside a name. Prefix
+// matching therefore cannot work — "HPR Output Mixer R_DAC Switch" is a prefix
+// of no other control here today, but nothing stops the next kernel adding one,
+// and the failure would be another silent wrong write.
+//
+// The header line declares the column: "ctl\ttype\tnum\tname<pad>value". The
+// offset of "value" within its fourth field is the width the names are padded
+// to, so the name can be cut exactly and compared whole. No header means no
+// answer, and EnsureRoutes falls back to the measured ids.
+//
+// A name matching more than one line is dropped rather than guessed at: two
+// controls answering to one name is something to report, not to pick between.
+func resolveIDs(dump string, names []string) map[string]string {
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[n] = true
+	}
+
+	width := -1
+	hits := make(map[string][]string, len(names))
+	for _, line := range strings.Split(dump, "\n") {
+		f := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 4)
+		if len(f) < 4 {
+			continue
+		}
+		if width < 0 {
+			// The header names its own columns; anything before it is the
+			// mixer name and control count.
+			if strings.TrimSpace(f[0]) == "ctl" {
+				if i := strings.Index(f[3], "value"); i > 0 {
+					width = i
+				}
+			}
+			continue
+		}
+		if len(f[3]) < width {
+			continue
+		}
+		name := strings.TrimRight(f[3][:width], " \t")
+		if want[name] {
+			hits[name] = append(hits[name], strings.TrimSpace(f[0]))
+		}
+	}
+
+	out := make(map[string]string, len(names))
+	for n, ids := range hits {
+		if len(ids) == 1 {
+			out[n] = ids[0]
+		}
+	}
+	return out
+}
+
 // EnsureRoutes applies Routes exactly once per process.
 //
 // Called from both the microphone and the speaker Init, because either may run
@@ -84,16 +169,55 @@ var once sync.Once
 // what to power at stream open. The sync.Once is what makes calling it from
 // both sites free: process spawns are not cheap on this hardware (a heavy shell
 // command was observed inducing mic capture stalls, and the mic pipeline has a
-// hard 160ms deadline), so ten of them must not become twenty.
+// hard 160ms deadline), so ten of them must not become twenty. The listing adds
+// exactly one more spawn, once.
 func EnsureRoutes() {
 	once.Do(func() {
+		names := make([]string, 0, len(Routes))
+		for _, w := range Routes {
+			names = append(names, w.Name)
+		}
+
+		// FAILURE TO LOOK IS NOT EVIDENCE. A mixer we cannot list tells us
+		// nothing about this board, so fall back to the measured FireOS 5 ids
+		// — the behaviour every fielded device has today — rather than
+		// refusing to route anything and guaranteeing silence.
+		var byName map[string]string
+		dump, err := exec.Command("tinymix", "-D", "0").Output()
+		if err != nil {
+			log.Printf("[codec] could not list mixer controls (%v) — falling back "+
+				"to the measured FireOS 5 control ids", err)
+		} else {
+			byName = resolveIDs(string(dump), names)
+		}
+
 		var failed int
 		for _, w := range Routes {
-			out, err := exec.Command("tinymix", "-D", "0", w.Ctl, w.Value).CombinedOutput()
+			ctl := w.Ctl
+			if byName != nil {
+				id, ok := byName[w.Name]
+				if !ok {
+					// The listing was read and this control is not in it.
+					// That IS evidence, unlike the case above, so say so and
+					// skip rather than write to a number this board gives to
+					// something else.
+					failed++
+					log.Printf("[codec] route %q is not in this mixer's control "+
+						"list — skipping (id %s belongs to another control here)",
+						w.Name, w.Ctl)
+					continue
+				}
+				if id != w.Ctl {
+					log.Printf("[codec] route %q is ctl %s on this board, not %s",
+						w.Name, id, w.Ctl)
+				}
+				ctl = id
+			}
+			out, err := exec.Command("tinymix", "-D", "0", ctl, w.Value).CombinedOutput()
 			if err != nil {
 				failed++
 				log.Printf("[codec] route ctl %s (%s): %v — %s",
-					w.Ctl, w.Name, err, strings.TrimSpace(string(out)))
+					ctl, w.Name, err, strings.TrimSpace(string(out)))
 			}
 		}
 		if failed > 0 {
