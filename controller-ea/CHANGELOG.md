@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.24.0-ea.6 (Early Access)
+
+**The emOS image now carries the `/system` it was built beside** (#545). The
+wizard resolved the right partition and logged which one it had chosen, and
+the build endpoint then dropped the value: its multipart parser had no branch
+for that field, so it was discarded without an error. Every emOS image was
+built with no `emos.system=` stamp, and emOS fell back to the partition it
+hardcoded before the stamp existed — the right one about half the time. On a
+device whose stock FireOS sits in slot B it mounts the wrong userspace, and
+boots anyway. Reported by @jthoward64.
+
+An image provisioned since emOS 0.6 carries no stamp. Rebuild and reflash from
+the wizard to get one.
+
+**The connect step reads what the device can actually tell it** (#517). On a
+device unlocked with amonet v2 the wizard could not read the FireOS build, the
+Android release or the device identity at all — it looked for the by-name map
+in one location and v2 lays it out in another. Step 1 reported "Could not read
+/system/build.prop" and offered no diagnostics download. All three now work,
+and an unreadable release skips the version check rather than guessing at it.
+
+**A wake sensitivity that can never fire is no longer stored.** openwakeword's
+score approaches 1.0 without reaching it and the comparison is
+greater-than-or-equal, so a threshold of exactly 1.0 is a bar nothing clears:
+the device scores perfectly and never wakes, which reads as one that has
+stopped responding. Values above 0.975 are held at 0.975 on save.
+
 ## 2.24.0-ea.5 (Early Access)
 
 **Provisioning a FireOS 6 device no longer overwrites the stock boot image**
