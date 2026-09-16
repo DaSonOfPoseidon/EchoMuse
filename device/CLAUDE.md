@@ -663,12 +663,13 @@ after shifts by two. Measured 2026-09-16 on two Dots running emOS side by side:
 | `HPR Output Mixer R_DAC Switch` | 234 | 236 |
 | `ADC_A Left Ip Select ADC_A DIF1_L switch` | 223 | 225 |
 
-`codec.Routes` addressed all ten of its DAPM switches by number, so on every
-FireOS 6 device all ten landed two places early: 234 set `Left Input Mixer
-IN3_L P Switch` and the DAC was never connected to the output mixer (silence),
-while the eight capture writes set the single-ended IN2 inputs when the array
-is on the differential DIF1 ones. Reported as #546 by @jthoward64, reproduced
-here, and fixed by setting 236/239 by hand.
+`codec.Routes` addresses all ten of its DAPM switches by number — **still true
+on main, this is not yet fixed** — so on every FireOS 6 device all ten land two
+places early: 234 sets `Left Input Mixer IN3_L P Switch` and the DAC is never
+connected to the output mixer (silence), while the eight capture writes set the
+single-ended IN2 inputs when the array is on the differential DIF1 ones.
+Reported as #546 by @jthoward64 and reproduced here on 2026-09-16; setting
+236/239 by hand restored audio on the spare immediately.
 
 **The failure is SILENT by construction and that is the general lesson.**
 Writing `1` to the wrong control is a perfectly valid write — `tinymix` exits
