@@ -652,6 +652,45 @@ regmap is readable at `/sys/kernel/debug/regmap/2-0018/registers`
 contends for the same PCM and wedged a device hard enough to need a power
 cycle.
 
+**MIXER CONTROL IDS ARE NOT STABLE ACROSS KERNELS, and addressing a control by
+number is therefore a bug waiting for a new board.** FireOS 6's kernel exposes
+two more controls than FireOS 5's, early enough in the list that everything
+after shifts by two. Measured 2026-09-16 on two Dots running emOS side by side:
+
+|  | FireOS 5 | FireOS 6 |
+|---|---|---|
+| controls in the mixer | 239 | 241 |
+| `HPR Output Mixer R_DAC Switch` | 234 | 236 |
+| `ADC_A Left Ip Select ADC_A DIF1_L switch` | 223 | 225 |
+
+`codec.Routes` addressed all ten of its DAPM switches by number, so on every
+FireOS 6 device all ten landed two places early: 234 set `Left Input Mixer
+IN3_L P Switch` and the DAC was never connected to the output mixer (silence),
+while the eight capture writes set the single-ended IN2 inputs when the array
+is on the differential DIF1 ones. Reported as #546 by @jthoward64, reproduced
+here, and fixed by setting 236/239 by hand.
+
+**The failure is SILENT by construction and that is the general lesson.**
+Writing `1` to the wrong control is a perfectly valid write — `tinymix` exits
+0, the route loop's failure count stays 0, and its own "audio may be silent"
+warning cannot fire. A device logs a clean boot and plays nothing. This is the
+same shape as the mute LED being on a different GPIO than Amazon's HAL
+believed, and as `event2` being the volume button on biscuit and a touchscreen
+on checkers: **resolve by NAME, and let a name that is absent be loud.**
+
+The right mechanism is `mixer_get_ctl_by_name`, declared in the NDK sysroot's
+`tinyalsa/mixer.h` and exported by the device's own `/system/lib/libtinyalsa.so`
+— which we already link for PCM. It does the lookup natively, returns NULL for
+a control this board does not have, and costs no process spawns, which matters
+on a boot path where heavy shell commands have been observed inducing mic
+capture stalls against a hard 160ms deadline. Parsing `tinymix`'s text listing
+reaches the same answer and is the worse way to get it; note that where a name
+ends is NOT recoverable from the padding, since the longest names leave a
+single space before the value.
+
+Changing this path needs a **FireOS 5 device on the bench**, not a green CI
+run: every fielded device is FireOS 5, and this is their audio bring-up.
+
 ## The BLE proxy, and what it costs the device running it
 
 Passive HCI scan over `/dev/stpbt`, forwarded to the controller and

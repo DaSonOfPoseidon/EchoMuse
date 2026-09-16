@@ -2986,3 +2986,85 @@ that cannot build off-target. Device emulation in CI was considered and parked:
 the bugs this project actually has — DAC clipping, mixer state, a kernel bus
 timeout in the audio IRQ, a partition write landing in the wrong slot — all live
 below the line any emulator draws.
+
+## 2026-09-16 — a wizard run that worked, and ten codec switches that never did
+
+Two releases out (`controller-ea-v2.24.0-ea.6`, `emos-v0.7`), the emOS wizard
+run end to end on a stock FireOS 6 device for the first time, and the fault
+that run exposed.
+
+**#545: the build endpoint dropped `system_part` on the floor.** The packer's
+stamping code was correct and tested; it was never reached. The multipart
+parser is a hand-written if/elif over `field.name` and had no branch for that
+field, so it was skipped in silence, `parts` never carried it,
+`build_emos_image` ran with `system_part=None`, and every emOS image was built
+with no `emos.system=` stamp. emOS then fell back to the p13 it hardcoded
+before the stamp existed. Three things said it was working: the release notes,
+the wizard's own transcript naming the partition it had resolved, and a
+controller log line reading `with no /system stamp (older wizard)` — which
+blamed the caller for the handler's omission, and was wrong a second way since
+the v1 path sends no partition by design.
+
+Nothing could have caught it. The packer's tests pass `system_part` directly,
+`slot_choice.test.mjs` covers the wizard resolving it, and no test crossed
+between them. `tests/test_emos_image_fields.py` now does, comparing what
+`runBuildEmos` appends against what `em_api` reads — the Python side via `ast`
+and the JS side from the function's own body, so a comment naming a field
+satisfies neither half.
+
+**It was not theoretical, and tonight proved it.** The wizard run stamped
+`emos.system=/dev/block/mmcblk0p14`, because the device had booted slot B so
+stock stayed in B and the donor was `system_b`. The old fallback would have
+mounted p13 — the wrong userspace — and booted anyway.
+
+**#546: every codec route write lands on the wrong control on FireOS 6.** Its
+kernel exposes two extra mixer controls early in the list and everything after
+shifts by two. Measured on two Dots running emOS side by side:
+
+                                   FireOS 5   FireOS 6
+    controls in the mixer             239        241
+    HPR Output Mixer R_DAC Switch     234        236
+    ADC_A Left ... DIF1_L switch      223        225
+
+So 234 set `Left Input Mixer IN3_L P Switch`, the DAC was never connected to
+the output mixer, and the device played nothing. Reported by @jthoward64 as two
+playback controls; it is **all ten**, because the eight capture writes set the
+single-ended IN2 inputs while the microphone array is on the differential DIF1
+ones. Setting 236 and 239 by hand restored audio immediately.
+
+**It fails silently by construction**, which is why a user found it rather than
+a test: writing 1 to the WRONG control is a valid write, so `tinymix` exits 0,
+the failure count stays 0, and the "audio may be silent" warning never fires.
+The whole fleet was FireOS 5 until amonet v2 made FireOS 6 devices usable, so
+this shipped working and broke only for new users.
+
+**The fix on the branch parses `tinymix`'s listing, and that is the wrong
+answer.** `mixer_get_ctl_by_name` is in the NDK sysroot's `tinyalsa/mixer.h`,
+the device's own `/system/lib/libtinyalsa.so` exports it, and we already link
+that library for PCM. The C API does the lookup natively, returns NULL for a
+control that is not there, and removes eleven process spawns from a boot path
+where heavy shell commands have been observed inducing mic capture stalls. The
+parsing version was written first and a test immediately caught it matching a
+longer control that merely started the same way. Rewrite it on the mixer API —
+the cost is not the code, it is verifying it on a FireOS 5 device, since every
+fielded device is FireOS 5 and this replaces their audio bring-up wholesale.
+
+**Two smaller faults of the same family, both found by auditing rather than by
+symptom.** A wake threshold of exactly 1.0 was storable and can never fire, the
+score being a sigmoid that approaches 1.0 while the comparison is `>=`; clamped
+at the DB write path, because the device takes its threshold from the pushed
+config and clamping the dashboard would leave it deaf with a reassuring screen.
+And `adcDigitalGain`/`adcMicpga` were gated on being non-zero, so dragging
+either slider to 0 saved, displayed, and changed nothing — they are pointers
+now, like the three sibling keys that were already done that way.
+
+**What the wizard run did not reproduce.** #544 needs a device whose ACTIVE
+slot is A, so that emOS is written to `boot_b`. This device booted B, so emOS
+went to `boot_a` — the slot @jthoward64 reports as working.
+
+**Still open from the run:** `Could not read /system/build.prop` on an amonet
+v2 device, which #517 was supposed to fix. `_sysreadScript` already handles
+FireOS 6's system-as-root layout, so it is either an empty `ro.boot.slot_suffix`
+in TWRP resolving `system_a` on a device that booted B, or the mount not
+happening. The consequence is that the Android release and board checks both
+silently skip on v2.
