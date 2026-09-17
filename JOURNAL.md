@@ -3071,8 +3071,8 @@ silently skip on v2.
 
 ## 2026-09-17 — the codec by name, emOS's missing policy, and a bootloader that only starts slot A
 
-Four merges (#557, #558, #559, #561), two PRs waiting on a hardware run (#563,
-#564), no release. Both bench Echos run a local build of main
+Five merges (#557, #558, #559, #561, #564), one PR waiting on a hardware run
+(#563), no release. Both bench Echos run a local build of main
 (`v2.15.0-37-gd5e9456`).
 
 **Releases, as settled tonight.** A device `v*` tag goes straight to the GA
