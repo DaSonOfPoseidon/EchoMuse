@@ -2893,6 +2893,37 @@ const _SECURITY_LABEL = {
 const _MAGISK_FILENAME = 'Magisk-v17.3.zip';
 const _MAGISK_SHA256    = '18e46b16b25ebe691c282fe311beccd4811cd533848a64e2efbd754fb85efde7';
 
+// Is this an EchoMuse server binary? Checked before the install step pushes
+// anything, because nothing after it would notice: the step verifies the copy
+// by SIZE, so a wrong file installs cleanly, logs "EchoMuse installed", and
+// the device then boots without a server that can register — out of reach of
+// OTA too. Found 2026-09-18 when the escrowed boot image was picked as the
+// custom build on VVV.
+//
+// Two tests: a 32-bit ARM ELF (the header's class byte and e_machine 0x28),
+// and our own module path, which Go compiles in hundreds of times (352 in a
+// v2.15.0-37 build, 335 in the v2.15.0 release, 0 in a boot image). It
+// cannot say the binary will LOAD on this device — that needs running it,
+// and the server has no mode that does only that.
+function _serverBinaryVerdict(bytes) {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (u8.length < 52 || u8[0] !== 0x7f || u8[1] !== 0x45 || u8[2] !== 0x4c || u8[3] !== 0x46) {
+    const head = new TextDecoder('latin1').decode(u8.slice(0, 8)).replace(/[^\x20-\x7e]/g, '.');
+    return { ok: false, reason: `That file is not a program at all (it starts "${head}"). `
+      + 'Choose the EchoMuse server binary.' };
+  }
+  const machine = u8[18] | (u8[19] << 8);
+  if (u8[4] !== 1 || machine !== 0x28) {
+    return { ok: false, reason: 'That is a program, but not a 32-bit ARM one, so it cannot run '
+      + 'on an Echo. Choose the EchoMuse server binary built for the device.' };
+  }
+  if (!new TextDecoder('latin1').decode(u8).includes('github.com/wilbowes/EchoMuse/')) {
+    return { ok: false, reason: 'That is an ARM program, but not an EchoMuse server. '
+      + 'Choose the EchoMuse server binary.' };
+  }
+  return { ok: true, reason: '' };
+}
+
 async function _sha256Hex(buf) {
   const digest = await crypto.subtle.digest('SHA-256', buf);
   return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -3410,6 +3441,11 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
   // longer has one — a page reload loses emosRef, which is exactly when the
   // restore is needed. See restoreEscrowedBoot.
   const [restoreFile, setRestoreFile] = useState(null);
+  // A successful restore ENDS the run. It undoes the partition write every
+  // later step depends on, and the wizard cannot step backwards, so carrying
+  // on would provision on top of a stock boot image (tested 2026-09-18: a
+  // FireOS run restored at Magisk sat on step 4 as if Patch Boot had held).
+  const [restored, setRestored] = useState(false);
   // The serial read at step 1. Step 9 needs it to ask whether THIS
   // device has connected, rather than inferring it from the device list
   // having grown.
@@ -5393,6 +5429,8 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
       addLog(`Pushing ${file.name} to /sdcard/server_new…`);
       buf = await file.arrayBuffer();
     }
+    const verdict = _serverBinaryVerdict(buf);
+    if (!verdict.ok) throw new Error(`${verdict.reason} Nothing has been installed.`);
     await c.push('/sdcard/server_new', new Uint8Array(buf),
       pct => setProgress({ label: 'Uploading binary', pct }));
     setProgress(null);
@@ -6416,6 +6454,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
       addLog('Escrowed image restored and verified against the partition. The '
            + 'device will boot exactly as it did before this run. Everything '
            + 'installed on /data is untouched.', 'ok');
+      setRestored(true);
     } catch (e) {
       addLog(`Restore failed: ${e.message}`, 'error');
     } finally {
@@ -6505,15 +6544,27 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
   // unexplained failure when someone types a name from memory.
   async function scanWifiConsole(con) {
     if (!con) throw new Error('No serial console — re-run the Reboot and Watch step.');
-    const started = await con.run('wpa_cli -p /data/misc/wifi/sockets -i wlan0 scan');
-    if (!/OK/.test(started)) {
+    const wpa = 'wpa_cli -p /data/misc/wifi/sockets -i wlan0';
+    // Early in the boot the supplicant is not answering yet, so wait for it
+    // rather than fail a click the operator could not have known was early.
+    for (let i = 0; i < 20 && !/PONG/.test(await con.run(`${wpa} ping`)); i++) {
+      if (i === 0) addLog('Waiting for the WiFi radio to come up…');
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    const started = await con.run(`${wpa} scan`);
+    // FAIL-BUSY is a scan ALREADY running — typically the supplicant looking
+    // for a saved network by itself — not a failure: its results are as good
+    // as ours. Seen on the spare 2026-09-18, where the first click failed and
+    // the second worked.
+    if (/FAIL-BUSY/.test(started)) {
+      addLog('A scan is already running — using its results.');
+    } else if (!/OK/.test(started)) {
       throw new Error(`wpa_cli would not start a scan (said "${started.trim() || 'nothing'}").`);
     }
     // A scan takes a few seconds; asking too early returns the previous
     // results or none at all.
     await new Promise(r => setTimeout(r, 4000));
-    const raw = await con.run(
-      'wpa_cli -p /data/misc/wifi/sockets -i wlan0 scan_results', 20000);
+    const raw = await con.run(`${wpa} scan_results`, 20000);
     const nets = parseScanResults(raw);
     if (!nets.length) {
       addLog('The scan returned no networks. The radio is up — try again, or '
@@ -6895,7 +6946,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     const alreadyThere = isEmos && step === 1 && adb
                       && _bannerMode(adb.banner) === 'twrp';
     if ((!autoSteps.has(step) && !alreadyThere)
-        || running || stepState[step] !== 'pending') return;
+        || running || restored || stepState[step] !== 'pending') return;
     // The emOS build's default source is the release, so the auto path has to
     // say so — `useLatest` is undefined otherwise and it would ask for a file
     // nobody has chosen.
@@ -6907,7 +6958,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     addLog(`"${STEPS[step].label}" needs an ADB connection and there isn't one — `
          + `the previous step disconnected the device. Reconnect and click Retry.`, 'error');
     markStep(step, 'error');
-  }, [step, running, adb]);
+  }, [step, running, adb, restored]);
 
   const cur    = STEPS[step];
   const isDone = step === STEPS.length - 1 && stepState[step] === 'done';
@@ -7013,6 +7064,18 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
               <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--text2)', lineHeight: 1.6 }}>{cur.desc}</div>
             </div>
 
+            {/* After a restore the run is over: every step control is hidden
+                and this is all that is offered. See `restored`. */}
+            {restored && (
+              <div style={{ margin: '6px 0 10px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: 'var(--ok)', lineHeight: 1.7 }}>
+                  Device restored. Reboot it from TWRP (Reboot → System), then start the wizard again.
+                </div>
+                <div><Pill accent onClick={onClose}>Close</Pill></div>
+              </div>
+            )}
+
+            {!restored && (<>
             {/* WebUSB pre-flight. Shown on step 0 rather than at the first
                 click, because the point is to be read before a device is
                 unboxed — the throw in requestDevice says the same thing to
@@ -7357,6 +7420,8 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
                 </div>
               </div>
             )}
+
+            </>)}
 
             {/* Progress bar — accent slate, same as toggles/sliders */}
             {progress && (
