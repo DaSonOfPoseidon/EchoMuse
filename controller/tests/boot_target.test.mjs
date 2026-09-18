@@ -376,11 +376,18 @@ for (const [original, outcome] of [
       throw stopAfterPush;
     },
   };
+  // The escrow (#468) runs before anything writes; its helpers are stubbed
+  // and it is recorded in the same list as pushes, so the order is checkable.
+  const events = [];
   const runPatchBoot = new Function("classifyBootTarget", "patchBootCmdline", "addLog",
-    "setProgress", "_INIT_RC_APPEND", `return async ${liftFunction("runPatchBoot")}`)(
-      classifyBootTarget, patchBootCmdline, text => logs.push(text), () => {}, "");
+    "setProgress", "_INIT_RC_APPEND", "_md5Hex", "setEmosRef", "setEmosTarget",
+    "_downloadBytes", `return async ${liftFunction("runPatchBoot")}`)(
+      classifyBootTarget, patchBootCmdline, text => logs.push(text), () => {}, "",
+      () => "0".repeat(32), () => events.push("escrow"), () => {}, () => events.push("download"));
   let error;
   try { await runPatchBoot(c); } catch (e) { error = e; }
+  check("the image is escrowed and downloaded before anything is pushed",
+        events[0] === "escrow" && events[1] === "download", events.join(","));
   if (outcome === "patch") {
     check("the caller pushes a corrected image", error === stopAfterPush &&
           pushes.length === 1 && pushes[0].path === "/tmp/work/boot_patched.img", original);
