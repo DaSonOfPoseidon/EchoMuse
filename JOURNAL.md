@@ -3277,3 +3277,18 @@ the first line. #571 (restore ends the run, the server-binary check, the
 FAIL-BUSY scan) is green and not merged. The three bench devices now hold
 dev's CA, so the ea.7 soak needs them re-provisioned through EA.
 
+**The first public board profile leaked its owner's identifiers.** @technotiger
+ran `porting/profile.sh` on a Dot 3 (donut) and attached the result to #527.
+The Dot 3 publishes Amazon's whole idme block in its device tree, so the
+serial, WiFi and Bluetooth MACs and `mac_sec` went out with it: the script
+read `/proc/idme` through an allowlist and then copied the tree's `/idme` node
+wholesale. The Dot 2's tree has no such node, so testing on VVV found nothing.
+Deleted the comment, apologised, and pointed them at GitHub Support — the
+direct attachment URL still serves the file after the comment is gone, which
+is worth knowing before anyone relies on deletion. #574 removes `/idme` and
+`/chosen` before anything is built from the tree and, as the backstop,
+refuses to make the archive if the device's serial survives anywhere in the
+output; the #527 post now links the fixed commit. The shape to remember: an
+allowlist on one path is no protection if a second path copies the same data
+raw.
+
