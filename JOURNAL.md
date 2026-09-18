@@ -3292,3 +3292,26 @@ output; the #527 post now links the fixed commit. The shape to remember: an
 allowlist on one path is no protection if a second path copies the same data
 raw.
 
+**Evening.** ea.7 (RC1) is on the EA add-on; EFF reconnected and took the new
+`start_server.sh` (md5 `4e91b101…`), which is safe on released firmware because
+`platform-init` needs the `EM_PLATFORM_INIT_V1` marker v2.15.0 lacks and every
+control name exists on stock FireOS 5. The soak has not started: the spare,
+VVV and NF still trust dev's CA and need re-provisioning through EA.
+
+The first Dot 3 (donut, MT8167B) profile: LED driver identical to biscuit's
+(`is31fl3236` @ 0-003f), mics 4ch S32_LE on `pcm1c`, playback `pcm6p`
+S16/2ch/48k through a TAS2770, an AWB write-back stream on `pcm7c` that looks
+like a hardware echo reference, `gpio-privacy` delivering KEY_MUTE with DOWN
+and UP 48µs apart (a latch, probably — untested), and its BCB marking slot B
+active. It also exposed two porting bugs fixed in #575: its mic belongs to one
+of Amazon's own daemons, not mediaserver (probe.sh now finds the holder's init
+service by pid), and toybox `ps` needs `-A`.
+
+#566 (quiet jack output) was answered; the jack gain fix has been in v2.15.0
+since 09-10. #576 is open and NOT merged: the emOS / FireOS 5 slug per device,
+middle-ellipsis for long names and versions across six sites, and a 32-character
+label cap (HA itself has none; 255 is its entity_id limit). Its first browser
+look squeezed the tile's name to two letters, so the name now owns the header
+row with firmware · OS beneath it — built into the dev add-on (stopped) and
+not yet seen.
+
