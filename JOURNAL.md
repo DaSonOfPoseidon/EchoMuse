@@ -3149,3 +3149,58 @@ warnings (none since 12:19, several coincided with console use, two overnight
 did not); `wifi_tx_thro` 302/258 on emOS against 0 on stock; the new
 `start_server.sh` has not been through a reboot on a FireOS device running
 EchoMuse — the bench has none.
+
+## 2026-09-18 — the mute button is a key, and what stock FireOS does to make sound
+
+**The Dot 2's mute is not a hardware kill switch.** Measured on VVV (stock
+FireOS 5.5.5.4) with Wil at the device. The physical press arrives as
+`KEY_MUTE` on `/dev/input/event1` (`mtk-kpd`), identical to one injected with
+`sendevent`. Muted, all nine capture channels read bit-exact zero with Wil
+clapping: the mute is real, and it is in the digital path (codec ADCs or the
+audio front end), since an analogue disconnect would still leave a noise
+floor. One injected `KEY_MUTE` then undid the PHYSICAL mute: ring off, the
+seven mics back at ~−62dBFS, claps at −34dBFS. Wil's working theory was a
+flip-flop behind the button; there is none in this path. `gpio445` stayed high
+throughout, muted or not, consistent with it being the wrong pin (the real
+mute LED is gpio444, `mute_button.go`).
+
+This corrected `docs/quickstart.md`, which called our mute "hardware-level
+since v2.7.4". Ours is the same shape as stock's: the firmware writes the four
+codecs' mute controls and refuses `mic_start`. Real, and inside the chips, but
+reversible by any root process, and "hardware-level" read as "software cannot
+undo it". The internal notes' "hardware ADC mute" is accurate and stays; it
+is the user-facing claim that promised more than the board has.
+
+**Recording the array needs our own tool, and the mediaserver trap is sharper
+than the jack notes said.** Stock `tinycap` cannot open biscuit's mic at any
+depth: `-b 24` is 4-byte S24_LE, the hardware takes only packed S24_3LE, and
+16/32 fail the same way. `porting/pcm_capture` is `capture_mics` with flags.
+And a PCM mediaserver holds is not merely busy: `tinypcminfo -D 0 -d 24`
+blocked indefinitely and had to be killed, so everything that touches the mic
+runs after `stop media`, which Android undoes by restarting it.
+
+**Watching stock make a sound recovers the route we found by hand.**
+`porting/probe.sh` presses volume up then down so FireOS plays its chime, and
+diffs the mixer, regmaps and DAPM graph against idle. On VVV: `pcm23p` at
+S16_LE/2ch/48k, `Ext_Speaker_Amp_Switch` On, `Audio_DacMux_Setting` flipped,
+`HP Driver Gain Volume` 0→6, codec `003f`/`0040`/`0089`/`0090`/`0091`. That is
+the DAC path biscuit's bring-up assembled over weeks; for a new board it is
+one chime.
+
+**#463 changes nothing on stock FireOS 5, and #455's premise was read off
+slot B.** Its patch function, run on three stock FireOS 5 boot images
+(5.5.5.4's update package, a 2017 image and the v2test copy), wrote bytes
+identical to the old 51-byte replacement: a stock slot A cmdline is only
+`bootopt=64S3,32N2,64N2`. The "everything FireOS shipped" list (lowmemorykiller,
+rootwait, verity) is slot B's. Merged on that basis without a bench run.
+
+**VVV's slot B is a 32-bit kernel.** `boot_b_x` (p11) starts `00 00 a0 e1`
+after its MTK header, an ARM zImage, and carries `bootopt=…,32N2`; slot A is
+gzip and `64N2`. So `bootopt`'s third field reads as kernel bitness, and a
+FireOS 5 Dot 2 carries a 32-bit kernel image it never boots. One device.
+
+**Also today:** `porting/` (profile, probe, `pcm_capture`, a README for
+testers) in #570; the dev add-on installed on the HA host from main + #563 +
+#568 + #569, stopped, `boot: manual`, ESPHome from 16201; #563 and #568
+rebased over #463's conflicts.
+
