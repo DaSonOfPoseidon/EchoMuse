@@ -36,8 +36,9 @@ log.
 
 **The startup script sent to devices changes** (#557, #558). It sets audio
 controls by name rather than by number: on the FireOS 6 kernel the numbers
-point two controls early, which left audio silent. On emOS it also applies
-stock FireOS's thermal and CPU policy. Devices pick the script up when they
+point two controls early, which left audio silent. On emOS, with the next
+firmware, it also applies stock FireOS's thermal and CPU policy. Devices pick
+the script up when they
 connect, and it takes effect on their next reboot. The same fix inside the
 server itself ships with the next firmware release.
 
