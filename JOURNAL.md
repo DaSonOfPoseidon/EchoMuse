@@ -3234,3 +3234,46 @@ ready that early. Unverified: HA debug logging on `assist_satellite` and
 `SatelliteBusyError` was a 7.3s link stall stretching a 2.9s announcement to
 8.7s while HA asked for another — correct refusal, VVV's WiFi worth watching.
 
+**All three provisioning paths ran on hardware through the dev add-on
+(main + #563 + #568 + #569), and the release order's bench gate is met.**
+
+*emOS on FireOS 6, the spare, #563's three slot cases*, each set up by hand in
+TWRP and verified by read-back after dropping caches, with both slots copied
+off first (`/root/em-diag/spare-2026-09-18/`). Stock only in B: built from B,
+emOS to A, B's md5 unchanged read from emOS afterwards (`busybox mknod` then
+md5). Both stock: built from A against system_a (p13), B kept, and emOS booted
+on p13 for the first time on this unit. Stock only in A: the wizard copied A
+to B and verified it, logged "Stock FireOS is now kept in slot B", and only
+then wrote A; B read back as `7506fab…` from the device afterwards. That is
+the copy path, and it is the one that protects the only stock image.
+
+The build is REPRODUCIBLE: run 1's image was byte-identical to the one
+already in slot A (same donor, same init, same stamp, `82a6cba9…` both), and
+runs 2 and 3 built `e615da4c…` twice. So a re-provision that changes nothing
+writes identical bytes — run 1 proved the logic and the write path, not a
+change of content.
+
+*emOS on FireOS 5*, on G090LF11803611NF (v1) rather than VVV, because it was
+already emOS v0.5 and makes the v1 re-provision case: escrowed our own image
+(`d619034b…`, recognised by the ramoops marker alone — it predates the
+`emos.system=` stamp), the packer rebuilt from it without doubling its own
+arguments, and it came up v0.7 on aarch64 and registered. No stamp on v1 is by
+design (the v1 path sends no system partition; emOS falls back to p13). #564's
+`/system` read worked on TWRP 3.2.3, its last untested case. v1's slot B holds
+the 32-bit-kernel image again (`32N2`), as on VVV.
+
+**Traps met on the way.** TWRP 3.7's dd refuses `conv=fsync` outright ("conv
+option disabled") and writes nothing — caught only because every hand write
+was read back; the wizard is unaffected because it writes with busybox dd.
+Plugging a Dot into this box power-cycles it, so the console is not there for
+~40s. This box has no udev: a third ACM port needed `mknod /dev/ttyACM2 c 166
+2`. And the emOS console's idle timeout drops back to the password gate, where
+a command is taken as a wrong password.
+
+**Still owed from the bench:** the "already registered" check matching a
+token-only row; the stale "No Echo unlocked with v2 has been through this
+wizard before"; and "Build: Android 16.1.0" read from TWRP's own ramdisk on
+the first line. #571 (restore ends the run, the server-binary check, the
+FAIL-BUSY scan) is green and not merged. The three bench devices now hold
+dev's CA, so the ea.7 soak needs them re-provisioned through EA.
+
