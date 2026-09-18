@@ -3204,3 +3204,33 @@ testers) in #570; the dev add-on installed on the HA host from main + #563 +
 #568 + #569, stopped, `boot: manual`, ESPHome from 16201; #563 and #568
 rebased over #463's conflicts.
 
+**The FireOS 5 native wizard path, on the bench.** VVV restored to stock
+5.5.5.4 (wipe cache/data, sideload `272.6.8.0`, f1r30s; the lk/tee write
+errors in the log are amonet's TWRP protecting the unlock), then provisioned
+through the dev add-on with the soaking firmware (v2.15.0-37-gd5e9456). All 13
+steps; #568's escrow landed before the flash, a wrong Magisk file was refused
+before any write, and Restore verified against the partition; #463's cmdline
+came out exactly as predicted. The new firmware registered, HA adopted it on
+16201, and a full turn ran (`Close the office blind.`, outcome ok) — the first
+time the name-based mixer code has run under stock FireOS rather than emOS.
+
+It found three wizard faults. A restore left the run on the next step as if
+the undone write still held, and a boot image picked as the custom server
+installed cleanly, the step verifying only size — both fixed in #571 (a
+restore ends the run; the file must be a 32-bit ARM ELF carrying our module
+path). And the "already registered" check matched a row created only by a
+minted TLS token, which has no `firmware_ver` and has never connected — not
+yet fixed.
+
+**HA's satellite setup timed out once, n=1.** The connection test failed on
+the first attempt and passed on the second, and from our side the two are
+identical: the proxied test sound fetched, 102 periods streamed, playback
+device-confirmed in 4.5s. The only difference is timing — the first announce
+arrived 0.2s after HA's first connection. The test passes when the satellite
+fetches a URL, and for ESPHome HA wraps that URL in its ffmpeg proxy, so the
+fetch that counts is ffmpeg's; the guess is that it, or HA's listener, was not
+ready that early. Unverified: HA debug logging on `assist_satellite` and
+`esphome` across a re-add would settle it. The same session's
+`SatelliteBusyError` was a 7.3s link stall stretching a 2.9s announcement to
+8.7s while HA asked for another — correct refusal, VVV's WiFi worth watching.
+
