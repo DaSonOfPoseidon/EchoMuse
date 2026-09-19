@@ -38,7 +38,7 @@ jobs:
         with:
           python-version: "3.12"
       # Keep runtime/model dependencies out of the lightweight controller suite.
-      - run: pip install pytest numpy pyyaml onnx==1.17.0 onnxruntime
+      - run: pip install pytest numpy pyyaml aiohttp onnx==1.17.0 onnxruntime
       - run: python -m pytest oww_forge/tests/ -v
 
   controller-lint:
@@ -108,6 +108,8 @@ jobs:
           node controller/tests/wifi_nvram.test.mjs
           node controller/tests/kernel_label.test.mjs
           node controller/tests/wake_sensitivity.test.mjs
+      - name: Run forge console tests
+        run: node oww_forge/tests/console_log.test.mjs
 
   device-tests:
     name: Device Go tests

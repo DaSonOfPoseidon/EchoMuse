@@ -46,7 +46,10 @@ The UI covers the whole flow: asset download with live progress, wake-word
 creation, build with a streaming log console, Google-TTS mix-in, wav-upload
 testing, and `.onnx` download. One job runs at a time (training saturates
 the machine anyway); state is derived from disk on every poll, so it
-survives container restarts. Light and dark follow the dashboard, sharing
+survives container restarts. While a build runs, the card's stepper shows
+how far the current stage is: clips generated, feature files finished, or
+training steps parsed from the log across all three of `train.py`'s
+sequences. Light and dark follow the dashboard, sharing
 its `em-theme` setting. No auth — LAN tool.
 
 A run can be **stopped** from the console bar, its settings changed under
