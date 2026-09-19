@@ -1798,11 +1798,11 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
               )}
               <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--muted)', marginTop: 4, letterSpacing: '0.05em',
                             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                   title={device.firmware_ver || undefined}>
+                   title={[device.firmware_ver, _kernelTitle(device)].filter(Boolean).join(' · ') || undefined}>
                 {(() => {
                   const ip = device.ip && device.ip !== '127.0.0.1' ? device.ip : null;
                   const ipStr = device.connected ? (ip || '—') : (ip ? `${ip} (last seen)` : '—');
-                  const os = _baseOsLabel(device.baseOs);
+                  const os = [_osLabel(device), _kernelLabel(device)].filter(Boolean).join(' · ');
                   return <>{ipStr} · {device.device_id} · {_middleEllipsis(device.firmware_ver, 24, 7) || 'unknown'}{os && ` · ${os}`}</>;
                 })()}
                 {needsUpdate && <span style={{ color: 'var(--warn)', marginLeft: 10 }}>Update available</span>}
@@ -2535,9 +2535,13 @@ function Card({ device, onClick }) {
             {device.label ? _middleEllipsis(device.label, 30) : <span style={{ color: 'var(--muted)', fontSize: 12 }}>{device.device_id.slice(0, 8)}…</span>}
           </div>
           {(device.firmware_ver || device.baseOs) && (
-            <div title={[device.firmware_ver, _baseOsLabel(device.baseOs)].filter(Boolean).join(' · ')}
-              style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--muted)', marginTop: 3, ..._ROW_TEXT, display: 'block' }}>
-              {[_middleEllipsis(device.firmware_ver, 24, 7), _baseOsLabel(device.baseOs)].filter(Boolean).join(' · ')}
+            <div title={[device.firmware_ver, _baseOsLabel(device.baseOs), _kernelTitle(device)].filter(Boolean).join(' · ')}
+              style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--muted)', marginTop: 3, display: 'flex', minWidth: 0 }}>
+              {/* The tile is narrow: "emOS (64-bit)", and nothing extra for
+                  FireOS. The OS never shrinks; the firmware version gives way
+                  to it, since the tooltip and the header both carry it whole. */}
+              {device.firmware_ver && <span style={{ ..._ROW_TEXT, flex: '0 1 auto' }}>{_middleEllipsis(device.firmware_ver, 24, 7)}</span>}
+              {_osLabel(device) && <span style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>{device.firmware_ver ? '\u00a0· ' : ''}{_osLabel(device)}</span>}
             </div>
           )}
         </div>
@@ -2869,6 +2873,37 @@ function _middleEllipsis(text, max, tail) {
 
 function _baseOsLabel(baseOs) {
   return baseOs === 'emos' ? 'emOS' : baseOs === 'fireos' ? 'FireOS 5' : null;
+}
+
+// The kernel's word size from `uname -m`: "64-bit" or "32-bit". On biscuit it
+// is what separates emOS on FireOS 5's kernel (aarch64) from emOS on FireOS
+// 6's (armv7l) — same ARMv8 chip, both 3.18.19, one kernel built 32-bit.
+// Bitness rather than the arch name, since that is the difference that means
+// something to an operator. Unrecognised values pass through as-is.
+function _archShort(arch) {
+  if (!arch) return null;
+  if (/^(aarch64|arm64|x86_64|amd64)$/.test(arch)) return '64-bit';
+  if (/^(armv\d+l?|arm|i[3-6]86)$/.test(arch)) return '32-bit';
+  return arch;
+}
+
+// The OS as shown per device: "emOS (64-bit)", "FireOS 5". The bitness is only
+// added for emOS, the one base that runs on more than one kernel.
+function _osLabel(d) {
+  const os = _baseOsLabel(d.baseOs);
+  const arch = d.baseOs === 'emos' ? _archShort(d.kernelArch) : null;
+  return os && arch ? `${os} (${arch})` : os;
+}
+
+// "kernel 3.18.19" for the device header, beside _osLabel which already names
+// the arch for emOS. Drops the build suffix ("+", "-gecb8cb46060-dirty");
+// _kernelTitle keeps the full string for the tooltip.
+function _kernelLabel(d) {
+  const v = (d.kernelRelease || '').split(/[-+]/)[0];
+  return v ? `kernel ${v}` : null;
+}
+function _kernelTitle(d) {
+  return d.kernelArch ? `kernel ${d.kernelArch} ${d.kernelRelease || ''}`.trim() : null;
 }
 
 const _INIT_RC_APPEND = `
