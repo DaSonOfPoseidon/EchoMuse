@@ -58,6 +58,7 @@ import em_auth as auth
 import em_ble_proxy
 import em_config_sections as sections_mod
 import em_console_pw
+import em_labels
 import em_crashlog
 import em_emos_build
 import em_firmware
@@ -996,7 +997,7 @@ async def _patch_device(request: web.Request) -> web.Response:
     """PATCH /api/devices/{id} — update label."""
     device_id = request.match_info["id"]
     body  = await _json_body(request)
-    label = _require_str(body, "label")
+    label = _require_label(body)
 
     loop = asyncio.get_event_loop()
     row = await loop.run_in_executor(None, db.get_device, device_id)
@@ -1089,7 +1090,7 @@ async def _post_approve(request: web.Request) -> web.Response:
     """
     device_id = request.match_info["id"]
     body   = await _json_body(request)
-    label  = _require_str(body, "label")
+    label  = _require_label(body)
     config = body.get("config")  # optional
 
     loop = asyncio.get_event_loop()
@@ -5636,6 +5637,17 @@ async def _json_body(request: web.Request) -> dict:
         )
 
 
+def _require_label(body: dict) -> str:
+    """The body's label, or a 400 naming the rule it broke (em_labels)."""
+    label, err = em_labels.check_label(body.get("label"))
+    if err:
+        raise web.HTTPBadRequest(
+            content_type="application/json",
+            body=json.dumps({"error": err, "code": "invalid_label"}),
+        )
+    return label
+
+
 def _require_str(body: dict, key: str) -> str:
     """Extract a required string field from a parsed JSON body."""
     value = body.get(key)
@@ -5773,8 +5785,11 @@ def _merge_device(row) -> dict:
         # Which userspace the device booted: "emos", "fireos", or null from
         # firmware that cannot say. Null is not FireOS — the wizard, the
         # support bundle and the payload reconcile all need to tell "Android"
-        # apart from "not asked".
-        "baseOs":          getattr(live, "base_os", None) if live else None,
+        # apart from "not asked". Offline it falls back to the value stored at
+        # its last registration (schema v21), so the dashboard's slug does not
+        # vanish when a device does; a live report always wins.
+        "baseOs":          (getattr(live, "base_os", None) if live else None)
+                           or row["base_os"],
         # The DERIVED answer, not a second copy of the rule. em_platform owns
         # "which payloads mean anything here"; a dashboard that re-derived it
         # from baseOs would be a mirror free to disagree with the server that
