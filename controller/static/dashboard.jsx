@@ -2968,6 +2968,93 @@ const _unlockVerdict = ({ release = '', expdb = '', twrp = '' }) => {
   return { v2: evidence.length > 0, evidence };
 };
 
+// Did the optional factory reset actually happen? Read from the probe
+// runWipeData sends after `twrp wipe data` / `twrp wipe cache`, whose exit
+// status says nothing. The probe prints:
+//
+//   DATA=<count of /data mounts>   — 0 means nothing below can be believed:
+//                                    `[ -e ]` on an unmounted /data is false
+//                                    for everything, which reads as wiped.
+//   LEFT=<names>                   — which of Android's and EchoMuse's own
+//                                    /data directories still exist. A factory
+//                                    reset removes all of them.
+//   CACHE=<names>                  — what is left in /cache. lost+found and
+//                                    recovery/ (TWRP's own log) are expected.
+//   _WIPECHK                       — the probe ran to the end.
+//
+// A wipe that left anything in /data fails the step. /cache only warns: stale
+// cache is harmless, and TWRP writes to it itself.
+const _wipeVerdict = (out) => {
+  if (!out.includes('_WIPECHK')) {
+    return { ok: false, why: 'The check after the wipe did not run, so nothing shows it worked.' };
+  }
+  const pick = k => ((out.match(new RegExp('^' + k + '=(.*)$', 'm')) || [])[1] || '').trim();
+  if (!(parseInt(pick('DATA'), 10) > 0)) {
+    return { ok: false, why: '/data would not mount after the wipe, so it could not be checked.' };
+  }
+  const left = pick('LEFT').split(/\s+/).filter(Boolean);
+  if (left.length) {
+    return { ok: false, why: `The wipe left ${left.map(d => '/data/' + d).join(', ')} behind.` };
+  }
+  const cache = pick('CACHE').split(/\s+/)
+    .filter(n => n && n !== 'lost+found' && n !== 'recovery');
+  return { ok: true, why: '', cacheLeft: cache };
+};
+
+// The bytes of one exported data symbol in a 32-bit little-endian ELF shared
+// library, or null. Used to read MediaTek's compiled WiFi NVRAM default out of
+// the device's own libcustom_nvram.so (see ensureWifiNvram), so nothing of
+// Amazon's is shipped: the data comes off the device it is written back to.
+// Looks the name up in .dynsym and maps its address through the PT_LOAD
+// segments; anything it does not understand is null, never a guess.
+const _elfSymbol = (bytes, name) => {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (u8.length < 52 || u8[0] !== 0x7f || u8[1] !== 0x45 || u8[2] !== 0x4c || u8[3] !== 0x46
+      || u8[4] !== 1 || u8[5] !== 1) return null;
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const u16 = o => dv.getUint16(o, true), u32 = o => dv.getUint32(o, true);
+  try {
+    const phoff = u32(28), shoff = u32(32);
+    const phentsize = u16(42), phnum = u16(44), shentsize = u16(46), shnum = u16(48);
+    const loads = [];
+    for (let i = 0; i < phnum; i++) {
+      const p = phoff + i * phentsize;
+      if (u32(p) === 1) loads.push({ vaddr: u32(p + 8), off: u32(p + 4), filesz: u32(p + 16) });
+    }
+    const sec = i => { const s = shoff + i * shentsize;
+      return { type: u32(s + 4), off: u32(s + 16), size: u32(s + 20), link: u32(s + 24) }; };
+    const want = new TextEncoder().encode(name);
+    for (let i = 0; i < shnum; i++) {
+      const s = sec(i);
+      if (s.type !== 11) continue;                       // SHT_DYNSYM
+      const strOff = sec(s.link).off;
+      for (let j = 0; j < s.size / 16; j++) {
+        const e = s.off + j * 16;
+        const n = strOff + u32(e);
+        if (want.some((b, k) => u8[n + k] !== b) || u8[n + want.length] !== 0) continue;
+        const value = u32(e + 4), size = u32(e + 8);
+        const seg = loads.find(l => l.vaddr <= value && value + size <= l.vaddr + l.filesz);
+        if (!seg || !size) return null;
+        const at = seg.off + value - seg.vaddr;
+        return at + size <= u8.length ? u8.slice(at, at + size) : null;
+      }
+    }
+  } catch { return null; }
+  return null;
+};
+
+// An NVRAM record as libnvram writes it to /data/nvram: the data, then 0xAA,
+// then an 8-bit checksum that ADDS the even-indexed bytes and XORs the odd
+// ones. Derived from biscuit's own files 2026-09-19 — WIFI (514 bytes, the
+// same on EFF and VVV) and WIFI_CUSTOM (6) both reproduce exactly.
+const _nvramRecord = (data) => {
+  let cs = 0;
+  for (let i = 0; i < data.length; i++) cs = (i % 2 ? (cs ^ data[i]) : (cs + data[i])) & 0xff;
+  const out = new Uint8Array(data.length + 2);
+  out.set(data); out[data.length] = 0xaa; out[data.length + 1] = cs;
+  return out;
+};
+
 // WiFi security labels, used in the network picker and in error messages.
 // Module scope so WifiPanel and the wizard's step runners share one set.
 const _SECURITY_LABEL = {
@@ -3492,6 +3579,10 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
   // one mid-run would renumber the steps under a wizard that has already done
   // some of them, which is what the ref was protecting against.
   const [flow, setFlow] = useState(_wizardFlow);
+  // Factory reset at Connect to TWRP (runWipeData), emOS flow only. Off unless
+  // ticked, never remembered between runs, and locked with the flow once
+  // anything has run.
+  const [wipeData, setWipeData] = useState(false);
   const isEmos = flow === 'emos';
   const STEPS = isEmos ? _EMOS_STEPS : _WIZARD_STEPS;
   const STEP_MODE = isEmos ? _EMOS_STEP_MODE : _STEP_MODE;
@@ -3589,6 +3680,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     // Step count differs between the flows, so the per-step state has to be
     // rebuilt rather than carried across.
     setFlow(next);
+    if (next !== 'emos') setWipeData(false);
     setStepState((next === 'emos' ? _EMOS_STEPS : _WIZARD_STEPS).map(() => 'pending'));
     setStep(0);
     setLog([]);
@@ -4091,6 +4183,48 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     }
     addLog('TWRP confirmed.', 'ok');
     return c;
+  }
+
+  // Optional factory reset, chosen at step 0 and run at the end of Connect to
+  // TWRP: after the device is in recovery, before EchoMuse and the WiFi
+  // skeleton are written to /data. Later it would destroy what those steps
+  // installed.
+  //
+  // emOS flow ONLY. On FireOS 5 a data wipe also takes f1r30s's state with
+  // it, and the device then needs f1r30s installed again before it will boot
+  // rooted — which this wizard does not do (#269 Part 1).
+  //
+  // `twrp wipe data` is TWRP's Factory_Reset(): everything in /data except
+  // lost+found, misc/vold and (on data-media builds) media/. That includes
+  // /data/nvram, which is safe on biscuit: it has no nvram partition, so the
+  // WIFI file there is only libcustom_nvram's compiled default, and the MACs
+  // and mic/ALS calibration live in idme (measured 2026-09-19). Install
+  // EchoMuse rewrites the WIFI record from this device's /system
+  // (ensureWifiNvram), since emOS never runs the daemon that would.
+  //
+  // Neither command's exit status means anything, so the result is checked
+  // with _wipeVerdict.
+  async function runWipeData(c) {
+    addLog('Wiping /data and /cache (TWRP factory reset)…', 'warn');
+    const out = (await c.shell('twrp wipe data 2>&1; twrp wipe cache 2>&1')).trim();
+    if (out) addLog(`  → ${out.replace(/\n/g, '\n  → ')}`);
+    const probe = await c.shell(
+      'mount /data 2>/dev/null; mount /cache 2>/dev/null; '
+      + 'echo "DATA=$(grep -c \' /data \' /proc/mounts)"; '
+      + 'L=; for d in system app local emos adb; do [ -e /data/$d ] && L="$L $d"; done; '
+      + 'echo "LEFT=$L"; '
+      + 'echo "CACHE=$(ls -A /cache 2>/dev/null | tr \'\\n\' \' \')"; '
+      + 'echo _WIPECHK');
+    const v = _wipeVerdict(probe);
+    if (!v.ok) {
+      throw new Error(`${v.why} The device is still in TWRP and nothing else `
+        + 'has been written. Retry this step, or wipe from TWRP\'s Wipe menu.');
+    }
+    if (v.cacheLeft.length) addLog(`  /cache still holds: ${v.cacheLeft.join(', ')}`, 'warn');
+    // A reformat (non-data-media builds) takes media/ with it, and the install
+    // steps stage their uploads through /sdcard → /data/media/0.
+    await c.shell('mkdir -p /data/media/0');
+    addLog('Wiped.', 'ok');
   }
 
   // Where the patched kernel is allowed to land, decided from a probe of the
@@ -5862,6 +5996,80 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     addLog('Recovery environment ready.', 'ok');
   }
 
+  // emOS flow: make sure the WiFi driver's NVRAM record exists.
+  //
+  // The kernel reads /data/nvram/APCFG/APRDEB/WIFI at WLAN init (country,
+  // 5GHz enable, band-edge TX power) and falls back to the driver's built-in
+  // values without it. On FireOS nvram_daemon writes it at every boot; emOS
+  // never runs that daemon, so a device whose /data was wiped — the wizard's
+  // option, or a factory reset — runs on the fallback, which has not been
+  // measured against stock. Writing stock's record removes the question.
+  //
+  // Biscuit has no nvram partition, so stock's record is only ever the
+  // compiled default `stWifiCfgDefault` from libcustom_nvram.so plus
+  // _nvramRecord's trailer — identical on EFF and VVV and in both FireOS 5 and
+  // 6's library (2026-09-19). It is read from THIS device's /system, so nothing
+  // of Amazon's ships with EchoMuse.
+  //
+  // Never overwrites: a record that exists is the one stock wrote. A failure
+  // warns and carries on — WiFi works on the fallback (the spare ran on it).
+  async function ensureWifiNvram(c) {
+    const REC = '/data/nvram/APCFG/APRDEB/WIFI';
+    const have = (await c.shell(`[ -s ${REC} ] && echo HAVE || echo NONE`)).trim();
+    if (have === 'HAVE') {
+      addLog('  WiFi NVRAM record present — kept.');
+      return;
+    }
+    const warn = why => addLog(`WiFi NVRAM record not written: ${why} WiFi still works on `
+      + 'the driver\'s built-in defaults.', 'warn');
+    // Same partition resolution and private mount as _sysreadScript. FireOS 6
+    // keeps the library under the nested system/ and in vendor/lib; FireOS 5
+    // at the root in lib/.
+    const out = await c.shell(
+      'SLOT=$(getprop ro.boot.slot_suffix); S=""; '
+      + 'for d in /dev/block/platform/*/by-name /dev/block/by-name; do '
+      + '  for n in "system$SLOT" system_a system; do '
+      + '    [ -z "$S" ] && [ -e "$d/$n" ] && S=$(readlink -f "$d/$n"); done; done; '
+      + '[ -z "$S" ] && { echo NOSYSTEM; exit 0; }; '
+      + 'M=$(mount | sed -n "s|^$S on \\([^ ]*\\) .*|\\1|p" | sed -n 1p); OWN=""; '
+      + 'if [ -z "$M" ]; then M=/tmp/em_sysread; mkdir -p "$M"; OWN=1; '
+      + '  mount -o ro "$S" "$M" 2>&1 || echo "MOUNTFAIL"; fi; '
+      + 'L=""; for p in system/vendor/lib system/lib vendor/lib lib; do '
+      + '  [ -z "$L" ] && [ -f "$M/$p/libcustom_nvram.so" ] && L="$M/$p/libcustom_nvram.so"; done; '
+      + 'echo "LIB=$L"; [ -n "$L" ] && cp "$L" /tmp/em-nvram.so && echo _NVLIB_OK; '
+      + '[ -n "$OWN" ] && { umount "$M" 2>/dev/null; rmdir "$M" 2>/dev/null; }; true');
+    if (!out.includes('_NVLIB_OK')) {
+      warn(out.includes('NOSYSTEM') ? 'no system partition found.'
+         : out.includes('MOUNTFAIL') ? '/system would not mount.'
+         : 'libcustom_nvram.so is not on /system.');
+      return;
+    }
+    const data = _elfSymbol(await c.pull('/tmp/em-nvram.so'), 'stWifiCfgDefault');
+    await c.shell('rm -f /tmp/em-nvram.so');
+    if (!data || data.length !== 512) {
+      warn(`the library\'s WiFi default is ${data ? data.length + ' bytes, not 512' : 'missing'}.`);
+      return;
+    }
+    const rec = _nvramRecord(data);
+    await c.push('/tmp/em-wifi-nvram', rec);
+    // Ownership and modes as stock's init and libnvram leave them: root:system
+    // (0:1000, numeric because recovery's busybox has no Android group names),
+    // 2771 on the directories, 660 on the record.
+    const w = (await c.shell(
+      '( mkdir -p /data/nvram/APCFG/APRDEB && '
+      + 'chown 0:1000 /data/nvram /data/nvram/APCFG /data/nvram/APCFG/APRDEB && '
+      + 'chmod 2771 /data/nvram /data/nvram/APCFG /data/nvram/APCFG/APRDEB && '
+      + `cp /tmp/em-wifi-nvram ${REC} && chown 0:1000 ${REC} && chmod 660 ${REC} && `
+      + 'echo _NVW_OK ) 2>&1; rm -f /tmp/em-wifi-nvram')).trim();
+    const back = w.includes('_NVW_OK') ? await c.pull(REC) : null;
+    if (!back || back.length !== rec.length || back.some((b, i) => b !== rec[i])) {
+      await c.shell(`rm -f ${REC}`);
+      warn(`the write did not verify${w.includes('_NVW_OK') ? '' : ` (${w})`}, so it was removed.`);
+      return;
+    }
+    addLog('  WiFi NVRAM record written from this device\'s own /system (stock default).', 'ok');
+  }
+
   // Step 2 — escrow. THE MOST IMPORTANT STEP IN THE FLOW, because it is the
   // only one that makes every step after it reversible.
   async function runEscrowBoot(c) {
@@ -6936,7 +7144,8 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
       }
       if (isEmos) switch (stepIdx) {
         case 0: c = await runConnectAndroid(); break;
-        case 1: c = await runConnectTwrp(); break;
+        case 1: c = await runConnectTwrp();
+                if (wipeData) await runWipeData(c); break;
         case 2: await runEscrowBoot(c); break;
         // Every TWRP step prepares its own environment rather than inheriting
         // step 2's. The su shim and the /sdcard symlink both live in the
@@ -6945,6 +7154,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
         // steps below are the shared FireOS ones that assume both. It is
         // idempotent and costs three shell round trips.
         case 3: await prepareTwrpForInstall(c);
+                await ensureWifiNvram(c);
                 await runInstallEchoMuse(c, binaryFile, useLatest); break;
         case 4: await prepareTwrpForInstall(c);
                 await runInstallOwwAssets(c); break;
@@ -7150,7 +7360,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
               <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
                 {step + 1}. {cur.label}
               </div>
-              <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--text2)', lineHeight: 1.6 }}>{cur.desc}</div>
+              <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--text2)', lineHeight: 1.6 }}>{cur.desc}{isEmos && cur.id === 'connect_twrp' && wipeData && ' Then wipes /data and /cache.'}</div>
             </div>
 
             {/* After a restore the run is over: every step control is hidden
@@ -7215,6 +7425,13 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
                     </div>
                   ))}
                 </div>
+                {isEmos && <div style={{ marginTop: 10 }}>
+                  <Toggle label="Wipe data and cache first"
+                    sub={wipeData
+                      ? 'Erases /data and /cache in TWRP: WiFi, settings and anything installed. Cannot be undone.'
+                      : 'Off: the device keeps its data.'}
+                    value={wipeData} onChange={setWipeData}/>
+                </div>}
               </div>
             )}
 
@@ -7224,7 +7441,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
                 {upcoming.map(s => (
                   <div key={s.id} className="em-wizard-upcoming__item">
                     <span className="em-wizard-upcoming__name">{s.label}</span>
-                    <span className="em-wizard-upcoming__desc">{s.desc}</span>
+                    <span className="em-wizard-upcoming__desc">{s.desc}{isEmos && s.id === 'connect_twrp' && wipeData && ' Then wipes /data and /cache.'}</span>
                   </div>
                 ))}
               </div>
