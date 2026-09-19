@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.24.0-ea.8 (Early Access)
+
+Release candidate 2 for the next GA. Everything below ran on real devices
+before it was cut.
+
+**The wizard can wipe the device first, on emOS** (#577). A new "Wipe data and
+cache first" switch, off by default, erases /data and /cache in TWRP before
+anything is installed, then checks that it happened. It is not offered for
+FireOS: a wipe there also removes f1r30s, which the wizard does not reinstall.
+
+**emOS devices get stock FireOS's WiFi settings file** (#577). FireOS writes it
+at every boot and emOS never does, so a wiped emOS device ran on the WiFi
+driver's built-in defaults. The wizard now writes it from the device's own
+/system if it is missing. Nothing unique to the device lives there on the Echo
+Dot 2: its MAC addresses and calibration are elsewhere and survive a wipe.
+
+**Each device shows which OS it runs** (#576, #579). "emOS" or "FireOS 5" on
+the tile and device page, and for emOS whether its kernel is 32-bit (FireOS 6)
+or 64-bit (FireOS 5). The kernel needs the next firmware release to report it.
+Long device names and firmware versions now fit their rows, and new names are
+limited to 32 characters; existing names are unchanged.
+
+**Smaller fixes.** Device log rows line up before 10am (#578). If the serial
+port picker times out while emOS boots, the button now reads Connect Console
+rather than suggesting another reboot (#580).
+
 ## 2.24.0-ea.7 (Early Access)
 
 This is the release candidate for the next GA. Before it was cut, every
