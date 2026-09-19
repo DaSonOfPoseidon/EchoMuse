@@ -3383,3 +3383,29 @@ build under qemu (in a PID namespace: 32-bit bionic refuses pids above 65535)
 against a conf with each form, which printed the exact bytes back. FireOS's
 older supplicant keeps the quoted form it has always had; hex there is only for
 names quoting cannot carry, and has not been seen on a FireOS device.
+
+**Released at close: ea.10 (RC4) and emOS v0.8.** #585 (barge slider runs
+Precise → Eager like Sensitivity; schema v24 lowers a stored owwThreshold above
+0.975, since #549 only clamps on write) and #586 (every valid SSID) merged,
+tested together on main (1149 passed), then `controller-ea-v2.24.0-ea.10` and
+`emos-v0.8` cut from 52cff1d. ea.10 is on GHCR for both arches with `:latest`
+still 2.23.1. emOS v0.8 is v0.7 plus the `em-wifi` fix — the init is unchanged,
+which matters because every controller including GA fetches the latest emOS
+release — and it is the first release published without GitHub's generated PR
+list (#582). The EA add-on was deliberately NOT updated, so the overnight soak
+runs uninterrupted on ea.9. The firmware half of #586 is on main and not in the
+soaked binary (v2.15.0-69); it needs a device test before `v2.16.0`.
+
+Wil set two directions at the end of the day. **emOS OTA (#573) is the priority
+for the release after GA**, and should take the same form as the server binary
+update — per device from the Updates tab, shell-plane push to `.part`, md5
+before anything is written, serialised with the other OTAs, rolled back if the
+new image does not come up. And a standing rule, now in CLAUDE.md: **where a
+standard or spec exists, conform to it and prove it with a test** — the SSID
+bug is its worked example.
+
+Also today: #543 (@scragnog) and #547 (@costajohnt) merged after we resolved
+their `ci.yml` clashes on their branches; #565 and #552 have change requests
+out; every open issue now carries labels (new `area:emos`, `area:porting`); and
+all six release pages were stripped of the generated PR list that credited
+unrelated work.
