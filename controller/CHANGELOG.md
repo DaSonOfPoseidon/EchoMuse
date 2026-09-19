@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.24.0-ea.9 (Early Access)
+
+**FireOS 5 emOS devices are labelled 64-bit** (#581). They showed "emOS
+(32-bit)": the server is a 32-bit program, and a 64-bit kernel identifies
+itself to it as armv8l, which the dashboard read the wrong way round.
+
 ## 2.24.0-ea.8 (Early Access)
 
 Release candidate 2 for the next GA. Everything below ran on real devices
