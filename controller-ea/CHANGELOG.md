@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.24.0-ea.10 (Early Access)
+
+**Any WiFi network name works** (#586). The wizard refused names or passwords
+containing `"` or `\`, dropped spaces at the start or end of a name, and wrote
+names like "Café" back wrongly. On emOS an apostrophe in the name or password,
+as in "Bob's WiFi", broke the WiFi step outright. Every name the WiFi standard
+allows now works, and every valid WPA2 password. Changing a device's network
+from the dashboard gets the same fix with the next firmware.
+
+**The wake word sensitivity slider can no longer be set to a value that never
+fires** (#543, thanks @scragnog). Its strictest notch set a threshold nothing
+can reach, which looked like a device that had stopped responding. The slider
+now runs 0.1–0.975 in finer steps, and a device already stored at the old
+value is corrected on upgrade (#585).
+
+**The barge-in slider runs the same way as Sensitivity** (#585): precise on the
+left, eager on the right.
+
+The database moves to schema v24 on first start, and a backup is taken first.
+
 ## 2.24.0-ea.9 (Early Access)
 
 **FireOS 5 emOS devices are labelled 64-bit** (#581). They showed "emOS
