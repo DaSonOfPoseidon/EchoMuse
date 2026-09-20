@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.25.0-ea.1 (Early Access)
+## 2.24.1-ea.1 (Early Access)
 
 **Re-provision a device without losing it.** The wizard recognised a device the
 controller already knew and offered one way forward: delete it. That reassigned
