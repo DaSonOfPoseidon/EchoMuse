@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.24.1
+
+**Re-provision a device without losing it.** The wizard recognised a device the
+controller already knew and offered one way forward: delete it. That reassigned
+its ESPHome port, so every satellite had to be re-added in Home Assistant, and
+the device's config and history went with it. There is now a second choice —
+keep the record — and the device comes back with its port, config and entities
+intact. It matters because re-running the wizard is currently the only way to
+move an existing device onto a newer emOS.
+
+**An emOS device is no longer patched as if it were FireOS.** The FireOS flow
+patched whatever was in the boot slot, which on a device already running emOS
+produces a bootloop. It now reads the slot first and refuses, before anything
+is written, naming both ways on. The FireOS 5 check could not catch this: emOS
+mounts FireOS's /system, so the device reports 5.1.1 exactly as a stock one
+does.
+
+The device's own storage is still wiped by a re-provision, and its console
+password record still cleared. It is the controller's record that survives.
+
 ## 2.24.1-ea.1 (Early Access)
 
 **Re-provision a device without losing it.** The wizard recognised a device the
