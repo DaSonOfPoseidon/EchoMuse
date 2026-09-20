@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.25.0-ea.1 (Early Access)
+
+**Re-provision a device without losing it.** The wizard recognised a device the
+controller already knew and offered one way forward: delete it. That reassigned
+its ESPHome port, so every satellite had to be re-added in Home Assistant, and
+its config and history went with it. There is now a second choice — keep the
+record — and the device comes back with its port, config and entities intact.
+
+Worth having because re-running the wizard is currently the only way to move an
+existing device onto a newer emOS. The device's own storage is still wiped, and
+its console password record is still cleared; it is the controller's record
+that survives.
+
 ## 2.24.0
 
 The Early Access line since 2.23.1, now general. The headline changes:
