@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.24.0
+
+The Early Access line since 2.23.1, now general. The headline changes:
+
+**Any WiFi network name works** (#586). Names carrying quotes, backslashes,
+leading or trailing spaces, or characters outside plain ASCII were refused,
+trimmed or written back mangled, on every path that took one. An apostrophe
+broke the emOS WiFi step outright. Every name the standard allows now works,
+tested against the IEEE 802.11i vectors and confirmed on hardware.
+
+**emOS runs on FireOS 6**, with its own WiFi bring-up, supplicant and DHCP,
+and the wizard provisions it end to end. emOS is the default; FireOS stays a
+labelled choice.
+
+**The provisioning wizard** reports the kernel architecture and version per
+device, shows the OS each device booted, and adds a Connect Console step.
+
+Note for anyone re-provisioning an existing device: it comes back with a new
+ESPHome port, so its satellite has to be re-added in Home Assistant. Ports are
+never reused, deliberately — a stale config entry cannot then point at a
+different device.
+
 ## 2.24.0-ea.10 (Early Access)
 
 **Any WiFi network name works** (#586). The wizard refused names or passwords
