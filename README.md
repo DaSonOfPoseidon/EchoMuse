@@ -8,6 +8,10 @@
 [![Controller](https://img.shields.io/github/v/tag/wilbowes/EchoMuse?filter=controller-v*&label=controller)](https://github.com/wilbowes/EchoMuse/pkgs/container/echomuse-controller)
 [![License: MIT](https://img.shields.io/github/license/wilbowes/EchoMuse)](LICENSE)
 
+**Join the community —
+[Discord](https://discord.gg/Bb5GfuV7Sa) ·
+[r/echomuse](https://www.reddit.com/r/echomuse/)**
+
 <!-- Demo video goes here. -->
 
 EchoMuse makes a second-hand Echo Dot a voice satellite for
