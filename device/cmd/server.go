@@ -449,7 +449,17 @@ func main() {
 	// Per-stream playback stats — underrun/period counts reported upstream
 	// once per completed TTS stream, persisted against the voice turn.
 	pcmSpeaker.OnStreamStats(func(st speaker.StreamStats) {
-		controlClient.SendPlaybackStats(st.Periods, st.Underruns, st)
+		// How close the Echo came to hearing a barge-in over this stream.
+		// Under private listening nothing else can say: the controller
+		// hears no audio during a reply.
+		var barge map[string]interface{}
+		if sc := dataClient.ShadowScorer(); sc != nil {
+			peak, bar, frames := sc.TakeBargeWindow()
+			barge = map[string]interface{}{"peak": peak, "bar": bar, "frames": frames}
+			log.Printf("[listen] over playback: %d frames at the barge bar %.2f, peak %.3f",
+				frames, bar, peak)
+		}
+		controlClient.SendPlaybackStats(st.Periods, st.Underruns, st, barge)
 	})
 
 	// WiFi change — the executor owns the whole switch/rollback sequence
@@ -1090,8 +1100,12 @@ func applyShadowConfig(dc *client.DataClient, cc *client.ControlClient,
 	}
 	dc.SetShadowScorer(sc)
 	shadowState.mode, shadowState.model, shadowState.lastErr = mode, model, ""
-	log.Printf("[shadow] on-device wake word scoring (%s, threshold %.2f) — %s",
-		sc.Info(), threshold, actsOnCrossings(mode))
+	bargeNote := "barge-in off"
+	if snap.BargeInEnabled != nil && *snap.BargeInEnabled {
+		bargeNote = fmt.Sprintf("barge-in bar %.2f", snap.BargeInThreshold)
+	}
+	log.Printf("[shadow] on-device wake word scoring (%s, threshold %.2f, %s) — %s",
+		sc.Info(), threshold, bargeNote, actsOnCrossings(mode))
 }
 
 // speakerPlaying is when the wake bar drops to bargeInThreshold: a response,

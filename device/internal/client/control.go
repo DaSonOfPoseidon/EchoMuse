@@ -1207,13 +1207,21 @@ func (c *ControlClient) SendWifiResult(ok bool, ssid, errMsg string) {
 // released independently, so this firmware must keep working against a
 // controller that predates the nested payload. Don't "tidy" the duplication
 // away until every controller in the fleet reads stats.
-func (c *ControlClient) SendPlaybackStats(periods, underruns uint64, stats interface{}) {
-	_ = c.writeJSON(map[string]interface{}{
+//
+// barge, when non-nil, is the on-device scorer's view of the stream:
+// {peak, bar, frames} at the barge-in bar (shadow.TakeBargeWindow).
+func (c *ControlClient) SendPlaybackStats(periods, underruns uint64, stats interface{},
+	barge map[string]interface{}) {
+	msg := map[string]interface{}{
 		"type":      "playback_stats",
 		"periods":   periods,
 		"underruns": underruns,
 		"stats":     stats,
-	})
+	}
+	if barge != nil {
+		msg["barge"] = barge
+	}
+	_ = c.writeJSON(msg)
 }
 
 // SendOwwShadowCross reports that on-device shadow scoring reached the wake

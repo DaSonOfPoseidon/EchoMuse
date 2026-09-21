@@ -4380,6 +4380,19 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                         # delivery-margin fields and is absent on older devices.
                         periods   = int(msg.get("periods", 0))
                         underruns = int(msg.get("underruns", 0))
+                        _bw = msg.get("barge")
+                        if isinstance(_bw, dict) and device.private_listening:
+                            # The private path's "Barge watcher done" line:
+                            # the Echo scores its own barge-in, so only it can
+                            # say how close one came. frames 0 = the barge bar
+                            # never applied (barge-in off).
+                            log.info(
+                                f"[{device_id}] Barge window (device): "
+                                f"{_bw.get('frames')} frames at bar "
+                                f"{float(_bw.get('bar') or 0):.2f}, peak "
+                                f"{float(_bw.get('peak') or 0):.3f}"
+                                + ("" if device.barge_in_enabled else " — barge-in off")
+                            )
                         pstats    = msg.get("stats") or {}
                         # Release _run_post_turn_playback: this report IS the
                         # end of audio, and the ring clears on it rather than

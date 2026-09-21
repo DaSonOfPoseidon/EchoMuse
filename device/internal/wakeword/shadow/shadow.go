@@ -142,6 +142,14 @@ type Scorer struct {
 	// prevAbove is whether the previous scored frame cleared the bar in force,
 	// for the two-frame rule at the barge-in bar.
 	prevAbove bool
+	// The barge window: frames scored at the barge-in bar since the last
+	// TakeBargeWindow, and the highest score among them. The answer to "did
+	// barge-in nearly fire, or was it nowhere close" — the controller's
+	// barge watcher logged exactly this, and a privately listening Echo
+	// gives the watcher nothing to score.
+	bargePeak   float32
+	bargeFrames uint64
+	bargeBar    float32
 	// resetReq is consumed by the scorer goroutine rather than acted on by
 	// the caller, because Detector is not safe for concurrent use and the
 	// caller is a different goroutine.
@@ -311,6 +319,17 @@ func (s *Scorer) Drain() Stats {
 	return out
 }
 
+// TakeBargeWindow returns and resets the barge window: how many frames were
+// scored at the barge-in bar, the highest score among them, and the bar.
+// frames is 0 when the bar never applied (barge-in off, or nothing played).
+func (s *Scorer) TakeBargeWindow() (peak, bar float32, frames uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	peak, bar, frames = s.bargePeak, s.bargeBar, s.bargeFrames
+	s.bargePeak, s.bargeFrames = 0, 0
+	return
+}
+
 // Info describes the loaded inference engine, for a log line at startup.
 func (s *Scorer) Info() string { return s.info }
 
@@ -391,6 +410,13 @@ func (s *Scorer) run() {
 		// below the wake threshold and scores the assistant's own voice, and
 		// one frame there cut long answers off mid-sentence. Two consecutive
 		// frames, the same rule as the controller's em_barge.decide.
+		if lowBar {
+			s.bargeFrames++
+			s.bargeBar = threshold
+			if score > s.bargePeak {
+				s.bargePeak = score
+			}
+		}
 		above := score >= threshold
 		crossed := above && (!lowBar || s.prevAbove) && now.Sub(s.lastCross) >= s.refract
 		s.prevAbove = above

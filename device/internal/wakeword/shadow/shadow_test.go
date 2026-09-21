@@ -642,3 +642,33 @@ func TestCrossingReportsCaptureTime(t *testing.T) {
 		t.Fatal("no crossing")
 	}
 }
+
+// TestBargeWindowReportsThePeakAtTheBargeBar: the private path's replacement
+// for the controller barge watcher's "peak=" line.
+func TestBargeWindowReportsThePeakAtTheBargeBar(t *testing.T) {
+	inf := &fakeInferer{}
+	s := NewScorer(inf, 0.5, nil)
+	defer s.Close()
+	playing := false
+	var mu sync.Mutex
+	s.SetBargeThreshold(0.25, func() bool { mu.Lock(); defer mu.Unlock(); return playing })
+	inf.set(0.0, 0)
+	pushAll(t, s, wakeword.FeatWindow+1)
+	inf.set(0.9, 0) // idle: a wake, but not a barge-window frame
+	pushAll(t, s, 1)
+	if _, _, n := s.TakeBargeWindow(); n != 0 {
+		t.Fatalf("counted %d barge frames while idle", n)
+	}
+	mu.Lock()
+	playing = true
+	mu.Unlock()
+	inf.set(0.18, 0)
+	pushAll(t, s, 3)
+	peak, bar, n := s.TakeBargeWindow()
+	if n != 3 || bar != 0.25 || peak < 0.17 || peak > 0.19 {
+		t.Fatalf("window = peak %.3f bar %.2f frames %d", peak, bar, n)
+	}
+	if _, _, n := s.TakeBargeWindow(); n != 0 {
+		t.Fatal("window not reset")
+	}
+}
