@@ -1629,7 +1629,20 @@ static int wmt_answer_patches(int fd, const char *dir)
          * from kernel context, so a bare name is opened relative to / and
          * fails with "load file (…) fail, iRet(-1)". SET_PATCH_NAME does not
          * get prepended for us. */
-        snprintf((char *)pi.name, sizeof pi.name, "%s", full);
+        /* Truncation is CHECKED, not assumed away. pi.name is 256 bytes and
+         * `full` is built in 512, so a long enough firmware directory would
+         * hand the kernel a path that is merely a prefix — and by the note
+         * above, the kernel opens this string exactly as given. The failure
+         * is then "load file (…) fail" from kernel context and a device whose
+         * wlan0 never appears, which is a long way from a buffer size.
+         *
+         * Real paths run ~45 characters, so this cannot fire today. It is
+         * here because the cost of being wrong is an evening, and the cost of
+         * the check is a comparison. */
+        int pn = snprintf((char *)pi.name, sizeof pi.name, "%s", full);
+        if (pn < 0 || (size_t)pn >= sizeof pi.name)
+            netlog("wmt: patch path too long (%d bytes, max %d): %s\n",
+                   pn, (int)sizeof pi.name - 1, full);
         if (ioctl(fd, WMT_IOCTL_SET_PATCH_INFO, &pi) < 0)
             netlog("wmt: SET_PATCH_INFO(%d,%s) failed errno=%d\n",
                    pi.seq, names[i], errno);
@@ -2284,6 +2297,17 @@ int main(int argc, char **argv)
      */
     mkdir("/etc", 0755);
     symlink("/system/vendor", "/vendor");
+    /* Probed rather than assumed, for the reason the farm below is: the
+     * kernel firmware loader reads through this link, so losing it presents
+     * as wlan0 never appearing — a WiFi fault, three layers from a symlink.
+     * /vendor/firmware is the thing that has to resolve, and it exists on
+     * both bases (checked on FireOS 5 and 6, 2026-09-21), so it tests the
+     * link, its target and the tree behind it in one call.
+     *
+     * It cannot fail today — / is the ramdisk and build.sh creates no
+     * /vendor for EEXIST to collide with — which is exactly why it is worth
+     * one line now rather than an evening later. */
+    note("stage=vendor link=%d\n", access("/vendor/firmware", F_OK) == 0);
     DIR *ed = opendir("/system/etc");
     if (ed) {
         struct dirent *de;
