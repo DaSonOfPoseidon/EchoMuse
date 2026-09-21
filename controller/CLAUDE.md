@@ -1656,10 +1656,29 @@ throughout — so the rules below are all one rule seen from different angles.
   that could not run yields empty strings, and empty is NOT evidence — the
   error that must not happen is refusing a working v1.1.0 device because `od`
   was missing. The absence of `boot_[ab]_amonet` is deliberately not one of
-  the signs: v2's installer does not rewrite the GPT, so a device upgraded
-  from v1 may still carry v1's names. Derived from R0rt1z2's published
-  sources, not from a v2 device, since none has been through the wizard yet.
-  `unlock_verdict.test.mjs`.
+  the signs, but NOT for the reason this used to give. It said v2's installer
+  does not rewrite the GPT, so an upgraded device might still carry v1's
+  names. **It does rewrite it, and that is the whole of the v1-versus-v2
+  partition story** (read out of `modules/main.py` and `modules/gpt.py` on
+  amonet's `mt8163-biscuit` branch, 2026-09-21, and confirmed on the spare):
+
+    - **v1 patched the table.** It renamed the real boot partitions to
+      `boot_a_x` / `boot_b_x` and carved two NEW `boot_a` / `boot_b` entries
+      out of the end of userdata to hold the exploit. That is why the bare
+      name is the payload there and why TWRP remaps it — and why writing a
+      kernel to a bare name on such a device costs the unlock.
+    - **v2 undoes it**, at install step 1.2 "Undo the partition table an older
+      amonet patched in": `unpatch()` renames `boot_a_x` back to `boot_a`,
+      zeroes v1's two added entries, and extends userdata to the last LBA
+      again. It then re-parses and raises `bad gpt` if any `_x` survived.
+    - **So a correctly installed v2 device has no `_x` and its bare `boot_a`
+      IS the real boot partition.** Measured on the spare (unlocked on v1,
+      upgraded to v2): no `_x` and no `_amonet` anywhere, and v2's own `_real`
+      aliases on `lk` and `tee` instead.
+
+  An `_x` alias on a device claiming v2 therefore means the restore did not
+  run or did not take, which is #598 — refuse it, because the bare name there
+  really is the payload. `unlock_verdict.test.mjs`.
 - **`_STEP_MODE` is enforced at every step, not only on Reconnect.** It existed
   and was correct and was consulted in one place, where a mismatch logged a
   line and left Retry enabled. In Android `/dev/block/other-boot` is amonet's
