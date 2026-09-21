@@ -181,8 +181,9 @@ proxy, if enabled, shows up separately as `<name> BT Proxy`.
 Besides the voice assistant itself, each device carries a **media player**,
 an **Action Button** event entity (hold-capable firmware), an **Ambient
 Light** sensor (where the hardware has one), a read-only **Microphone
-Muted** sensor for the physical mute button, and a **Soft Mute** switch HA
-can set — see [Muting from Home Assistant](faq.md#can-home-assistant-mute-a-device-or-tell-whether-it-is-muted).
+Muted** sensor for the physical mute button, and a **Wake word detection**
+switch that stops the device waking without touching the microphone — see
+[the FAQ](faq.md#can-home-assistant-stop-a-device-listening-or-tell-whether-it-is-muted).
 
 > **Auto-discovery:** if Home Assistant runs on the **same subnet** as the
 > controller, devices should also pop up automatically as discovered

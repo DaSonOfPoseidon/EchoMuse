@@ -5923,7 +5923,11 @@ def _merge_device(row) -> dict:
         "connected":        live is not None,
         "speaking":         live.speaking  if live else False,
         "muted":            getattr(live, "muted",     False) if live else False,
-        "soft_muted":       getattr(live, "soft_muted", False) if live else False,
+        # NOT live state, so not defaulted like its neighbours: the wake word
+        # switch is HA's, it is stored on the ESPHome server, and that server
+        # outlives the device's connection. An offline device reports what HA
+        # last set; None means no server to ask.
+        "wake_word":        em_esphome.get_wake_word(device_id),
         "listening":        getattr(live, "listening", False) if live else False,
         "thinking":         getattr(live, "thinking",  False) if live else False,
         "stats":            live.stats if live else None,

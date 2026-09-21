@@ -390,25 +390,37 @@ comes back as pending.
 ### I re-added a device and its voice port is missing.
 Same fix, same answer: update the controller.
 
-### Can Home Assistant mute a device, or tell whether it is muted?
-Both, as two separate entities, and the split is deliberate.
+### Can Home Assistant stop a device listening, or tell whether it is muted?
+Both, as two separate entities for two unrelated things.
 
-**Microphone Muted** (`binary_sensor`) reports the physical mute button and
-is read-only. That mute cuts the microphone in hardware and nothing in
-software can clear it — which is what makes it worth having, so there is no
-entity that could. Check it before `assist_satellite.ask_question`: a muted
-device runs the question and captures nothing, and HA waits on the answer
-with no timeout.
+**Wake word detection** (`switch`, on by default) stops the device waking —
+"stop listening while the TV is on", or only let a room's Dot answer when its
+motion sensor sees someone. Off, the device stops streaming its microphone to
+the controller and a wake word does nothing. It never touches the microphone
+itself, so an HA-initiated `start_conversation` or `ask_question` still
+listens, exactly as it does under the mute button. It is not persisted across
+a controller restart, so an automation that turns it off should re-assert it.
 
-**Soft Mute** (`switch`) is a mute HA can set and clear — "mute while the
-TV is playing", or only enable a room's Dot when its motion sensor sees
-someone. On, the device ignores the wake word and stops streaming its
-microphone to the controller. It does not touch the hardware, so an
-HA-initiated `start_conversation` or `ask_question` still listens, exactly
-as it does under the button mute. The ring holds a dim violet while it is
-on — red stays reserved for the button — and **the button always wins**:
-pressing mute or unmute clears the soft mute. It is not persisted across a controller
-restart; an automation that sets it should re-assert it.
+Home Assistant puts a **Wake word** dropdown on the same device, under
+Configuration — that one is HA's, and it picks *which* model rather than
+turning detection on and off. Setting it to "no wake word" is declined, with
+the reason in the controller log; the wake word is chosen in the EchoMuse
+dashboard. The dropdown does report whether detection is on, but it only
+re-reads that when the device reconnects, so shortly after using the switch
+the two can disagree. Use the switch.
+
+**Microphone Muted** (`binary_sensor`) reports the physical mute button, and
+is read-only. That button is the device's own: the firmware mutes all four
+microphone chips and refuses to stream, with or without a controller, so the
+controller can only report it. Check it before `assist_satellite.ask_question`
+— a muted device runs the question and captures nothing, and HA waits on the
+answer with no timeout.
+
+**The two are independent.** Pressing mute does not turn the wake word switch
+off, and pressing unmute does not turn it back on: the switch is Home
+Assistant's and only Home Assistant moves it, the same way the mute is the
+button's. Neither shows on the LED ring — the ring says nothing about the wake
+word switch, so an automation is free to drive it however it likes.
 
 ### My device changed its Home Assistant entity IDs.
 That happens whenever a device is deleted and re-added — HA keys entities on

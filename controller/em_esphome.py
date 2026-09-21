@@ -247,7 +247,7 @@ MEDIA_PLAYER_KEY = 1
 EVENT_KEY        = 2   # action-button hold, as an HA event entity
 AMBIENT_LUX_KEY  = 3   # TSL2540 ambient light, as an HA sensor
 MIC_MUTED_KEY    = 4   # the button mute, as a read-only binary sensor (#438)
-SOFT_MUTE_KEY    = 5   # the soft mute HA can set, as a switch (#286)
+WAKE_WORD_KEY    = 5   # wake word detection, as a switch HA can set (#286)
 
 # Press types the event entity advertises. double/triple were parked because
 # detecting them means delaying the single press by the multi-tap window to
@@ -640,11 +640,13 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                     device_class="illuminance",
                     state_class=1,   # STATE_CLASS_MEASUREMENT
                 )
-            # The two mutes, kept apart on purpose (#286, #438). The button
-            # mute is a binary sensor and nothing else: its value is that no
-            # software can clear it, so a writable entity here would be a
-            # remote unmute. The soft mute is the switch — controller-only,
-            # never touches the hardware path, and the button clears it.
+            # Two entities, for two unrelated things (#438, #286). The
+            # button mute is a binary sensor and nothing else: its value is
+            # that no software can clear it, so a writable entity here would
+            # be a remote unmute. The wake word switch is controller-only —
+            # it stops us acting on a wake word and takes the wake stream
+            # down, and never touches the microphone path. Neither moves the
+            # other; see em_wakeword.
             if self._mic_capable:
                 yield api_pb2.ListEntitiesBinarySensorResponse(
                     object_id="mic_muted",
@@ -652,11 +654,18 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                     name="Microphone Muted",
                     icon="mdi:microphone-off",
                 )
+                # NOT "Wake word": HA's own ESPHome integration already puts
+                # an entity by that name on this device — the satellite
+                # wake-word picker (EsphomeAssistSatelliteWakeWordSelect,
+                # translation_key "wake_word"), which it creates for any
+                # device whose voice_assistant_feature_flags are non-zero.
+                # Two controls with one name on one device page is a worse
+                # trap than the "Soft Mute" this replaced.
                 yield api_pb2.ListEntitiesSwitchResponse(
-                    object_id="soft_mute",
-                    key=SOFT_MUTE_KEY,
-                    name="Soft Mute",
-                    icon="mdi:microphone-off",
+                    object_id="wake_word_detection",
+                    key=WAKE_WORD_KEY,
+                    name="Wake word detection",
+                    icon="mdi:account-voice",
                 )
             yield api_pb2.ListEntitiesDoneResponse()
             return
@@ -670,7 +679,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
             # that happens — which could be never.
             if self._mic_capable:
                 yield self._mute_state_msg()
-                yield self._soft_mute_msg()
+                yield self._wake_word_msg()
             return
 
         if isinstance(msg, api_pb2.SubscribeVoiceAssistantRequest):
@@ -685,6 +694,14 @@ class EchoMuseSatellite(SatelliteServerProtocol):
 
         if isinstance(msg, api_pb2.VoiceAssistantConfigurationRequest):
             log.debug(f"[{self._log_name}] VoiceAssistantConfigurationRequest")
+            # active_wake_words follows the Wake word detection switch. The
+            # picker cannot SET it (see VoiceAssistantSetConfiguration below),
+            # but reporting the model unconditionally would tell HA the device
+            # is listening when it is not. Reporting the truth also makes the
+            # refusal self-correcting: HA re-reads straight after a rejected
+            # write, and the dropdown snaps back to what is really in force.
+            srv = self._owning_server
+            enabled = srv is None or srv.wake_word_enabled
             yield api_pb2.VoiceAssistantConfigurationResponse(
                 available_wake_words=[
                     api_pb2.VoiceAssistantWakeWord(
@@ -693,7 +710,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                         trained_languages=list(self.oww_model_info.languages),
                     )
                 ],
-                active_wake_words=[self.oww_model_id],
+                active_wake_words=[self.oww_model_id] if enabled else [],
                 max_active_wake_words=1,
             )
             return
@@ -705,16 +722,22 @@ class EchoMuseSatellite(SatelliteServerProtocol):
             # silently do nothing.
             #
             # We advertise ONE model with max_active_wake_words=1, so HA's
-            # dropdown offers exactly our model plus "no wake word" — there is
-            # nothing to switch between, and a request naming our own model is
-            # genuinely a no-op rather than an unimplemented one. Selecting our
-            # model back is therefore correct and silent.
+            # dropdown offers exactly our model plus "no wake word" — and a
+            # request naming our own model is genuinely a no-op rather than an
+            # unimplemented one.
             #
-            # An EMPTY list means "no wake word", i.e. deafen this satellite.
-            # That is a real request we do not implement — wake detection is
-            # controller-side config, not an HA-owned setting — so it is logged
-            # at warning rather than accepted quietly. Honouring it, and
-            # offering a choice worth making, both wait on multi-model support
+            # "No wake word" is NOT wired to the Wake word detection switch,
+            # though it looks like the same request. HA only re-reads this
+            # configuration in two places — once when the satellite entity is
+            # added, and again straight after IT writes wake words
+            # (assist_satellite.py `_update_satellite_config`) — so there is
+            # no way to tell it the switch moved. Accepting the write would
+            # give two controls that agree when HA drives and drift when the
+            # switch does, which is worse than one that plainly declines. The
+            # read side below still reports the truth, so the picker corrects
+            # itself on the next reconnect.
+            #
+            # Offering a choice worth making waits on multi-model support
             # (#112).
             requested = list(msg.active_wake_words)
             if requested == [self.oww_model_id]:
@@ -726,29 +749,22 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                 log.warning(
                     f"[{self._log_name}] VoiceAssistantSetConfiguration asked "
                     f"for active_wake_words={requested or '[] (no wake word)'} "
-                    f"— not applied; this device's wake word is set in the "
-                    f"EchoMuse dashboard and stays {self.oww_model_id}"
+                    f"— not applied. This device's wake word is set in the "
+                    f"EchoMuse dashboard and stays {self.oww_model_id}; to stop "
+                    f"it waking, use the Wake word detection switch."
                 )
             yield _HANDLED
             return
 
         if isinstance(msg, api_pb2.SwitchCommandRequest):
-            # The soft mute is the only switch. Anything else is a key we
+            # The wake word is the only switch. Anything else is a key we
             # never advertised — log and ignore, like an unhandled command.
-            if msg.key != SOFT_MUTE_KEY:
+            if msg.key != WAKE_WORD_KEY:
                 log.debug(f"[{self._log_name}] SwitchCommandRequest for unknown key {msg.key}")
                 yield _HANDLED
                 return
-            set_fn = (self._owning_server._set_soft_mute
-                      if self._owning_server is not None else None)
-            if set_fn is None:
-                log.warning(f"[{self._log_name}] soft mute requested but device not connected")
-                yield _HANDLED
-                return
-            log.info(f"[{self._log_name}] soft mute {'on' if msg.state else 'off'} from HA")
-            # The state is pushed back by update_soft_mute once the
-            # controller has applied it, not optimistically here.
-            asyncio.create_task(set_fn(bool(msg.state)))
+            log.info(f"[{self._log_name}] wake word {'on' if msg.state else 'off'} from HA")
+            self._apply_wake_word(bool(msg.state))
             yield _HANDLED
             return
 
@@ -1194,12 +1210,29 @@ class EchoMuseSatellite(SatelliteServerProtocol):
             state=bool(srv is not None and srv.muted),
         )
 
-    def _soft_mute_msg(self) -> "api_pb2.SwitchStateResponse":
+    def _wake_word_msg(self) -> "api_pb2.SwitchStateResponse":
+        # On means listening. A device with no server reads ON, matching the
+        # default — absent state is not "deafened".
         srv = self._owning_server
         return api_pb2.SwitchStateResponse(
-            key=SOFT_MUTE_KEY,
-            state=bool(srv is not None and srv.soft_muted),
+            key=WAKE_WORD_KEY,
+            state=bool(srv is None or srv.wake_word_enabled),
         )
+
+    def _apply_wake_word(self, on: bool) -> None:
+        """
+        Hand a wake-word on/off request to the controller.
+
+        The resulting state is pushed back by update_wake_word once the
+        controller has applied it, never optimistically from here.
+        """
+        set_fn = (self._owning_server._set_wake_word
+                  if self._owning_server is not None else None)
+        if set_fn is None:
+            log.warning(f"[{self._log_name}] wake word change requested "
+                        f"but device not connected")
+            return
+        asyncio.create_task(set_fn(on))
 
     def _announce_play_cb(self):
         """
@@ -2469,21 +2502,22 @@ class DeviceESPhomeServer:
         # every volume_state message from the device. Read by the satellite
         # for MediaPlayerStateResponse rather than hardcoding 1.0.
         self.volume: float = 1.0
-        # The two mutes, on the server rather than the Device because a
-        # Device is rebuilt per connection and both must outlive one:
-        # `muted` is the button mute as last reported, and is what a fresh
-        # `mute_state` is compared against to tell a press from the
-        # re-report the device sends on every reconnect; `soft_muted` is the
-        # HA switch, which a Dot dropping off Wi-Fi mid-film must not clear.
-        # Neither survives a controller restart — the switch comes back off
-        # and HA's automation re-asserts it.
+        # Both live on the server rather than the Device, because a Device
+        # is rebuilt per connection and both must outlive one: `muted` is
+        # the button mute as last reported, and is what a fresh `mute_state`
+        # is compared against to tell a press from the re-report the device
+        # sends on every reconnect; `wake_word_enabled` is the HA switch,
+        # which a Dot dropping off Wi-Fi mid-film must not turn back on.
+        # It defaults to ON — a device nobody has told otherwise listens.
+        # Neither survives a controller restart, so the switch comes back on
+        # and an automation that wants it off re-asserts it.
         self.muted: bool = False
-        self.soft_muted: bool = False
+        self.wake_word_enabled: bool = True
         # Injected by device_connected() — async callable(on: bool) that
-        # applies the soft mute on the controller side (wake gate, mic
-        # stream) and pushes the resulting state back. None when no device
-        # is connected.
-        self._set_soft_mute = None
+        # applies the wake word switch on the controller side (wake gate,
+        # mic stream) and pushes the resulting state back. None when no
+        # device is connected.
+        self._set_wake_word = None
         # Injected by device_connected() — async callable(pcm_bytes) for
         # standalone announce playback (setup wizard, push TTS) when no
         # voice turn is active.
@@ -3260,7 +3294,7 @@ async def device_connected(
     ring_alarm=None,
     stop_alarm=None,
     start_conversation=None,
-    set_soft_mute=None,
+    set_wake_word=None,
 ) -> None:
     """
     Called by em_controller.handle_control() when an Echo Dot connects.
@@ -3288,10 +3322,10 @@ async def device_connected(
     and `ask_question`). Same reasoning: it drives the mic, the ring and the
     voice lock.
 
-    set_soft_mute: async callable(on: bool) — applies HA's soft mute switch
+    set_wake_word: async callable(on: bool) — applies HA's wake word switch
     (#286): the wake gate and the mic stream are Device state, so the
     decision is made in em_controller and the resulting state pushed back
-    with update_soft_mute().
+    with update_wake_word().
     """
     server = _servers.get(device_id)
     if server is None:
@@ -3311,7 +3345,7 @@ async def device_connected(
     server._ring_alarm = ring_alarm
     server._stop_alarm = stop_alarm
     server._start_conversation = start_conversation
-    server._set_soft_mute = set_soft_mute
+    server._set_wake_word = set_wake_word
     if server._server is not None:
         log.debug(f"[esphome.{device_id[-8:]}] device_connected: port {server.port} already listening")
         return
@@ -3341,7 +3375,7 @@ async def device_disconnected(device_id: str) -> None:
     server._ring_alarm = None
     server._stop_alarm = None
     server._start_conversation = None
-    server._set_soft_mute = None
+    server._set_wake_word = None
     await server.stop()
     log.info(f"[esphome.{device_id[-8:]}] ESPHome port {server.port} down (device disconnected)")
 
@@ -3471,13 +3505,16 @@ def update_ambient_lux(device_id: str, lux) -> None:
     ))
 
 
-def get_mute_state(device_id: str) -> tuple[bool, bool]:
-    """(hard, soft) as the server remembers them — False, False for a device
-    with no server, which is also the right answer for one HA never saw."""
+def get_mute_and_wake(device_id: str) -> tuple[bool, bool]:
+    """
+    (button mute, wake word on) as the server remembers them. A device with
+    no server reads (False, True) — not muted, and listening, which is what
+    a device HA has never touched does.
+    """
     server = _servers.get(device_id)
     if server is None:
-        return False, False
-    return server.muted, server.soft_muted
+        return False, True
+    return server.muted, server.wake_word_enabled
 
 
 def update_mute_state(device_id: str, muted: bool) -> None:
@@ -3496,20 +3533,44 @@ def update_mute_state(device_id: str, muted: bool) -> None:
     satellite._send_one(satellite._mute_state_msg())
 
 
-def update_soft_mute(device_id: str, soft: bool) -> None:
+def get_wake_word(device_id: str) -> Optional[bool]:
     """
-    Record the soft mute and push it to HA as the switch state (#286). This
-    is the only path that reports the switch — the command handler does not
-    answer optimistically, so HA sees what the controller actually applied.
+    The wake word switch for a READOUT — None when there is no server to ask,
+    rather than a default.
+
+    Deliberately not `get_mute_and_wake`, which answers the same field for the
+    control path and resolves absence to the class default (listening). Two
+    different questions, and they take opposite answers: a gate that cannot
+    reach the state must fall back to "listening", because that is the
+    behaviour of a device nobody has configured; a panel that cannot reach it
+    must say so, because reporting "on" for a device HA switched off is a
+    readout that disagrees with the decision it describes. Same split as
+    `base_os` live-vs-stored in CLAUDE.md.
+
+    Note this answers for an OFFLINE device too, which is the point: the
+    switch lives on the server, and the server outlives the connection.
+    """
+    server = _servers.get(device_id)
+    if server is None:
+        return None
+    return server.wake_word_enabled
+
+
+def update_wake_word(device_id: str, enabled: bool) -> None:
+    """
+    Record the wake word switch and push it to HA (#286). This is the only
+    path that reports the switch — neither the switch command nor the
+    wake-word picker answers optimistically, so HA sees what the controller
+    actually applied.
     """
     server = _servers.get(device_id)
     if server is None:
         return
-    server.soft_muted = bool(soft)
+    server.wake_word_enabled = bool(enabled)
     satellite = server.get_satellite()
     if satellite is None:
         return
-    satellite._send_one(satellite._soft_mute_msg())
+    satellite._send_one(satellite._wake_word_msg())
 
 
 def update_device_volume(device_id: str, volume: float) -> None:
