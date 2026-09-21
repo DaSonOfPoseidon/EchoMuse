@@ -4913,6 +4913,17 @@ EMOS_INIT_ASSETS = {
 # then the controller.
 EMOS_SBIN_ASSETS = ("wpa_supplicant", "wpa_cli", "em-wifi", "busybox")
 
+# The one member that rides in BOTH images. em-wifi is a shell script init
+# never execs, and it resolves wpa_cli and wpa_supplicant the same
+# /sbin-then-/system/bin way init does — so adding it to a FireOS 5 image
+# changes nothing about which supplicant runs, which is the constraint the
+# rest of this payload is held to.
+#
+# Without it a FireOS 5 device has no console way to set WiFi at all, and that
+# is most of the fleet. Found on Office, 2026-09-21: emos-v0.8, /sbin/em-wifi
+# absent, and correctly so under the old rule.
+EMOS_SBIN_BOTH_ARCHES = ("em-wifi",)
+
 # One archive with a manifest of sha256s — see build_payload_bundle.
 EMOS_PAYLOAD_ASSET = "emos-payload.zip"
 
@@ -4993,11 +5004,16 @@ async def _fetch_emos_payload(arch: str) -> tuple:
             f"The {init_name} in emOS release {version} is not usable: "
             f"{'; '.join(problems)}", 502)
 
-    # 32-bit kernel only, i.e. FireOS 6. init prefers /sbin/wpa_supplicant the
-    # moment one exists, so including these in a FireOS 5 image would move the
-    # whole fleet off Amazon's working supplicant as a side effect. Same for
-    # wpa_cli, which init's reassociate nudge now prefers.
-    sbin = {}
+    # The BINARIES are 32-bit kernel only, i.e. FireOS 6. init prefers
+    # /sbin/wpa_supplicant the moment one exists, so including those in a
+    # FireOS 5 image would move the whole fleet off Amazon's working
+    # supplicant as a side effect. Same for wpa_cli, which init's reassociate
+    # nudge now prefers.
+    #
+    # em-wifi is exempt and rides in both: it is a script nothing execs, so it
+    # cannot change which supplicant init starts. Not fatal when missing — a
+    # release predating it still builds a FireOS 5 image, exactly as before.
+    sbin = {n: files[n] for n in EMOS_SBIN_BOTH_ARCHES if n in files}
     if arch == em_emos_build.ARCH_ARM:
         missing = [n for n in EMOS_SBIN_ASSETS if n not in files]
         if missing:
@@ -5010,7 +5026,7 @@ async def _fetch_emos_payload(arch: str) -> tuple:
                 f"supplicant cannot run under emOS and its /system has no "
                 f"busybox — so there is nothing to build a working image "
                 f"from. Cut a newer emos-v* tag.", 404)
-        sbin = {n: files[n] for n in EMOS_SBIN_ASSETS}
+        sbin.update({n: files[n] for n in EMOS_SBIN_ASSETS})
 
     return init, sbin, version, None
 
