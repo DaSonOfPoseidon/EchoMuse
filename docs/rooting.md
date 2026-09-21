@@ -244,10 +244,12 @@ ten seconds to put the old boot image back.
 **Reaching TWRP on a device that will not boot:**
 
 1. Unplug the power.
-2. Hold the **mute** button down, and keep holding it.
+2. Hold **mute** or **+** (volume up) down, and keep holding it. Which button
+   depends on which amonet version unlocked the device; [R0rt1z2's
+   thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-2nd-gen-2016-biscuit.4761416/) has it.
 3. Apply power with the button still held.
-4. Wait for the ring to show an **alternating cyan pattern** — that is the
-   confirmation you are in recovery, and you can let go once you see it.
+4. Wait for the ring to change — that is the confirmation you are in recovery,
+   and you can let go once you see it.
 
 `adb reboot recovery` is the easy route and it needs a device that is already
 up, which is exactly what you do not have here.

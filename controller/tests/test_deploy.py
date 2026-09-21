@@ -1024,29 +1024,6 @@ def test_a_failed_transfer_says_which_stage_it_failed_at():
     )
 
 
-def test_tested_firmware_build_matches_the_docs():
-    """
-    The wizard warns when a device is on a FireOS build other than the one
-    EchoMuse is developed against, and docs/rooting.md tells people which to
-    flash. Those two have to name the same build: a warning pointing at a
-    version the docs do not mention is worse than no warning, because the
-    person reading it has nowhere to go.
-
-    Verified against the fleet 2026-08-07 — all three connected devices report
-    ro.build.version.incremental = 272.6.8.0_user_680767620.
-    """
-    jsx = (CONTROLLER / "static" / "dashboard.jsx").read_text()
-    m = re.search(r"_TESTED_FIREOS_BUILD\s*=\s*'([^']+)'", jsx)
-    assert m, "dashboard.jsx no longer declares _TESTED_FIREOS_BUILD"
-    build = m.group(1)
-
-    rooting = (CONTROLLER.parent / "docs" / "rooting.md").read_text()
-    assert build in rooting, (
-        f"the wizard warns against build {build} but docs/rooting.md never "
-        f"names it — a reader has nowhere to go"
-    )
-
-
 def test_push_log_event_callers_do_not_also_persist():
     """
     `_push_log_event` persists AND pushes. A caller that also calls

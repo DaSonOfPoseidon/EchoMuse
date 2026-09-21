@@ -31,8 +31,8 @@ Three things changed since 0.1 that are worth knowing before you try it:
 - **emOS is no longer a one-way door.** `/init recovery` reboots the device
   into TWRP from its own console, and the wizard's first step already accepts
   a device that is in TWRP — so emOS → recovery → re-provision is a path that
-  works, without powering the device off and holding the mute button in the
-  dark. New in 0.4, confirmed on hardware 2026-09-10.
+  works, without powering the device off and holding a button in the dark.
+  New in 0.4, confirmed on hardware 2026-09-10.
 
 `emos-v0.4` is tagged and published so the wizard can fetch the init, which is
 the only part of an image that can be distributed. **A tag is not a claim that
@@ -913,8 +913,9 @@ is not proof it rebooted — compare uptime or a build fingerprint.
   The other three paths remain, and none of them is in the wizard either:
 
   - **Return to stock, by hand.** Boot into TWRP — unplug the power, hold
-    **mute** down, and apply power with it still held, until the ring shows an
-    alternating cyan pattern — then wipe
+    **mute** or **+** (volume up) down, and apply power with it still held,
+    until the ring changes (which button depends on the amonet version) —
+    then wipe
     cache, wipe data, sideload the FireOS 5 image, **and then flash
     `f1r30s.zip`**. That last step is not optional: a stock flash restores
     dm-verity against a partition table the unlock modified, so **the OS will

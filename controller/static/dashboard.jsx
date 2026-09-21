@@ -2937,18 +2937,6 @@ service echomuse /data/local/bin/start_server.sh
 // against the uploaded file's SHA-256 before flashing — catches wrong-
 // version uploads (e.g. a newer Magisk that doesn't support Android 5.1's
 // non-namespaced su, or a corrupted download) before they hit TWRP.
-// The one FireOS 5 build EchoMuse is developed and tested against. R0rt1z2's
-// thread lists five older ones that also boot on an unlocked Dot, and nothing
-// stops someone flashing those — but only this one has ever been through the
-// wizard here, and firmware defaults differ between builds. A device on a
-// different build is the first thing worth knowing when it behaves oddly, and
-// until now the wizard never even looked (see #79).
-//
-// A warning, not a refusal: an older build may well provision fine, we just
-// have no evidence either way, and blocking someone whose device works would
-// be the worse error. Mirrored in docs/rooting.md, pinned by test.
-const _TESTED_FIREOS_BUILD = '272.6.8.0_user_680767620';
-const _TESTED_FIREOS_NAME  = 'Fire OS 5.5.5.4';
 
 // Was this Echo unlocked with amonet-biscuit v2.0.0 or later? v2.0.0
 // (R0rt1z2, 10 Sep 2026) writes a newer preloader, LK and TrustZone, and
@@ -3298,9 +3286,9 @@ function _wizardLogClass(msg, type) {
 // wpa_supplicant — the real radio, so a network this hardware cannot join is
 // refused at pick time rather than after a flash.
 const _EMOS_STEPS = [
-  { id: 'connect_android', label: 'Connect Device',    desc: 'Connect the Echo Dot via USB. Device should be on and booted into Android. Appears as "AEOBC" in the USB picker.' },
-  { id: 'connect_twrp',    label: 'Connect to TWRP',   desc: 'Wait for TWRP recovery to appear, then reconnect. Appears as "Echo" in the USB picker. Everything after this happens here.' },
-  { id: 'escrow_boot',     label: 'Escrow Boot Image', desc: 'Read the stock boot partition off the device and keep a copy. This one file is both the build input and the ten-second undo.' },
+  { id: 'connect_android', label: 'Connect Device',    desc: 'Connect the Echo Dot via USB. It can be booted into Android or already in TWRP. Appears as "AEOBC" (Android) or "Echo" (TWRP) in the USB picker.' },
+  { id: 'connect_twrp',    label: 'Connect to TWRP',   desc: 'Wait for the device to reach TWRP, then reconnect — it appears as "Echo" in the USB picker. Everything after this happens there.' },
+  { id: 'escrow_boot',     label: 'Escrow Boot Image', desc: 'Read the stock boot partition off the device and keep a copy. This one file is both the build input and your backup if we need to roll back.' },
   { id: 'install_em',      label: 'Install EchoMuse',  desc: 'Push the server binary, startup script and TLS credentials to /data, which survives the boot-partition write.' },
   { id: 'install_oww',     label: 'Wake Word Assets',  desc: 'Push the ONNX runtime and wake models (~15MB) used for on-device wake word detection.' },
   { id: 'build_emos',      label: 'Build emOS',        desc: 'The controller repacks your own escrowed image with the emOS init, reusing your kernel and device trees.' },
@@ -3315,10 +3303,16 @@ const _EMOS_STEPS = [
 // FireOS flow, the serial console in the emOS one. Only its truthiness is
 // used, to disable the buttons when there is nothing to talk to.
 //
-// onSkip and onAbort are optional. Neither means anything in the emOS flow:
-// there is no "already connected" to skip to, because registering over this
-// network IS the step, and by then the boot partition is already written so
-// there is no provisioning left to abort.
+// onSkip and onAbort are optional. onAbort means nothing in the emOS flow —
+// by this point the boot partition is written, so there is no provisioning
+// left to abort.
+//
+// onSkip DOES apply to both, which this said it did not. /data survives the
+// boot-partition write, so a device re-provisioned, or moved across from
+// FireOS, arrives with a working wpa_supplicant.conf and associates during the
+// previous step — the ring runs its closing sweep while this panel is still
+// asking for a network. Skipping runs the registration wait alone; it is
+// registration, not the join, that is the step's success condition.
 function WifiPanel({ ready, wifiSsid, setWifiSsid, wifiPsk, setWifiPsk, onScan, networks, onConnect, onSkip, onAbort }) {
   const [scanning, setScanning] = useState(false);
   const [showPsk, setShowPsk]   = useState(false);
@@ -3650,8 +3644,31 @@ class _EmosConsole {
         + '/data/local/etc/echomuse/console.pw from TWRP. It is re-applied '
         + 'from the controller config when the device next connects.');
     }
+    // A bare timeout is where operators get stuck: three different faults
+    // produce it and the message points at none of them. Report what the port
+    // sent — that is the diagnostic — then the causes in the order they are
+    // worth checking.
+    //
+    // It deliberately does NOT offer the escrow restore. This step has already
+    // rebooted the device out of TWRP, so there is no ADB and the Restore
+    // control is disabled; naming a recovery the operator cannot reach is the
+    // same dead end as naming none.
     throw new Error(`The console did not answer "${cmd}" within `
-                  + `${Math.round(timeoutMs / 1000)}s.`);
+      + `${Math.round(timeoutMs / 1000)}s`
+      + (this.buf.trim()
+          ? `. Last output from the port: "${this.buf.trim().slice(-200)}"`
+          : ', and the port sent nothing at all.')
+      + '\n\nMost likely, in order:\n'
+      + '  1. The wrong serial port was picked — click Connect Console again '
+      + 'and choose a different one.\n'
+      + '  2. The device is still booting — wait for the ring to settle, then '
+      + 'retry.\n'
+      + '  3. emOS never started — a single segment orbiting a full blue ring '
+      + 'for more than a minute.\n\n'
+      + 'For 3, get the device into TWRP: unplug, hold mute or + (volume up), '
+      + 'and plug back in with it held until the ring changes. From there, run '
+      + 'this wizard again, or restore stock FireOS following R0rt1z2\'s XDA '
+      + 'thread.');
   }
 
   async close() {
@@ -4161,15 +4178,16 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
         + 'how an Echo gets hard-bricked. See the warning at the top of docs/rooting.md.');
     }
     if (unlock.v2) {
-      // Said loudly, and not as a refusal. The operator is about to have their
-      // boot partition rewritten on a device class that has not been through
-      // this wizard before, and the thing that makes that recoverable is the
-      // escrow two steps away — so it is named here, while they can still stop.
-      addLog(`This Echo was unlocked with amonet-biscuit v2.0.0 or later `
-           + `(${unlock.evidence.join('; ')}), so it runs FireOS 6. emOS supports that `
-           + `kernel, and the wizard will build a 32-bit image to match it.`, 'warn');
-      addLog('No Echo unlocked with v2 has been through this wizard before. The '
-           + 'Escrow Boot Image step is the way back — keep that file.', 'warn');
+      // The boot partition is about to be rewritten, and the escrow two steps
+      // away is what makes that reversible — so it is named here, while the
+      // operator can still stop. That is a recovery instruction and stays.
+      // What was removed was the sentence after it claiming no v2 device had
+      // ever run this wizard, which was written when that was true and kept
+      // asserting it to every operator afterwards.
+      addLog(`Unlocked with amonet-biscuit v2.0.0 or later `
+           + `(${unlock.evidence.join('; ')}) — FireOS 6. Building a 32-bit `
+           + `image to match its kernel.`, 'warn');
+      addLog('The Escrow Boot Image step is the way back — keep that file.', 'warn');
     }
     // Which releases each flow can work with. FireOS 6 is Android 7.1, and there
     // is no FireOS on this board reporting 6.x, so the emOS flow accepts 5 and 7
@@ -4182,11 +4200,6 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
       throw new Error(
         `Expected ${isEmos ? 'FireOS 5 or 6 (Android 5.x or 7.x)' : 'FireOS 5 (Android 5.x)'}`
         + `, got Android ${effRelease}. Wrong device?`);
-    }
-    if (fwBuild && fwBuild !== _TESTED_FIREOS_BUILD) {
-      addLog(`Untested firmware — EchoMuse is developed against ${_TESTED_FIREOS_NAME} `
-           + `(${_TESTED_FIREOS_BUILD}). Other builds may behave differently, `
-           + `particularly around USB and ADB.`, 'warn');
     }
     // The emOS flow REFUSES a board it does not recognise, where the FireOS
     // flow warns. The difference is what each one goes on to do: the FireOS
@@ -4272,12 +4285,16 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
            + 'connection.', 'ok');
       return c;
     }
-    addLog('FireOS 5 confirmed. Rebooting to TWRP recovery…');
+    // Was hardcoded "FireOS 5 confirmed", which the emOS flow prints at a
+    // FireOS 6 device it has just identified as FireOS 6 two lines above.
+    addLog(`Android ${effRelease || '?'} confirmed. Rebooting to TWRP recovery…`);
     expectDisconnect.current = true;
     try { await c.shell('reboot recovery'); } catch {}
     await c.close();
     setAdb(null);
-    addLog('Device is rebooting. Wait for the TWRP menu to appear, then click "Connect to TWRP".', 'warn');
+    addLog('Device is rebooting into TWRP. The Dot has no screen — wait about 15 '
+         + 'seconds for it to come back as "Echo" in the USB picker, then click '
+         + '"Connect to TWRP".', 'warn');
     return null;
   }
 
@@ -4308,7 +4325,10 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     // The banner is already logged by requestDevice; check it directly.
     const banner = c.banner ?? '';
     if (!banner.toLowerCase().includes('omni') && !banner.toLowerCase().includes('twrp') && !banner.toLowerCase().includes('recovery')) {
-      throw new Error(`Device banner is "${banner}" — expected TWRP (omni_biscuit). Is TWRP showing on screen?`);
+      throw new Error(`Device banner is "${banner}" — expected TWRP (omni_biscuit). `
+      + 'The device is not in recovery. Give it a few more seconds and click '
+      + 'Retry; the Dot has no screen, so the USB picker naming it "Echo" is '
+      + 'the only sign it has got there.');
     }
     addLog('TWRP confirmed.', 'ok');
     return c;
@@ -4991,8 +5011,9 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
              + `(banner "${c.banner}").`, 'error');
         addLog('Pulling the cable powers the Dot off, and a cold boot comes up in Android.', 'warn');
         if (want === 'twrp') {
-          addLog('To reach TWRP: unplug, plug back in, and hold the mute button for about '
-               + '5 seconds as soon as the blue LED appears.', 'warn');
+          addLog('To reach TWRP: unplug, hold mute or + (volume up), and plug back '
+               + 'in with it held until the ring changes. Which button depends on '
+               + 'your amonet version — R0rt1z2\'s XDA thread has it.', 'warn');
         }
       }
     } catch (e) {
@@ -5093,7 +5114,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
         }
         if (!announced) {
           announced = true;
-          addLog('Waiting for Android to finish booting — safe to have clicked Reconnect early, this waits as long as it takes…');
+          addLog('Waiting for Android to finish booting…');
         }
         // Heartbeat every 15s so a multi-minute wait reads as progress rather
         // than as a hang (lesson 3 above).
@@ -5107,9 +5128,8 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
       }
       throw new Error(
         `Android has not finished booting after 10 minutes, so ${what} cannot run. `
-        + `Every pm command would fail and the step would silently do nothing. `
-        + `This is long past a slow boot — suspect a bootloop rather than patience: `
-        + `check the device's light ring, and click Retry once it settles.`);
+        + `That is long past a slow boot — check the device's light ring for a `
+        + `bootloop, and click Retry once it settles.`);
     } finally {
       setWaiting(false);
     }
@@ -5155,7 +5175,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     // needs a transaction number that differs per Android release, and
     // `settings put system volume_music` is not read live by AudioService.
     // This is what pressing the button does, and it works on any release.
-    addLog('Muting the speaker — Amazon\'s setup assistant starts talking here, and cannot be stopped until root lands…');
+    addLog('Muting the speaker — the Amazon setup assistant talks during this step…');
     try {
       await c.shell('i=0; while [ $i -lt 15 ]; do input keyevent 25; i=$((i+1)); done');
       // Measured on hardware 2026-08-08: the setup assistant talks anyway. It
@@ -5168,7 +5188,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
       addLog(`  → could not mute (${e.message}) — the setup prompt may talk over the wizard.`, 'warn');
     }
 
-    addLog('Testing su -c id… (magiskd can take a while to attach after boot — retrying if needed)');
+    addLog('Testing su -c id… (retries until magiskd attaches)');
     let out = '';
     let rooted = false;
     const attemptStart = Date.now();
@@ -5182,7 +5202,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
         // silent wizard, which is indistinguishable from a hang. Tick while the
         // call is still in flight, so the wait is visibly a wait.
         const ticker = setInterval(
-          () => addLog(`    still waiting on su (${Math.round((Date.now() - callStart) / 1000)}s) — magiskd has not answered yet`),
+          () => addLog(`    still waiting on su (${Math.round((Date.now() - callStart) / 1000)}s)`),
           15000);
         try {
           out = await c.shell('su -c id 2>&1');
@@ -5737,9 +5757,8 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
       // Nothing to disable, and pm said so cleanly for every one. Continuing
       // is correct, but say plainly what was concluded rather than ticking
       // the step green in silence — this is an image nobody here has seen.
-      addLog(`None of the ${_ALEXA_PKGS.length} Alexa packages are installed on this build, `
-           + `so there was nothing to disable. If the device is silent and its ring is off, `
-           + `that is the expected state and provisioning can continue.`, 'warn');
+      addLog(`None of the ${_ALEXA_PKGS.length} Alexa packages are installed on this `
+           + `build — nothing to disable.`, 'warn');
     } else {
       addLog(`${disabled} disabled, ${absent} not installed on this build.`,
              disabled ? 'ok' : 'warn');
@@ -6126,7 +6145,9 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     // silently never fired and the wizard just sat on it. The finishing reboot
     // belongs to whichever step is genuinely last; it now lives in
     // runInstallOwwAssets. Anything added after that must move it again.
-    addLog('Staying connected — the wake word assets install next, then the device reboots.');
+    addLog(isEmos
+      ? 'Staying in recovery — the wake word assets install next, then emOS is built and flashed.'
+      : 'Staying connected — the wake word assets install next, then the device reboots.');
   }
 
   // ── emOS flow ─────────────────────────────────────────────────────────────
@@ -6142,11 +6163,48 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     // /data holds everything we are about to install AND survives the boot
     // partition write, which is the whole reason the install happens before
     // the flash. TWRP does not always mount it on its own.
-    await c.shell('mount /data 2>/dev/null');
-    const dataOk = (await c.shell('mount | grep " /data " || true')).trim();
+    //
+    // Four ways, because one `mount /data` covers only the TWRP builds whose
+    // fstab already names it. `twrp mount data` drives TWRP's own mounting
+    // (which knows about decryption); the by-name attempts cover a build
+    // whose fstab entry is missing or names the wrong filesystem, and both
+    // directory spellings exist in the field. Each is a no-op once /data is
+    // up, so this costs one round trip on a device where the first worked.
+    const mounted = async () =>
+      !!(await c.shell('grep " /data " /proc/mounts || true')).trim();
+    if (!await mounted()) {
+      await c.shell('mount /data 2>&1; twrp mount data 2>&1');
+    }
+    if (!await mounted()) {
+      await c.shell(
+        'for d in /dev/block/by-name/userdata /dev/block/bootdevice/by-name/userdata; do '
+        + '[ -e "$d" ] || continue; '
+        + 'for t in ext4 f2fs; do mount -t $t "$d" /data 2>/dev/null && break 2; done; '
+        + 'done');
+    }
+    // Mounted is not the same as usable — a read-only mount passes the check
+    // above and fails every push afterwards. Everything here writes to /data.
+    const dataOk = await mounted()
+      && (await c.shell('touch /data/.em_write_test 2>&1 && rm -f /data/.em_write_test '
+                        + '&& echo _WRITEOK')).includes('_WRITEOK');
     if (!dataOk) {
-      throw new Error('/data is not mounted in TWRP, so there is nowhere to '
-        + 'install EchoMuse. Mount it from TWRP\'s Mount menu and retry.');
+      // Say what was found. The old message named TWRP's Mount menu as the
+      // fix, which does not help when the partition will not mount there
+      // either — reported in #598 on a FireOS 6 device where /data was
+      // missing from `df` under Android too.
+      const ev = await c.shell(
+        'echo "BYNAME=$(ls /dev/block/by-name/ 2>/dev/null | grep -i -e user -e data | tr \'\\n\' \' \')"; '
+        + 'echo "FSTAB=$(grep -i /data /etc/recovery.fstab 2>/dev/null | tr \'\\n\' \'|\')"; '
+        + 'echo "BLKID=$(blkid 2>/dev/null | grep -i -e userdata -e /data | tr \'\\n\' \'|\')"');
+      ev.split('\n').map(l => l.trim()).filter(Boolean)
+        .forEach(l => addLog(`  ${l}`, 'warn'));
+      throw new Error('/data could not be mounted in TWRP, so there is nowhere '
+        + 'to install EchoMuse — tried the fstab entry, TWRP\'s own mount, and '
+        + 'the userdata partition directly as ext4 and f2fs. Nothing has been '
+        + 'written and the device is still in TWRP.\n\n'
+        + 'A userdata partition that mounts nowhere usually needs reformatting: '
+        + 'TWRP\'s Wipe → Format Data, which ERASES everything on /data. If you '
+        + 'would rather not, attach the three lines above to a GitHub issue.');
     }
     addLog(`  /data mounted`);
 
@@ -6386,10 +6444,9 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
       addLog(`  amonet v2 layout, booted slot `
            + `${boot.slot.slice(1).toUpperCase()}`, 'ok');
     } else if (!amonet) {
-      addLog('No amonet partitions in the by-name map. This device may not be '
-           + 'unlocked, or may be unlocked by some other means. You are in TWRP, '
-           + 'which normally means it IS unlocked — but if the flash does not '
-           + 'boot, that is where to look first.', 'warn');
+      addLog('No amonet partitions in the by-name map — this device may be '
+           + 'unlocked by some other means. If the flash does not boot, start '
+           + 'there.', 'warn');
     } else {
       addLog('  amonet unlock confirmed in the partition map', 'ok');
     }
@@ -6734,9 +6791,8 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     const mbps = (bytes.length / 1024 / 1024) / Math.max(secs, 0.001);
     addLog(`  ${mbps.toFixed(1)} MB/s over ${secs.toFixed(1)}s`);
     if (mbps > 60) {
-      addLog('That throughput is not achievable on this eMMC, so the write '
-           + 'probably went to cache. The read-back below is the check that '
-           + 'matters.', 'warn');
+      addLog('Faster than this eMMC can write, so that went to cache — the '
+           + 'read-back below is the real check.', 'warn');
     }
     // dd ALWAYS prints its record counts to stderr, which is captured above.
     // Their absence means it never copied anything — it rejected its own
@@ -6811,8 +6867,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     // from a read that is unstable or still cached — same answer twice is the
     // partition, a different answer twice is not, and they are not the same
     // problem. Cheap, and it runs once, on a path that has already failed.
-    addLog('  read-back does not match — reading a second time to tell a bad '
-         + 'write from an unstable read…', 'warn');
+    addLog('  read-back does not match — reading again…', 'warn');
     const again = await readBack();
     const detail = again === back
       ? `the partition consistently reads ${back || 'nothing'}, expected ${want}`
@@ -6880,8 +6935,8 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     if (err) {
       throw new Error(
         `${err}\n\nDO NOT REBOOT — the device is still in TWRP and recoverable from `
-        + 'here. Use "Restore escrowed boot image" below to put it back '
-        + 'back; it takes about ten seconds and leaves /data untouched.');
+        + 'here. Use "Restore escrowed boot image" below to put it back; '
+        + 'it takes about ten seconds and leaves /data untouched.');
     }
     // Writing a slot does not select it. Amazon's bootloader picks from the
     // BCB in `misc`, so a verified write can still boot the other slot — which
@@ -6987,8 +7042,12 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
       try { await c.close(); } catch {}
       setAdb(null);
     }
-    addLog('The ring fills as the boot progresses. Pick the device\'s serial '
-         + 'port when the browser asks — it appears a few seconds in.', 'warn');
+    // Anchored to the ring rather than to a number of seconds: the port does
+    // not exist until emOS itself starts, so "wait N seconds" sends people to
+    // an empty picker and makes it read as a fault.
+    addLog('The browser will ask for a serial port. It appears as "emOS", and only '
+         + 'once the emOS boot starts — that is the ring beginning to fill. An empty '
+         + 'picker means the device has not got there yet.', 'warn');
 
     let port;
     try {
@@ -6996,9 +7055,9 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     } catch (e) {
       // Cancelled, or the picker timed out before emOS's port appeared.
       if (e?.name === 'NotFoundError') {
-        throw new Error('No serial port was chosen. The device is still booting '
-          + 'emOS — click Connect Console once its port shows in the picker '
-          + '(about 30 seconds after the reboot).');
+        throw new Error('No serial port was chosen. The port appears as "emOS" '
+          + 'and only once the emOS boot starts, which is the ring beginning to '
+          + 'fill — click Connect Console again once it is there.');
       }
       throw e;
     }
@@ -7040,12 +7099,15 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     // be produced by the file.
     if (!/^ID=emos\s*$/m.test(osrel)) {
       throw new Error('The console answered but this does not look like emOS '
-        + `(/etc/os-release says "${osrel.trim() || 'nothing'}"). `
-        + 'Restore the escrowed boot image before going further.');
+        + `(/etc/os-release says "${osrel.trim() || 'nothing'}"), so the flash `
+        + 'did not produce the image it should have. Do not configure WiFi on '
+        + 'it.\n\nGet the device into TWRP — unplug, hold mute or + (volume '
+        + 'up), and plug back in with it held until the ring changes — then '
+        + 'either restore your escrowed boot image from there, or run this '
+        + 'wizard again.');
     }
     addLog(osrel.trim(), 'ok');
-    addLog('emOS is running. Reaching this point with no network is expected — '
-         + 'WiFi is configured next.', 'ok');
+    addLog('emOS is running. WiFi is configured next.', 'ok');
   }
 
   // Scan from the DEVICE'S OWN RADIO, over the console.
@@ -7090,9 +7152,34 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     return nets;
   }
 
-  async function runEmosWifi() {
+  // `skipJoin` runs the registration wait alone, for a device that is already
+  // on a network — one provisioned before, or moved across from FireOS, whose
+  // wpa_supplicant.conf survived on /data. Such a device associates during the
+  // previous step and goes straight to the closing sweep, so the operator is
+  // watching a finished boot while this step waits for WiFi it already has.
+  async function runEmosWifi(skipJoin) {
     const con = emosConsole;
     if (!con) throw new Error('No serial console — re-run the Reboot and Watch step.');
+    if (skipJoin) {
+      const st = await con.run(
+        'wpa_cli -p /data/misc/wifi/sockets -i wlan0 status');
+      if (!/wpa_state=COMPLETED/.test(st)) {
+        throw new Error('Not skipping: the device reports '
+          + `${(st.match(/wpa_state=\S+/) || ['nothing readable'])[0]}, so it is `
+          + 'not on a network. Pick one above and join it.');
+      }
+      // Associated is not reachable. Without an address nothing gets to the
+      // controller, and the registration wait below would simply time out.
+      const ip = (await con.run(
+        'ip addr show wlan0 | grep "inet " | while read a b c; do echo ${b%/*}; done')).trim();
+      if (!/\d+\.\d+\.\d+\.\d+/.test(ip)) {
+        throw new Error('Not skipping: the device is associated but has no IP '
+          + 'address, so nothing can reach the controller. Join a network above.');
+      }
+      const ssidRaw = (st.match(/^ssid=(.+)$/m) || [])[1];
+      addLog(`Already on "${ssidRaw ? ssidRaw.replace(/\r$/, '') : '?'}" (${ip}) `
+           + '— skipping WiFi setup.', 'ok');
+    } else {
     const ssidB = ssidBytesFor(wifiSsid || '');
     const bad = _ssidProblem(ssidB) || _pskProblem(wifiPsk);
     if (bad) throw new Error(bad);
@@ -7154,14 +7241,45 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     // console, which is the thing this step exists to avoid needing. And
     // retrying the step calls add_network again, so each attempt stacked
     // another entry.
+    // COMPLETED is not enough on its own, because add_network ADDS: a device
+    // that already had a saved network — one provisioned before, or carried
+    // across from FireOS on /data — now has two enabled entries, and
+    // wpa_supplicant picks. So the operator retypes their network, the device
+    // associates to the OLD one, wpa_state reads COMPLETED, and the step goes
+    // green having changed nothing they asked for.
+    //
+    // Matched on the ssid wpa_cli reports against the ssid asked for, hex
+    // against hex: `status` prints the SSID with non-printables escaped and
+    // the panel accepts arbitrary bytes, so comparing display text would
+    // disagree with itself on exactly the names #586 was about.
     addLog('Waiting for the network to come up…');
     let joined = false;
+    let onSsid = null;
     for (let i = 0; i < 12 && !joined; i++) {
       await new Promise(r => setTimeout(r, 2500));
       const st = await con.run(
-        'wpa_cli -p /data/misc/wifi/sockets -i wlan0 status | grep wpa_state');
-      addLog(`  ${st.trim() || 'no answer'}`);
-      joined = /wpa_state=COMPLETED/.test(st);
+        'wpa_cli -p /data/misc/wifi/sockets -i wlan0 status');
+      const state = (st.match(/wpa_state=(\S+)/) || [])[1];
+      const raw   = (st.match(/^ssid=(.+)$/m) || [])[1];
+      onSsid = raw ? _bytesHex(_wpaUnescape(raw.replace(/\r$/, ''))) : null;
+      addLog(`  wpa_state=${state || '?'}`
+           + (onSsid ? ` ssid=${_ssidText(_hexBytes(onSsid))}` : ''));
+      joined = state === 'COMPLETED' && onSsid === ssidHex;
+    }
+    // Associated, but to something else. Removing OUR entry is right: the
+    // other network is the one that works, and it was here first.
+    if (!joined && onSsid && onSsid !== ssidHex) {
+      await con.run(`wpa_cli -p /data/misc/wifi/sockets -i wlan0 remove_network ${id}`);
+      await con.run('wpa_cli -p /data/misc/wifi/sockets -i wlan0 save_config');
+      await con.run('sync');
+      throw new Error(
+        `The device associated to "${_ssidText(_hexBytes(onSsid))}" rather than `
+        + `"${wifiSsid}" — it already had that network saved and preferred it. `
+        + `"${wifiSsid}" has been removed again, so nothing has changed.\n\n`
+        + 'If the network it is on is the one you want, click '
+        + '"Skip (already connected)". To force the new one, remove the old '
+        + 'entry over the console first: wpa_cli -p /data/misc/wifi/sockets '
+        + '-i wlan0 list_networks, then remove_network <id> and save_config.');
     }
     if (!joined) {
       addLog('Not associating — removing the network so the device is not left '
@@ -7174,6 +7292,8 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
         + 'been removed again. Check the name and password. Note this radio '
         + 'cannot join WPA3 — it reports no SAE — so a WPA3-only network will '
         + 'never associate however correct the password is.');
+    }
+
     }
 
     addLog('Waiting for the device to register with the controller…');
@@ -7228,20 +7348,22 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     }
     if (!seen) {
       throw new Error('The device did not register within two minutes. It may be '
-        + 'on the network without EchoMuse running — check the console, and '
-        + 'restore the escrowed boot image if you want to start over.');
+        + 'on the network without EchoMuse running. Check the console for what '
+        + 'the device is doing. To start over, get it into TWRP — unplug, hold '
+        + 'mute or + (volume up), and plug back in with it held until the ring '
+        + 'changes — and run this wizard again.');
     }
     addLog(`Registered as ${seen.label || seen.device_id}`
          + `${seen.firmware_ver ? ` running ${seen.firmware_ver}` : ''}.`, 'ok');
     addLog('── PROVISIONING COMPLETE ──', 'head');
-    if (seen.approved) {
-      addLog('This Echo is running emOS, on your network, and approved. '
-           + 'Nothing further to do — say the wake word.', 'ok');
-    } else {
-      addLog('This Echo is running emOS and has reached the controller. '
-           + 'ONE THING LEFT: approve it on the Devices page, and it will '
-           + 'connect within a few seconds.', 'ok');
+    addLog('This Echo is running emOS and has reached the controller.', 'ok');
+    if (!seen.approved) {
+      addLog('NEXT: approve it on the Devices page — it connects within a few '
+           + 'seconds of being approved.', 'warn');
     }
+    addLog('THEN: add it in Home Assistant. It is offered as an ESPHome device '
+         + 'under Settings → Devices & services, and until that is done the '
+         + 'wake word fires with nothing behind it to answer.', 'warn');
   }
 
   // ── Step executor ──
@@ -7370,8 +7492,9 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
           `This step runs in ${_MODE_NAME[wantMode]}, but the device is in `
           + `${_MODE_NAME[gotMode]} (banner "${c.banner}"). Nothing has been run. `
           + (wantMode === 'twrp'
-              ? 'Unplug, plug back in, and hold the mute button for about 5 seconds '
-                + 'as soon as the blue LED appears, then Reconnect.'
+              ? 'Unplug, hold mute or + (volume up), and plug back in with it held '
+                + 'until the ring changes, then Reconnect. Which button depends on '
+                + 'your amonet version — R0rt1z2\'s XDA thread has it.'
               : 'Reboot the device to Android and Reconnect.'));
       }
       if (isEmos) switch (stepIdx) {
@@ -7393,7 +7516,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
         case 5: await runBuildEmos(useLatest); break;
         case 6: await runFlashEmos(c); break;
         case 7: await runRebootAndWatch(c); break;
-        case 8: await runEmosWifi(); break;
+        case 8: await runEmosWifi(useLatest); break;
       }
       else switch (stepIdx) {
         case  0: c = await runConnectAndroid(); break;
@@ -7512,6 +7635,14 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
       return adb
         ? 'The USB link is up but this step failed — click Retry to run it again.'
         : 'Pick the device from the USB picker, then click Retry.';
+    }
+    // The serial steps have no ADB at all — the device rebooted out of TWRP to
+    // get here — so the generic "use Reconnect" advice below points at a
+    // control that cannot help, on the step people most often get stuck at.
+    if (cur.id === 'reboot_watch') {
+      return 'Click Connect Console and pick the device\'s serial port. If the '
+           + 'picker is empty, the device is still booting — wait for the ring '
+           + 'to settle and click again.';
     }
     if (INPUT_STEPS.has(cur.id)) {
       return diagnostics
@@ -7856,19 +7987,36 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
                 itself. */}
             {isEmos && step === 7 && stepState[7] !== 'done' && !running && (
               <div className="em-panel" style={{ marginBottom: 12, borderColor: 'var(--warn)' }}>
+                <div className="em-label" style={{ marginBottom: 6 }}>What you do</div>
+                {/* The ring guide below is what this panel has always said, and
+                    it is the right content — but it describes what the DEVICE
+                    does and never said what the operator does, so the port
+                    picker arrived unannounced. That is the step people get
+                    stuck on. */}
+                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 14 }}>
+                  <div>1. Click the button below. The device reboots into emOS.</div>
+                  <div>2. The browser asks for a serial port. It appears as <strong>emOS</strong>,
+                       and only once the emOS boot starts — the ring beginning to fill. Leave the
+                       picker open and it turns up by itself; if the picker gives up first, click
+                       Connect Console again.</div>
+                  <div>3. Pick it. The wizard reads the console itself from there.</div>
+                  <div>Leave the cable in throughout — it is the device&apos;s only power.</div>
+                </div>
                 <div className="em-label" style={{ marginBottom: 6 }}>Watch the light ring on this boot</div>
                 <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--text2)', lineHeight: 1.7 }}>
-                  <div><strong style={{ color: 'var(--ok)' }}>Filling, then white, then fading</strong> — up and on the network. Done, about 30 seconds.</div>
-                  <div><strong>Two lit segments at the top, throbbing</strong> — waiting for the network. Normal, and most of the boot.</div>
+                  <div><strong>A blue arc growing behind a cyan head</strong> — booting. The head travels right round and finishes back at the bottom.</div>
+                  <div><strong>Two segments either side of the bottom, throbbing blue</strong> — every boot stage done, waiting for WiFi. This is where it sits for the whole of the next step, and it will sit there indefinitely until you configure a network. Normal.</div>
+                  <div><strong style={{ color: 'var(--ok)' }}>Both sides filling to the top, then white, then fading</strong> — on the network, ring handed over to EchoMuse. Done.</div>
                   <div><strong style={{ color: 'var(--warn)' }}>Solid amber</strong> — the device is restoring its own last good image. Leave it alone; it reboots itself.</div>
-                  <div><strong style={{ color: 'var(--warn)' }}>Red and stopped</strong> — a boot stage failed. Recoverable, see below.</div>
+                  <div><strong style={{ color: 'var(--warn)' }}>Red and stopped</strong> — a boot stage failed at the point the head reached. Recoverable, see below.</div>
                   <div><strong style={{ color: 'var(--error)' }}>A single segment orbiting a full blue ring, for more than a minute</strong> — emOS never started. This is the one that needs you.</div>
                 </div>
                 <p style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--text2)', lineHeight: 1.7, margin: '10px 0 0' }}>
                   <strong>If it does not come up, do not keep power cycling it.</strong> To reach
-                  TWRP: unplug the power, hold the <strong>mute</strong> button down, and apply
-                  power with it still held — the ring shows an <strong>alternating cyan
-                  pattern</strong> once you are in recovery. Reconnect here and use
+                  TWRP: unplug the power, hold <strong>mute</strong> or <strong>+</strong> (volume
+                  up), and apply power with it still held until the ring changes. Which button
+                  depends on your amonet version — <a href="https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-2nd-gen-2016-biscuit.4761416/" target="_blank"
+                  rel="noreferrer">R0rt1z2&apos;s XDA thread</a> has it. Reconnect here and use
                   <strong> Restore escrowed boot image</strong> below: about ten seconds, and it
                   leaves everything on /data alone. Repeatedly power cycling a device that will
                   not boot is what turns a recoverable one into a case-opening job.
@@ -7892,6 +8040,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
                   .catch(e => addLog(`Scan failed: ${e.message}`, 'error'))}
                 networks={wifiNetworks}
                 onConnect={() => { if (wifiSsid) runStep(8); }}
+                onSkip={() => runStep(8, true)}
               />
             )}
             {/* Step 10: WiFi configuration (FireOS flow — emOS configures WiFi over the console at step 8) */}
@@ -9173,6 +9322,51 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
     }
   }
 
+  // system_config. The table has had mutable keys and a PATCH endpoint since
+  // long before anything called them, so `update_check_interval = 0` — the
+  // documented way to stop the controller talking to GitHub (#159) — was
+  // reachable only with curl. Loaded on tab open rather than with the panel:
+  // it is admin-only, and a read-only account opening Settings would take a
+  // 401 for a tab it cannot see.
+  const [sys, setSys]           = useState(null);   // stored values, as strings
+  const [sysEdit, setSysEdit]   = useState({});     // pending changes only
+  const [sysSaving, setSysSaving] = useState(false);
+  const [sysMsg, setSysMsg]     = useState(null);   // {ok, text}
+
+  // What to restore when update checks are switched back on. Seeded from the
+  // stored value so turning them off and on again does not silently reset a
+  // chosen interval to the default.
+  const lastInterval = useRef(3600);
+
+  function loadSystem() {
+    API.get('/api/system/config')
+       .then(c => {
+         setSys(c);
+         const n = Number(c.update_check_interval);
+         if (Number.isFinite(n) && n > 0) lastInterval.current = n;
+       })
+       .catch(e => setSysMsg({ ok: false, text: e.error || 'Failed to load system settings' }));
+  }
+  useEffect(() => { if (tab === 'system') loadSystem(); }, [tab]);
+
+  const sysVal = (k, d) => sysEdit[k] ?? sys?.[k] ?? d;
+  function setSysVal(k, v) { setSysEdit(p => ({ ...p, [k]: String(v) })); setSysMsg(null); }
+
+  async function saveSystem() {
+    setSysSaving(true); setSysMsg(null);
+    try {
+      // Only the keys actually touched. PATCH is a partial update, so sending
+      // the whole table would rewrite settings this screen does not show.
+      await API.patch('/api/system/config', sysEdit);
+      setSys(s => ({ ...s, ...sysEdit }));
+      setSysEdit({});
+      setSysMsg({ ok: true, text: 'Saved' });
+    } catch(e) {
+      setSysMsg({ ok: false, text: e.error || 'Failed to save system settings' });
+    }
+    setSysSaving(false);
+  }
+
   // Object URLs pin their blob in memory until revoked; the panel closing is
   // the last moment we can still reach this one.
   useEffect(() => () => { if (bundle) URL.revokeObjectURL(bundle.url); }, [bundle]);
@@ -9235,8 +9429,11 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
 
   // Support is admin-only because the endpoint is: the bundle spans the whole
   // fleet, so a tab a non-admin can only be refused by is worse than no tab.
-  const TABS = isAdmin ? ['fleet', 'users', 'account', 'support'] : ['fleet', 'account'];
-  const TAB_LABELS = { fleet: 'Config', users: 'Users', account: 'Account', support: 'Support' };
+  // System is admin-only because both its endpoints are. Kept separate from
+  // Config, which is device config pushed to the fleet — these are settings
+  // for the controller process itself and never reach a device.
+  const TABS = isAdmin ? ['fleet', 'system', 'users', 'account', 'support'] : ['fleet', 'account'];
+  const TAB_LABELS = { fleet: 'Config', system: 'System', users: 'Users', account: 'Account', support: 'Support' };
 
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(180,176,168,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:200, backdropFilter:'blur(8px)' }}
@@ -9283,6 +9480,103 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
                 </div>
               )}
             </>
+          )}
+
+          {tab === 'system' && (
+            <div style={{ maxWidth: 560 }}>
+              <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--muted)', marginBottom:20, lineHeight:1.6 }}>
+                Settings for this controller. Nothing here is pushed to a device.
+              </div>
+
+              {!sys && !sysMsg && <div className="help">Loading…</div>}
+
+              {sys && (() => {
+                const secs     = Number(sysVal('update_check_interval', '3600'));
+                const checksOn = Number.isFinite(secs) && secs > 0;
+                const hours    = checksOn ? Math.max(1, Math.round(secs / 3600)) : 0;
+                return (
+                  <>
+                    <div className="em-panel" style={{ padding:'16px 18px', marginBottom:18 }}>
+                      <div className="em-label" style={{ marginBottom:14 }}>Updates</div>
+                      <Toggle
+                        label="Check GitHub for updates"
+                        value={checksOn}
+                        onChange={on => setSysVal('update_check_interval',
+                                                  on ? lastInterval.current : 0)}/>
+                      {checksOn ? (
+                        <NumberField
+                          label="How often" unit="hours" value={hours} min={1} max={168}
+                          sub="How long the controller waits between polls. Firmware, emOS and controller releases are all read in one request."
+                          onChange={h => { lastInterval.current = h * 3600;
+                                           setSysVal('update_check_interval', h * 3600); }}/>
+                      ) : (
+                        <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--muted)', lineHeight:1.6 }}>
+                          The controller makes no background connection to GitHub, and no
+                          release information is shown. &quot;Check now&quot; on a device&apos;s
+                          Updates tab still works.
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="em-panel" style={{ padding:'16px 18px', marginBottom:18 }}>
+                      <div className="em-label" style={{ marginBottom:14 }}>Devices</div>
+                      <Select
+                        label="New device approval"
+                        value={sysVal('device_approval', 'strict')}
+                        sub="Strict holds an unknown device as pending until you approve it. Auto approves anything that connects."
+                        options={[
+                          { value: 'strict', label: 'Approve by hand' },
+                          { value: 'auto',   label: 'Approve automatically' },
+                        ]}
+                        onChange={v => setSysVal('device_approval', v)}/>
+                    </div>
+
+                    <div className="em-panel" style={{ padding:'16px 18px', marginBottom:18 }}>
+                      <div className="em-label" style={{ marginBottom:14 }}>Sessions</div>
+                      <NumberField
+                        label="Sign-in expiry" unit="days" min={1} max={365}
+                        value={Number(sysVal('session_expiry_days', '30')) || 30}
+                        sub="How long a dashboard sign-in lasts. Existing sessions keep the expiry they were issued with."
+                        onChange={v => setSysVal('session_expiry_days', v)}/>
+                    </div>
+
+                    <div className="em-panel" style={{ padding:'16px 18px', marginBottom:18 }}>
+                      <div className="em-label" style={{ marginBottom:14 }}>Release source</div>
+                      <div style={{ fontFamily:"'DM Mono',monospace", fontSize:11, color:'var(--text2)', marginBottom:6 }}>
+                        GitHub repository
+                      </div>
+                      <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--muted)', lineHeight:1.6, marginBottom:8 }}>
+                        Where firmware and emOS releases are fetched from. Change this only if
+                        you run a fork.
+                      </div>
+                      <input type="text" autoComplete="off" spellCheck="false"
+                        value={sysVal('github_repo', 'wilbowes/EchoMuse')}
+                        onChange={e => setSysVal('github_repo', e.target.value)}
+                        className="em-inset"
+                        style={{ fontFamily:"'DM Mono',monospace", fontSize:11, width:'100%',
+                                 boxSizing:'border-box', color:'var(--text)',
+                                 border:'1px solid var(--border-hard)' }}/>
+                    </div>
+
+                    {Object.keys(sysEdit).length > 0 && (
+                      <div style={{ display:'flex', gap:10 }}>
+                        <Pill accent disabled={sysSaving} onClick={saveSystem}>
+                          {sysSaving ? 'Saving…' : 'Save'}
+                        </Pill>
+                        <Pill onClick={() => { setSysEdit({}); setSysMsg(null); }}>Revert</Pill>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+
+              {sysMsg && (
+                <div style={{ marginTop: 14, fontFamily: "'DM Mono',monospace", fontSize: 11,
+                  color: sysMsg.ok ? 'var(--ok)' : 'var(--error)' }}>
+                  {sysMsg.ok ? '✓ ' : ''}{sysMsg.text}
+                </div>
+              )}
+            </div>
           )}
 
           {tab === 'users' && (
