@@ -4659,14 +4659,34 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
 
       // A v1-shaped map with no other-boot is a combination nothing has seen.
       // Refusing costs a bug report; guessing costs the unlock.
-      const v1Aliases = entries.filter(m => /_(amonet|x)$/.test(m[1])).map(m => m[1]);
-      if (v1Aliases.length) {
+      //
+      // The message carries what each alias RESOLVES TO, deduplicated. It used
+      // to print bare names, and the by-name glob matches one directory per
+      // platform node — so a real report read "boot_a_x, boot_a_x, boot_a_x,
+      // boot_b_x, boot_b_x, boot_b_x" (#598), which looks like six partitions
+      // and is two seen three times. Worse, the names alone cannot settle the
+      // question they are reported for: what decides whether the bare name is
+      // the kernel or amonet's payload is whether boot_a and boot_a_x point at
+      // the SAME partition. Asking someone to report a line that cannot answer
+      // it costs a round trip per device.
+      const aliasDevs = new Map();
+      for (const m of entries) {
+        if (/_(amonet|x)$/.test(m[1]) && !aliasDevs.has(m[1])) aliasDevs.set(m[1], m[2]);
+      }
+      if (aliasDevs.size) {
+        const bare = new Map();
+        for (const m of entries) {
+          if (/^boot_[ab]$/.test(m[1]) && !bare.has(m[1])) bare.set(m[1], m[2]);
+        }
+        const show = ms => [...ms].sort()
+          .map(([n, d]) => `${n} → ${d}`).join(', ');
         return { ok: false, target, names, reason:
           `/dev/block/other-boot does not exist, but the by-name map carries `
-          + `${v1Aliases.sort().join(', ')} — which belongs to the older amonet layout, `
+          + `${show(aliasDevs)} — which belongs to the older amonet layout, `
           + 'where the bare names are not the kernel. That combination is not a state '
-          + 'the wizard has seen, so nothing has been read or written. Please report '
-          + 'this with the line above.' };
+          + 'the wizard has seen, so nothing has been read or written.'
+          + (bare.size ? ` The bare names resolve to ${show(bare)}.` : '')
+          + ' Please report this with the whole line above.' };
       }
       if (!/^_[ab]$/.test(suffix)) {
         return { ok: false, target, names, reason:

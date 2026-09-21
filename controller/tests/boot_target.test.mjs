@@ -532,8 +532,49 @@ for (const fn of ["runEscrowBoot", "runPatchBoot"]) {
   }
 }
 
+// #598: the refusal for a v1-shaped map with no other-boot has to carry what
+// the aliases RESOLVE TO, and each one once.
+//
+// The by-name glob matches one directory per platform node, so a real report
+// read "boot_a_x, boot_a_x, boot_a_x, boot_b_x, boot_b_x, boot_b_x" — two
+// partitions seen three times, reading as six. And the names alone cannot
+// settle the question they are reported for: what decides whether the bare
+// name is the kernel or amonet's payload is whether boot_a and boot_a_x point
+// at the SAME partition, which only the resolutions show.
+{
+  const lines = [
+    "TARGET=/dev/block/other-boot",
+    "ISBLK=no",
+    "SUFFIX=_a",
+    "SLOTDEV=/dev/block/mmcblk0p10",
+    "SLOTBLK=yes",
+  ];
+  // Three platform directories, as on the device in #598.
+  for (let i = 0; i < 3; i++) {
+    lines.push("NAME boot_a /dev/block/mmcblk0p10");
+    lines.push("NAME boot_a_x /dev/block/mmcblk0p10");
+    lines.push("NAME boot_b /dev/block/mmcblk0p11");
+    lines.push("NAME boot_b_x /dev/block/mmcblk0p11");
+  }
+  const v = classifyBootTarget(lines.join("\n"));
+
+  check("v1 aliases with no other-boot is still refused", v.ok === false,
+        `got ok=${v.ok}: ${v.reason}`);
+
+  const seen = (v.reason.match(/boot_a_x/g) || []).length;
+  check("each alias is named once", seen === 1,
+        `boot_a_x appears ${seen} times: ${v.reason}`);
+
+  check("the alias is reported with what it resolves to",
+        /boot_a_x → \/dev\/block\/mmcblk0p10/.test(v.reason), v.reason);
+
+  check("the bare name is reported too",
+        /boot_a → \/dev\/block\/mmcblk0p10/.test(v.reason), v.reason);
+}
+
 if (failures) {
   console.error(`\n${failures} check(s) failed.`);
   process.exit(1);
 }
 console.log("boot_target: all checks passed.");
+
