@@ -716,6 +716,13 @@ async def _get_me(request: web.Request) -> web.Response:
 
 # ─── Devices ──────────────────────────────────────────────────────────────────
 
+def _listen_json(live) -> dict | None:
+    view = getattr(live, "listen_view", None)
+    if view is None:
+        return None
+    return {"state": view.state, "streams": view.streams, "reason": view.reason}
+
+
 @auth.require_auth
 async def _get_devices(request: web.Request) -> web.Response:
     """GET /api/devices — all devices, live state merged with DB."""
@@ -1161,6 +1168,7 @@ async def _apply_live_config(device_id: str, live, effective: dict) -> None:
         live.oww_on_device = em_shadow.effective_mode(
             effective["owwOnDevice"], live.oww_trigger_capable,
             getattr(live, "oww_model_ready", True),
+            local_capable=getattr(live, "oww_local_capable", False),
         )
     if "eqBands" in effective:
         live.eq_bands = effective["eqBands"]
@@ -4422,6 +4430,7 @@ async def reconcile_oww_assets(device_id: str, live) -> None:
         live.oww_on_device = em_shadow.effective_mode(
             effective.get("owwOnDevice"), live.oww_trigger_capable,
             model_ready=True,
+            local_capable=live.oww_local_capable,
         )
         # The device can score TODAY, so nothing is degraded and no warning is
         # owed — but it may still be short of the other stock classifiers, in
@@ -4446,6 +4455,7 @@ async def reconcile_oww_assets(device_id: str, live) -> None:
     live.oww_on_device = em_shadow.effective_mode(
         effective.get("owwOnDevice"), live.oww_trigger_capable,
         model_ready=False,
+        local_capable=live.oww_local_capable,
     )
     log.warning(f"[api] [{device_id}] oww reconcile: {missing} is not installed "
                 f"— controller-side scoring until it is")
@@ -4478,6 +4488,7 @@ async def reconcile_oww_assets(device_id: str, live) -> None:
     live.oww_on_device = em_shadow.effective_mode(
         effective.get("owwOnDevice"), live.oww_trigger_capable,
         model_ready=True,
+        local_capable=live.oww_local_capable,
     )
     # The device builds its scorer from the config push, so it needs telling
     # the model is now there — same mechanism _install_then_switch relies on.
@@ -5787,7 +5798,10 @@ def _merge_device(row) -> dict:
         # Q4 fix (2026-07-05 review): near-miss counter — same lifecycle as
         # the rest of this "Live" section (resets on reconnect, since it
         # lives on the per-connection Device object, not the DB row).
-        "owwNearMisses":    getattr(live, "oww_near_misses", 0) if live else 0,
+        # None for a privately listening Echo: this controller scores nothing
+        # from it, and 0 would read as "measured, and none".
+        "owwNearMisses":    (None if live and getattr(live, "private_listening", False)
+                             else getattr(live, "oww_near_misses", 0) if live else 0),
         # What this firmware can be asked to do, by capability rather than by
         # version comparison. Drives whether the dashboard OFFERS on-device
         # scoring: a toggle that silently does nothing on old firmware is worse
@@ -5797,6 +5811,14 @@ def _merge_device(row) -> dict:
         # without being able to act on it, and offering those "on" produces a
         # device that never answers.
         "owwTriggerCapable": getattr(live, "oww_trigger_capable", False) if live else False,
+        # What this Echo is actually doing with its microphone
+        # (docs/listening.md, em_listen.resolve) — the one source for every
+        # privacy statement the dashboard makes. `streams` is true, false, or
+        # null for not known yet, which must never be shown as private. Null
+        # for an offline device: it is not sending anything, and what it will
+        # do on reconnect is its own report to make.
+        "owwLocalCapable": getattr(live, "oww_local_capable", False) if live else False,
+        "listen":          _listen_json(live) if live else None,
         "audioMixCapable": getattr(live, "audio_mix_capable", False) if live else False,
         # Gates the AEC delay slider, which only means anything on the
         # software tap. Paired with aecRef because the capability says the

@@ -68,7 +68,7 @@ informational: the controller stores and displays them, and gates Android-only
 payloads on `base_os`. The kernel pair is omitted if `uname` fails. A device
 for a new board should send all of them.
 
-`capabilities` is the negotiation signal. The Dot announces ten unconditionally
+`capabilities` is the negotiation signal. The Dot announces eleven unconditionally
 plus one conditional (`capabilities()` in `control.go`):
 
 | Capability | Condition | Meaning |
@@ -82,6 +82,7 @@ plus one conditional (`capabilities()` in `control.go`):
 | `oww_trigger` | always | Can **act** on its own wake detection — kept separate from `oww_shadow` on purpose (see below) |
 | `button_hold` | always | Emits long-press (`heldMs`) |
 | `audio_mix` | always | Holds music on its own frame types and mixes it under voice rather than pausing |
+| `oww_local_only` | always | Can listen **privately**: score its own wake word and send nothing until it fires. Whether it is doing so is `listen_state` — see [listening.md](listening.md) |
 | `aec_hw_ref` | always | Can take the AEC far-end reference from a playback loopback in the mic capture itself, and falls back to the software tap at the ALSA write when the board has none |
 | `ambient_light` | only if the sensor is actually readable (`als.Present()`) | Reports light readings |
 
@@ -136,7 +137,9 @@ absent optional fields take prior/default behaviour.
 | `mute_state` | `muted` | Mute toggled (mute is device-sovereign — see `device/CLAUDE.md`) |
 | `volume_state` | `level` | Volume changed; controller persists it as `startupVolume` |
 | `oww_shadow_cross` | score/threshold/age fields | Shadow-mode wake crossing (report only) |
-| `oww_wake` | score, effective threshold, age | On-device trigger fired (`owwOnDevice=on`); lands in `Device.pending_wake` |
+| `oww_wake` | `score`, `threshold`, `ageMs`; under private listening also `session`, `floor`, `barge` | On-device trigger fired (`owwOnDevice=on`). With `session` it opened a private-listening session whose audio follows as `0x07` ([listening.md](listening.md)); without, it lands in `Device.pending_wake` and the continuous stream carries the audio |
+| `listen_state` | `state` (`local`/`stream`/`degraded`), `reason?` | What the device is doing with its wake stream. Sent on every change and after every `ack` |
+| `listen_end` | `session`, `reason` | The device closed a session itself (`ack_timeout`, `max_open`, `muted`, `link`, `stopped`) |
 | `ambient_light` | `value` | Light reading (only if `ambient_light`) |
 | `ble_adverts` | `adverts[]` | Batch from the passive BLE scanner. **Legacy path** — send these on `/data` as `0x06` whenever the controller announced `ble_adverts_data`, and use this message only when it did not (#404) |
 | `wifi_scan_result` | `networks[]` of `{ssid, ssid_hex, signal}`, or `error` | Answer to `wifi_scan` |
@@ -147,11 +150,13 @@ absent optional fields take prior/default behaviour.
 
 | `type` | Payload | Meaning |
 |--------|---------|---------|
-| `ack` | `device_id`, `features[]` | Registration accepted. `features` is the CONTROLLER's capability list — the mirror of the device's own, and read the same way: a feature that is absent is one the controller cannot do. Absent entirely on controllers before 2.23.0 |
+| `ack` | `device_id`, `features[]` | Registration accepted. `features` is the CONTROLLER's capability list — the mirror of the device's own, and read the same way: a feature that is absent is one the controller cannot do. Absent entirely on controllers before 2.23.0. Current: `ble_adverts_data`, `listen_session` |
 | `leds` | `leds[]`, `listening?` | One LED frame; `listening:true` marks the listening ring so the direction overlay keys off it |
 | `led_anim` | `{pattern, colors, periodMs, ttlSec}` | Local animation spec; sent only if `led_anim` |
 | `mic_start` | `lock_mic?` | Start mic stream. `lock_mic:false`/absent = always-on ungated wake stream; `true` = bounded, VAD-gated turn |
-| `mic_stop` | — | Stop the mic stream |
+| `mic_stop` | — | Stop the mic stream. Under private listening it ends a bounded turn but **not** a session (only `listen_close` does, by id) and **not** local listening, which is what hears a barge-in |
+| `listen_ack` | `session` | A private-listening wake was taken; stops the device's 3s ack clock |
+| `listen_close` | `session`, `reason` | End that session. Ignored if it is not the open one |
 | `beam_lock` / `beam_unlock` | — | Lock beamformer to the chosen perimeter mic for a turn / return to omni |
 | `volume_set` | `level` | Set absolute volume |
 | `duck` | `on` | Duck music under a voice turn (turn start/end) |
@@ -192,6 +197,7 @@ board implementer must not read a single global table.
 | `0x04` | VAD-end | Bounded turn: speech was detected, then ended |
 | `0x05` | no-speech-timeout | Bounded turn: no speech ever detected before the timeout |
 | `0x06` | ble adverts | Batch of scanned BLE advertisements — **only if the controller announced `ble_adverts_data`** |
+| `0x07` | session audio | `[0x07][session u32 BE][seq u16 BE][PCM]` — private-listening audio, **only if the controller announced `listen_session`** |
 
 `0x04`/`0x05` are safe to reuse because playback frames only ever flow to the
 device and capture frames only ever flow from it. The two capture sentinels are
@@ -206,6 +212,13 @@ Mic stream shapes (`device/CLAUDE.md`, Device audio pipeline):
 - **Bounded turn stream** (`lock_mic:true`) is VAD-gated with a preroll ring,
   ends with a `0x04` sentinel when the gate closes after speech, and ends with
   `0x05` if no speech arrived within the timeout.
+- **Private listening** (`owwOnDevice=on`, device announces `oww_local_only`,
+  controller announces `listen_session`): the always-on stream still runs, but
+  on the device only — it feeds the local scorer and sends nothing. A wake
+  opens a session and its audio goes up as `0x07` until the controller closes
+  it at end of speech or a device-side limit does. The full contract is
+  [listening.md](listening.md); a new board that scores locally should
+  implement it rather than stream.
 
 ### `0x06` — BLE advertisements
 
@@ -375,6 +388,12 @@ worth reading before writing crown-specific bindings.
 - Pending capabilities reported before the ESPHome server exists are not lost.
 - A capability change bounces the HA connection so the entity list refreshes.
 - A disabled UI control does not silently write when its capability is absent.
+- Private listening is negotiated both ways: `oww_local_only` from the device,
+  `listen_session` on the ack, with the same strings on both sides.
+
+The session rules themselves — the device-side deadlines, the ring, which
+session a frame may reach — are pinned by `device/internal/listen` and
+`controller/tests/test_listen.py`.
 
 A board or protocol change that breaks one of these must update the test with
 the reason, not route around it.

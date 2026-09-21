@@ -27,7 +27,7 @@ def _api_src() -> str:
 
 def _listener_src() -> str:
     src = _controller_src()
-    start = src.index("async def wake_word_listener")
+    start = src.index("async def _stream_listen")
     end = src.index("async def ", start + 1)
     return src[start:end]
 

@@ -363,9 +363,15 @@ downloaded from GitHub when you choose to update. Set
 `update_check_interval` to `0` to stop even that.
 
 ### Is my voice audio sent anywhere?
-It goes from the device to your controller to your Home Assistant, over your
-LAN. Where it goes after that is whatever speech-to-text you configured in
-HA — that choice is yours, not ours.
+Only after the wake word, by default. The Echo listens for it itself and
+sends nothing until it hears it; then what you say goes to your controller and
+your Home Assistant, over your LAN, until you stop speaking. Where it goes
+after that is whatever speech-to-text you configured in HA — that choice is
+yours, not ours.
+
+An Echo set to detect the wake word **on the controller** streams to the
+controller all the time instead, and the dashboard says which ones do. See
+[listening.md](listening.md).
 
 ### Is a support bundle safe to attach to a public issue?
 Yes, by design. It's an allowlist: no transcripts, no saved audio, no WiFi

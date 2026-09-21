@@ -107,21 +107,23 @@ lens. And in the gap between conversations, the device's own speech can
 linger in that two-second memory — follow-up conversations get the weaker
 version of this feature until barge-in/AEC work matures.
 
-## Stage 5 — The continuous stream
+## Stage 5 — The continuous stream (controller mode only)
 
-Every 32 milliseconds, the processed audio is sent over WiFi to the
-controller. Always. There is deliberately **no** "only send when it sounds
-like speech" gate on this stream.
+On an Echo set to detect the wake word **on the controller**, the processed
+audio is sent over WiFi to the controller every 32 milliseconds. Always.
+There is deliberately **no** "only send when it sounds like speech" gate on
+this stream.
 
 **Benefit:** the wake-word recogniser sees smooth, uninterrupted audio,
 which measurably improves its accuracy — and there's no on-device logic
 that can drift, misjudge your room, or degrade over days (both of which
 actually happened with earlier, cleverer designs; boring won).
 
-That uninterrupted stream is also what makes it possible to run the *same*
-recogniser on the Dot itself and compare the two on byte-identical audio —
-which is exactly what the experimental on-device scoring mode does, without
-being allowed to act on the result. It is also why gating this stream on
+**This stream exists only for an Echo set to detect the wake word on the
+controller.** By default the Echo runs the same recogniser itself and sends
+nothing until it hears the wake word; then it sends what follows until you
+stop speaking ([listening.md](listening.md)). The rest of this stage
+describes the controller-side mode. It is also why gating this stream on
 "sounds like speech" would be harder than it looks: the recogniser's internal
 buffers assume continuity, and splicing gated bursts together measurably
 depresses its scores.
@@ -129,16 +131,20 @@ depresses its scores.
 **Caveat:** a constant ~32KB/s per device on your WiFi — about 1/6th of
 what streaming the *response* audio uses, so in practice a non-issue on any
 home network. And to be clear about privacy: the stream goes to *your*
-controller on *your* LAN and nowhere else.
+controller on *your* LAN and nowhere else — and an Echo listening for its own
+wake word does not send it at all.
 
 ## Stage 6 — Wake-word spotting
 
-The controller runs openwakeword, a small neural network, over each
-device's stream, scoring every moment: "how much did that sound like the
-wake word?" Cross the sensitivity bar and the conversation starts.
+openwakeword, a small neural network, scores every moment of audio: "how much
+did that sound like the wake word?" Cross the sensitivity bar and the
+conversation starts. By default it runs **on the Echo**, which is why nothing
+needs to leave it until then; an Echo set to controller mode has the
+controller run it over the stream instead. Same model, same bar.
 
 With more than one device online, the **first** Echo to hear you answers
-straight away, and any other device detecting the same word within the
+straight away — judged by when each one captured the audio, not when its
+message reached the controller — and any other device detecting the same word within the
 **arbitration window** (default 700ms, configurable) stands down silently,
 its ring going dark as soon as the other device claims the turn.
 One utterance, one response, even in earshot of two devices — and no added

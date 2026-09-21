@@ -153,10 +153,28 @@ and most of this file exists because something was learned the expensive way.
 Short where a person is being addressed; complete where something is being
 recorded.
 
+## Listening is private by default, and every claim about it is the Echo's own
+
+**Where the wake word is detected is chosen per Echo, and `docs/listening.md`
+is the spec** (Wil, 2026-09-21: "one or the other … not a mush of both with
+documentation that implies one thing when it's not correct"). "On this Echo"
+(`owwOnDevice=on`, the default for new installs) sends nothing until the Echo's
+own wake word fires, then only until end of speech; "On the controller"
+(`off`) streams continuously and is labelled as streaming wherever it shows.
+`shadow` is a developer diagnostic, not a user choice. Three rules follow:
+
+- **Privacy statements come from what the Echo REPORTS (`listen_state` →
+  `em_listen.resolve`), never from configuration.** Unknown is shown as
+  unknown, never as private.
+- **Nothing ever falls back to streaming.** An Echo that cannot run its own
+  wake word is `degraded` (button only) and says why.
+- **The device enforces its own limits** (ack timeout, max session length,
+  mute, link loss), so no controller failure can leave an Echo streaming.
+
 ## Device/controller compatibility
 
 The two halves version independently, so any pairing can occur in the field. Two rules, both guarded by `tests/test_capabilities.py`:
-- **Negotiate by capability, not version.** The device announces what it implements in its register message (`internal/client/control.go`, `capabilities()`: `mic`, `speaker`, `leds`, `led_anim`, `buttons`, `oww_shadow`, `oww_trigger`, `button_hold`, `audio_mix`, `aec_hw_ref`, and `ambient_light` **only when the sensor is actually readable**); the controller reads `Device.capabilities` via properties like `led_anim_capable` / `oww_shadow_capable`. Never compare version strings — that puts release history in the controller and misjudges dev builds. A UI control whose feature the device lacks is shown **disabled with the reason**, never as a control that silently does nothing.
+- **Negotiate by capability, not version.** The device announces what it implements in its register message (`internal/client/control.go`, `capabilities()`: `mic`, `speaker`, `leds`, `led_anim`, `buttons`, `oww_shadow`, `oww_trigger`, `button_hold`, `audio_mix`, `aec_hw_ref`, `oww_local_only`, and `ambient_light` **only when the sensor is actually readable**); the controller reads `Device.capabilities` via properties like `led_anim_capable` / `oww_shadow_capable`. Never compare version strings — that puts release history in the controller and misjudges dev builds. A UI control whose feature the device lacks is shown **disabled with the reason**, never as a control that silently does nothing.
   **`oww_shadow` and `oww_trigger` are two capabilities and must stay two.** Shadow shipped first, so there is firmware in the field that scores and reports but has no code to act — reading "can score" as "can trigger" stands the controller's own detection down and waits for a trigger that never comes, which presents as a device that scores perfectly and never answers. Same reason `audio_mix` is announced rather than assumed: without it the controller must keep the pause/resume path, because a device that cannot mix simply never plays the `0x04` stream.
   **`aec_hw_ref` is the shape to copy when a capability cannot be proven at registration.** It says the firmware knows how to take the AEC far-end reference from a playback loopback in the mic capture; whether the board HAS one is answered separately by `aecRef` (`"hw"`/`"sw"`/`"off"`) on the stats report, because confirming a loopback needs the speaker to have played and nothing has at register time. Same "could it" vs "is it" split as `oww_shadow` against `shadow.active`. Gate UI on the runtime value, not the capability: the AEC delay control is meaningless on a frame-aligned reference but essential to a device that fell back to the software tap, and both announce the capability.
   **Negotiation runs BOTH ways, and the controller's half is newer.** The `ack` carries `features` — the controller's own capability list, read exactly as the device's is: a feature that is absent is one the controller cannot do. It exists because `ble_adverts` moved from the control plane to `0x06` on the data plane (#404), and a device sending that frame to a controller which cannot read it loses every advertisement in **silence**, since unknown frame types are ignored. That is the general hazard whenever a message MOVES rather than being added: the old path stops being used and the new one is discarded, and nothing at either end reports it. Adding a message is safe unnegotiated; moving one never is.

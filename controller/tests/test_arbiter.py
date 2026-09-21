@@ -110,3 +110,49 @@ def test_zero_window_suppresses_nothing():
         arb.claim("office", 0.0)
         return arb.claim("lounge", 0.0)
     assert run(main()) == "lounge"
+
+
+# ── capture time (docs/listening.md, "Arbitration") ─────────────────────────
+
+def test_late_claim_heard_first_still_cedes_to_the_granted_one():
+    """A granted claim is never revoked, even to an Echo that heard first."""
+    async def main():
+        arb = WakeArbiter()
+        now = asyncio.get_running_loop().time()
+        first = arb.claim("office", WINDOW, heard_at=now)
+        second = arb.claim("lounge", WINDOW, heard_at=now - 0.05)
+        return first, second
+    assert run(main()) == ("office", "office")
+
+
+def test_claim_delayed_in_flight_cedes_within_slack():
+    """The bug this fixes: heard 50ms after the winner, arriving a second
+    late, it used to fall outside the window and start a second answer."""
+    async def main():
+        arb = WakeArbiter()
+        loop = asyncio.get_running_loop()
+        t = loop.time()
+        arb.claim("office", WINDOW, heard_at=t)
+        await asyncio.sleep(0.4)            # past the window by arrival
+        late = arb.claim("lounge", WINDOW, heard_at=t + 0.05, slack_s=1.0)
+        return late
+    assert run(main()) == "office"
+
+
+def test_without_slack_a_late_claim_is_a_new_utterance():
+    async def main():
+        arb = WakeArbiter()
+        t = asyncio.get_running_loop().time()
+        arb.claim("office", WINDOW, heard_at=t)
+        await asyncio.sleep(0.4)
+        return arb.claim("lounge", WINDOW, heard_at=t + 0.05)
+    assert run(main()) == "lounge"
+
+
+def test_separate_utterance_heard_outside_the_window_wins():
+    async def main():
+        arb = WakeArbiter()
+        t = asyncio.get_running_loop().time()
+        arb.claim("office", WINDOW, heard_at=t - 1.0, slack_s=3.0)
+        return arb.claim("lounge", WINDOW, heard_at=t, slack_s=3.0)
+    assert run(main()) == "lounge"

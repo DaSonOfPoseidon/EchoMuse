@@ -170,12 +170,57 @@ The always-on wake stream (`mic_start` without `lock_mic`) is **ungated and AGC-
 | `internal/wakeword/` | openWakeWord streaming feature pipeline (mel ring → 76-frame windows → embedding ring → classifier). Pure Go: inference sits behind the `Inferer` interface so the buffering is host-testable with no ONNX/cgo. Validated tensor-for-tensor against Python via a golden fixture (`testdata/`, regenerate with `gen_fixture.py`) |
 | `internal/wakeword/ort/` | The `Inferer` implementation: ONNX Runtime via cgo. The library is **dlopen'd at runtime, never linked** (only the MIT C header is vendored) so a device without it boots normally and falls back to controller-side wake word — verified by the ARM binary needing only libdl/liblog/libc with zero undefined `Ort*` symbols. `DefaultOptions` (1 thread, XNNPACK, `allow_spinning=0`) is the measured optimum: 37.7% of one core against 243% for ORT's defaults. Don't "fix" the thread count — more threads lowers latency and *raises* CPU, the wrong trade for duty-cycled work |
 | `internal/wakeword/shadow/` | On-device scoring that reports but never acts (see "On-device wake word"). `Push` must never block: inference runs on its own goroutine and drops frames when behind |
+| `internal/listen/` | Private listening (docs/listening.md): the session gate that decides what of the wake stream may leave the device, and `Resolve` for local/stream/degraded. Pure, clock-injected, tested |
 | `internal/wakeword/fixture/` | Shared golden-fixture parser, tolerance policy and `Verify`. Used by both the host test and `tools/oww_probe`, deliberately — the probe's answer is the trusted one because it runs on hardware, so it must be exactly as strict as the test by construction. Tolerances are relative to the **tensor's** scale, not per element: per-element relative error is meaningless for tensors straddling zero |
 | `internal/bindings/als/` | Ambient light (ams **TSL2540** on i2c). Android does not expose it AT ALL — `dumpsys sensorservice` reports an empty list, nothing under `/sys/class/sensors`, no input device; it is visible only on the raw i2c bus, the same shape as the mute LED being on a different GPIO than the vendor HAL believed. Resolved **by name, not address** (`0-0039` is an enumeration accident). **The bus listing is not a hardware inventory**: both ALS names are registered by Amazon's board file, so a `tsl2540` at 0x39 and a `tsl2584tsv` at 0x29 appear on every unit whatever is soldered on (`modalias` is static kernel data). Which one answers differs by batch — ours have the 2540 and nothing at 0x29 (`taos_probe() err = -6`, ENXIO), the `G090LF096` batch has the 2584 instead, reachable only through IIO at `/sys/bus/iio/devices/iio:device0` (#90). A second-sourced part, not a driver fault, so the answer is to read the IIO sensor too, never to loosen the match to a `tsl` prefix. The **boot log is the real inventory** — both drivers probe on every unit and log what replied — but `dmesg` rolls, so it needs reading soon after a reboot. Never `unbind` the driver to experiment: it succeeds, leaves the `als_*` attributes in place, and the next read hangs the device until a power cycle. **Polled every 5s, not every 1s, and the reason is the kernel log rather than the syscalls.** The driver prints a line on every read under its darkness threshold (`tsl2540_get_lux: darkness (0 <= 10)`), so a 1Hz poll is ~86,000 kernel lines a day — and it only fires in the dark, so it runs all night, which is exactly when a device sits idle and a crash most needs explaining. Measured on EFF 2026-09-04: the whole log ring was that one line and `messages.last` had reached 609KB. The cost is not disk — MediaTek's ram_console is the ONLY crash channel this kernel has and it is a fixed-size ring we do not control, so anything filling it evicts the evidence. `MinInterval` already refuses to report more often than every 2s, so 1Hz was finer than the reporting floor it feeds; if #296 ever wants faster, make the poll adaptive rather than paying a permanent flood. `Lux()` returns **nil, never 0** — a covered sensor reads a genuine 0. `Watch` reports a step change immediately (25% relative, 10-lux floor, measured noise ±1.5%); the steady value rides the ~30s stats tick. `Report()` says **why** there is no sensor (`ok`/`no_chip`/`no_attribute`/`unknown`, plus every i2c name it saw) and rides the register message as `ambient_light_status` — absence used to be logged only to the device's own stdout, which support bundles do not collect, so two users could not be told apart without a shell session (#90). The whole bus is enumerated **before** matching: returning at the match truncated the list on working devices, which is exactly the side you compare against |
 | `internal/bindings/jack/` | Headphone jack detect (`/sys/class/switch/h2w`, mediatek accdet). Polled, not evented — the ACCDET input node reports no keys on this hardware. `Watch` dispatches the state it STARTS in as well as every change: accdet is edge-triggered and a boot has no edge, so a device booted with a cable in got no correction at all. The callback (`PcmSpeaker.SetJackRouting`) owns both positions — the amp switch, and the `HP Driver Gain Volume` that accdet drops to the floor of its range on insert and nothing used to raise. Output *destination* is still physical, done by the jack's own switch contacts, so no mux layer should be driven — but level is ours |
 | `internal/wifi/` | Safe WiFi network change with auto-rollback (wifi_change/wifi_commit/wifi_scan control messages; pending-marker recovery at startup). Reload path is `svc wifi disable/enable` ONLY — see package comment for the hardware-proven constraints. **An SSID is 0–32 arbitrary BYTES and is handled as bytes** (`ssid.go`): decoded from wpa_cli's printf_encode, carried as `ssid_hex`, compared as bytes, and written quoted when wpa_supplicant's quoted form can hold it (it reads to the LAST `"`, so quotes and backslashes are literal) or as hex when not. Until 2026-09-19 every path refused `"` and `\`, trimmed spaces, and wrote escaped text back as a different network — and the emOS wizard put SSIDs into a shell command |
 | `internal/bluetooth/` | BLE proxy — raw HCI passive scan over `/dev/stpbt` (single-owner, so Android's Bluedroid is durably `pm disable`d first), parsed into adverts and forwarded to the controller. `emit.go` decides which of them are worth sending; see "The BLE proxy" below, and read it before changing the scan cadence or the filtering |
 | `pkg/led/`, `pkg/mic/`, `pkg/speaker/`, `pkg/buttons/` | Hardware abstractions (interfaces) |
+
+## Private listening (the default since 2026-09-21)
+
+**The spec is `docs/listening.md`; this is what the firmware does to meet it.**
+Under `owwOnDevice=on`, against a controller announcing `listen_session`, with
+a scorer loaded, the device is `local`: the always-on wake stream still runs
+and feeds the scorer, and **nothing is sent**. A crossing opens a session in
+`internal/listen.Gate`; the audio captured after the crossing frame goes up as
+`0x07` frames tagged with the session until the controller's `listen_close`
+(end of speech) or a device-side limit. `listen.Resolve` is the whole state
+decision and `syncListenState` reports it as `listen_state` on every config
+push and every connect.
+
+- **The limits are the device's, not the controller's.** No `listen_ack`
+  within 3s closes the session; nothing outlives 30s; mute, `StopMic` and a
+  data-link drop close it. A controller that crashes mid-command must not
+  leave an Echo streaming, and that can only be guaranteed at this end.
+- **Missing scorer is `degraded`, never `stream`.** The button still works
+  (lock_mic turns are untouched); the wake stream sends nothing. Falling back
+  to streaming would make the dashboard's privacy statement false without
+  anyone choosing it. The controller's `effective_mode` has the matching rule:
+  it no longer degrades an `oww_local_only` device to "off".
+- **One timestamp per frame, taken once**, handed to both `PushBytesAt` and
+  `Gate.Push`. The scorer reports the CAPTURE time of the crossing frame, not
+  when inference finished (its queue holds up to 640ms), and the session
+  starts with every ringed frame captured after it. Two clocks would
+  duplicate or drop the first word.
+- **A crossing inside an open session is words, not a wake** — `Gate.Open`
+  refuses and `onWakeCrossing` drops it.
+- **`mic_stop` does not stop local listening, and does not end sessions.**
+  It ends a lock_mic turn and hands straight back to the wake stream, which is
+  what hears a barge-in over the reply. Sessions end only by id
+  (`listen_close`): mic_stop carries none, and one crossing a barge-in's
+  `oww_wake` on the wire would close the session the controller is about to
+  take. `mic_start` with lock_mic
+  REPLACES the wake stream rather than being refused as "already active",
+  which is what the button and HA follow-up questions rely on.
+- **The barge bar applies to music too** (`speakerPlaying`), mirroring the
+  controller's wake-over-music rule, and at that bar the scorer needs **two
+  consecutive frames** — em_barge.decide's rule, now on the device because a
+  private Echo sends the controller nothing to decide over.
+- **Older controllers keep the old behaviour.** Without `listen_session` the
+  state is `stream` in every mode, because an old controller only acts on a
+  device wake when stream frames are arriving.
 
 ## On-device wake word (shadow mode)
 
@@ -232,12 +277,11 @@ handler would be a second copy of the most delicate sequence in the controller.
   existing reader's `wakeword` prefix — including `_persist_turn`'s shadow
   block.
 
-**Arbitration is NOT yet corrected for this.** `_wake_arbiter.claim` still
-compares arrival order, so on a multi-device fleet a device can lose a 700ms
-window because its claim was late and the wrong room answers. The fix is to
-compare RTT-corrected times, never revoke a granted claim (that cuts a turn
-already speaking), and hold the window longer than it is measured. Single-device
-use is unaffected — solo fleets skip the window entirely.
+**Arbitration compares capture times** (since 2026-09-21): each claim carries
+`heard_at` (arrival − `ageMs` − half the smoothed RTT), a claim heard within
+the window of the winner's cedes whenever it arrives, the winner is held for
+the window plus the fleet's worst RTO (capped 3s), and a granted claim is never
+revoked. See `em_arbiter` and docs/listening.md.
 
 **Shadow mode scores and reports; it never acts.** It exists to answer whether
 on-device detection is good enough to trust, by comparing both detectors on the
@@ -371,10 +415,10 @@ The first attempt stood the device down to controller-side scoring while the
 model installed. That works and was rejected: it silently overrides a setting
 the user chose, and the dashboard goes on reporting `owwOnDevice: on` — the
 same "reports healthy while something else is true" shape the capability rule
-exists to forbid. Note there is no privacy difference between the two modes
-(the device streams the wake audio either way, and the controller scores it in
-`on` mode too — that is what `turns.ctrl_wake_score` records), but a silent
-override is a trust problem regardless.
+exists to forbid. On firmware from before private listening there is no
+privacy difference between the modes (it streams either way); on current
+firmware there is all the difference, which makes a silent override to
+streaming the worst version of this.
 
 Only devices that actually score locally are held back — with
 `owwOnDevice=off` the file is irrelevant, so the change stays instant. Both the

@@ -55,6 +55,9 @@ type controlMessage struct {
 	// has DNS for an NTP pool. Absent from older controllers, which correctly
 	// reads as "no opinion" — see clock.ShouldStep.
 	TimeMs int64 `json:"time_ms,omitempty"`
+	// Session is the private-listening session a listen_ack or listen_close
+	// refers to (docs/listening.md).
+	Session uint32 `json:"session,omitempty"`
 }
 
 // ─── Callbacks ────────────────────────────────────────────────────────────────
@@ -75,6 +78,9 @@ type StateCallback func()
 type ConfigAppliedCallback func(msg config.ConfigMessage)
 type VolumeSetCallback func(level int)
 type BeamLockCallback func(lock bool)
+
+// ListenCallback receives listen_ack / listen_close, by type.
+type ListenCallback func(kind string, session uint32)
 
 // WifiChangeCallback receives a wifi_change request, with the SSID as its exact
 // bytes (see internal/wifi/ssid.go). It must return
@@ -103,6 +109,7 @@ type ControlClient struct {
 	wifiChangeCallback    WifiChangeCallback
 	wifiCommitCallback    StateCallback
 	wifiScanCallback      StateCallback
+	listenCallback        ListenCallback
 
 	conn   *websocket.Conn
 	connMu sync.Mutex
@@ -143,6 +150,7 @@ func NewControlClient(
 }
 
 func (c *ControlClient) OnLEDAnim(cb LEDAnimCallback)             { c.ledAnimCallback = cb }
+func (c *ControlClient) OnListen(cb ListenCallback)               { c.listenCallback = cb }
 func (c *ControlClient) OnDisconnected(cb StateCallback)          { c.disconnectedCallback = cb }
 func (c *ControlClient) OnConnected(cb StateCallback)             { c.connectedCallback = cb }
 func (c *ControlClient) OnPending(cb StateCallback)               { c.pendingCallback = cb }
@@ -824,6 +832,15 @@ func (c *ControlClient) connect(ctx context.Context, server *discovery.ServerInf
 				c.wifiScanCallback()
 			}
 
+		// Private-listening sessions (docs/listening.md). A message about a
+		// session that is not the open one is ignored further down, by the
+		// gate: it is a late message about a session already gone.
+		case "listen_ack", "listen_close":
+			var msg controlMessage
+			if err := json.Unmarshal(raw, &msg); err == nil && msg.Session != 0 && c.listenCallback != nil {
+				c.listenCallback(peek.Type, msg.Session)
+			}
+
 		case "speaker_flush":
 			// Barge-in: controller detected the wake word during TTS
 			// playback and wants the buffered audio cut immediately.
@@ -1077,9 +1094,15 @@ func capabilities() []string {
 	// "is it" split as oww_shadow against shadow.active, and for the same
 	// reason: proving ch8 is a loopback needs the speaker to have played,
 	// which has not happened at registration.
+	//
+	// "oww_local_only": this firmware can listen privately — score locally
+	// and send nothing until its own wake word fires (docs/listening.md).
+	// Whether it IS doing so is listen_state, for the aec_hw_ref reason: it
+	// depends on the scorer loading and on the controller's features, neither
+	// known at registration.
 	caps := []string{"mic", "speaker", "leds", "led_anim", "buttons",
 		"oww_shadow", "oww_trigger", "button_hold", "audio_mix",
-		"aec_hw_ref"}
+		"aec_hw_ref", "oww_local_only"}
 	if als.Present() {
 		caps = append(caps, "ambient_light")
 	}
@@ -1229,12 +1252,46 @@ func (c *ControlClient) SendOwwShadowCross(score float32, ageMs int64) {
 // for the same reason as shadow crossings: an Echo's wall clock is unreliable
 // before NTP. The controller needs it to compare claims across devices without
 // network delay deciding which room answers.
-func (c *ControlClient) SendOwwWake(score, threshold float32, ageMs int64) {
-	_ = c.writeJSON(map[string]interface{}{
+//
+// Under private listening the wake also opened `session`, whose audio follows
+// on the data plane as frameTypeListen, and carries the room's noise floor
+// (the controller can no longer measure it from a stream it does not get) and
+// whether the speaker was playing, which is what makes it a barge-in. Session
+// 0 means no session: the device is streaming, and those fields are omitted.
+func (c *ControlClient) SendOwwWake(score, threshold float32, ageMs int64,
+	session uint32, floor float64, barge bool) {
+	msg := map[string]interface{}{
 		"type":      "oww_wake",
 		"score":     score,
 		"threshold": threshold,
 		"ageMs":     ageMs,
+	}
+	if session != 0 {
+		msg["session"] = session
+		msg["floor"] = floor
+		msg["barge"] = barge
+	}
+	_ = c.writeJSON(msg)
+}
+
+// SendListenState reports what the device is actually doing with its wake
+// stream — the "is it" to oww_local_only's "could it". Sent on every change
+// and after every ack, since the controller keeps no memory of it across a
+// reconnect.
+func (c *ControlClient) SendListenState(state, reason string) error {
+	msg := map[string]interface{}{"type": "listen_state", "state": state}
+	if reason != "" {
+		msg["reason"] = reason
+	}
+	return c.writeJSON(msg)
+}
+
+// SendListenEnd reports a session the device closed without being told to.
+func (c *ControlClient) SendListenEnd(session uint32, reason string) {
+	_ = c.writeJSON(map[string]interface{}{
+		"type":    "listen_end",
+		"session": session,
+		"reason":  reason,
 	})
 }
 
@@ -1266,6 +1323,14 @@ func (c *ControlClient) HasFeature(name string) bool {
 // controller ignores unknown frame types and would drop every advert in
 // silence.
 const FeatureBleAdvertsData = "ble_adverts_data"
+
+// FeatureListenSession is announced by a controller that understands
+// private-listening sessions: listen_state, session-tagged oww_wake, the
+// frameTypeListen audio frame, and the listen_* replies. Without it the device
+// keeps streaming, because an older controller only acts on a device wake when
+// wake-stream frames are arriving — a device that went quiet on it would be
+// deaf.
+const FeatureListenSession = "listen_session"
 
 // SendBleAdverts forwards a batch of BLE advertisements to the controller
 // (bluetooth_proxy path). adverts is marshalled as-is — []bluetooth.Advert,

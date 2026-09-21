@@ -316,3 +316,20 @@ def test_absurd_wake_age_is_clamped_and_then_dropped():
     wake, age = p.take(at_now=1000.0)
     assert wake is None
     assert age == pytest.approx(em_shadow.MAX_AGE_S)
+
+
+def test_a_private_listener_is_never_degraded_into_streaming():
+    """docs/listening.md: a device that can listen privately and is missing
+    its model stays "on" and reports itself degraded. Falling back to "off"
+    would have the controller score a stream the operator chose not to send."""
+    assert em_shadow.effective_mode(
+        "on", trigger_capable=True, model_ready=False, local_capable=True
+    ) == em_shadow.MODE_ON
+    # Older firmware keeps the old rule: it streams in every mode anyway.
+    assert em_shadow.effective_mode(
+        "on", trigger_capable=True, model_ready=False
+    ) == em_shadow.MODE_OFF
+    # And "off" is always "off".
+    assert em_shadow.effective_mode(
+        "off", trigger_capable=True, local_capable=True
+    ) == em_shadow.MODE_OFF

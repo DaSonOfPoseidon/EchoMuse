@@ -14,6 +14,7 @@ import (
 	"github.com/wilbowes/EchoMuse/internal/aec"
 	"github.com/wilbowes/EchoMuse/internal/beamformer"
 	"github.com/wilbowes/EchoMuse/internal/config"
+	"github.com/wilbowes/EchoMuse/internal/listen"
 	"github.com/wilbowes/EchoMuse/internal/processor"
 	"github.com/wilbowes/EchoMuse/internal/wakeword/shadow"
 	"github.com/wilbowes/EchoMuse/pkg/mic"
@@ -58,6 +59,27 @@ const (
 	// unnegotiated would drop every advertisement in silence — a worse fault
 	// than the one being fixed.
 	frameTypeBleAdverts = byte(0x06)
+	// frameTypeListen carries private-listening session audio:
+	// [0x07][session u32 BE][seq u16 BE][PCM]. Tagged so the controller can
+	// hold audio that beats its session's oww_wake across the two sockets, and
+	// drop audio for a session it has already closed. Only sent against a
+	// controller announcing listen_session; see docs/listening.md.
+	frameTypeListen = byte(0x07)
+)
+
+// Listen states, reported to the controller as listen_state. See
+// docs/listening.md, "States an Echo can be in".
+const (
+	// ListenStream is the always-on wake stream: every frame goes upstream.
+	// Controller mode, shadow, and any device that cannot listen privately
+	// against this controller.
+	ListenStream = listen.StateStream
+	// ListenLocal: scored here, nothing sent until a session opens.
+	ListenLocal = listen.StateLocal
+	// ListenDegraded: private listening was asked for and cannot run (no
+	// scorer). Nothing is sent; the button still works. Never falls back to
+	// streaming.
+	ListenDegraded = listen.StateDegraded
 )
 
 // ─── WebSocket keepalive (data + control) ─────────────────────────────────────
@@ -212,6 +234,14 @@ type DataClient struct {
 	shadowMu     sync.Mutex
 	shadowScorer *shadow.Scorer
 
+	// listenGate decides what of the wake stream may leave the device when
+	// listenState is ListenLocal. Always present; idle in the other states.
+	listenGate  *listen.Gate
+	listenState atomic.Value // string
+	// onListenEnd reports a session the device closed on its own (deadline,
+	// mute, link). Set once at wiring time.
+	onListenEnd func(listen.End)
+
 	// Hardware echo reference detection (#385). Ch8 of the mic capture is a
 	// loopback of the device's own playback on biscuit, arriving in the same
 	// TDM frame as the mic samples, which makes it a far-end reference that
@@ -253,14 +283,16 @@ type DataClient struct {
 // audio through untouched.
 func NewDataClient(deviceID string, microphone mic.Subscribable, spk speaker.Speaker, canceller *aec.Canceller) *DataClient {
 	d := &DataClient{
-		deviceID: deviceID,
-		mic:      microphone,
-		spk:      spk,
-		readyCh:  make(chan string, 1),
-		beam:     beamformer.New(),
-		proc:     processor.New(),
-		aec:      canceller,
+		deviceID:   deviceID,
+		mic:        microphone,
+		spk:        spk,
+		readyCh:    make(chan string, 1),
+		beam:       beamformer.New(),
+		proc:       processor.New(),
+		aec:        canceller,
+		listenGate: listen.New(0, 0, 0),
 	}
+	d.listenState.Store(ListenStream)
 	// Seeded from the env default so a device that never reaches a
 	// controller still honours EM_AEC_HW_REF; the first config push
 	// supersedes it (SetAecRefSource).
@@ -383,6 +415,62 @@ func (d *DataClient) ShadowScorer() *shadow.Scorer {
 	d.shadowMu.Lock()
 	defer d.shadowMu.Unlock()
 	return d.shadowScorer
+}
+
+// SetListenState switches between streaming, private listening and degraded.
+// Leaving ListenLocal closes any open session. Returns whether it changed.
+func (d *DataClient) SetListenState(state string) bool {
+	old, _ := d.listenState.Swap(state).(string)
+	if old == state {
+		return false
+	}
+	if old == ListenLocal {
+		d.endListen(d.listenGate.CloseAny(listen.ReasonStopped))
+	}
+	log.Printf("[listen] state %s -> %s", old, state)
+	return true
+}
+
+// ListenState is the state currently in force.
+func (d *DataClient) ListenState() string {
+	s, _ := d.listenState.Load().(string)
+	return s
+}
+
+// OnListenEnd registers the callback for sessions the device closes itself.
+func (d *DataClient) OnListenEnd(cb func(listen.End)) { d.onListenEnd = cb }
+
+// OpenListen opens a session for a wake whose crossing frame was captured at
+// crossAt. ok is false when not listening privately or a session is already
+// open — in the second case the wake is words inside an open session.
+func (d *DataClient) OpenListen(crossAt time.Time) (session uint32, ok bool) {
+	if d.ListenState() != ListenLocal {
+		return 0, false
+	}
+	return d.listenGate.Open(crossAt, time.Now())
+}
+
+// AckListen and CloseListen apply the controller's listen_ack / listen_close.
+// Both ignore a session that is not the open one.
+func (d *DataClient) AckListen(session uint32) bool   { return d.listenGate.Ack(session) }
+func (d *DataClient) CloseListen(session uint32) bool { return d.listenGate.Close(session) }
+
+// CloseAnyListen ends whatever session is open, reporting it.
+func (d *DataClient) CloseAnyListen(r listen.Reason) {
+	d.endListen(d.listenGate.CloseAny(r))
+}
+
+// ListenFloor is the room noise floor tracked by the gate (RMS, 0..1).
+func (d *DataClient) ListenFloor() float64 { return d.listenGate.Floor() }
+
+func (d *DataClient) endListen(e *listen.End) {
+	if e == nil {
+		return
+	}
+	log.Printf("[listen] session %d closed on the device: %s", e.Session, e.Reason)
+	if d.onListenEnd != nil {
+		d.onListenEnd(*e)
+	}
 }
 
 func (d *DataClient) OnDirectionChanged(cb func(angle float64)) {
@@ -535,6 +623,20 @@ func (d *DataClient) resumeMic() {
 }
 
 func (d *DataClient) StopMic() {
+	d.stopMic()
+	// A session cannot outlive the stream carrying it. After the unlock:
+	// reporting it writes to the control plane.
+	d.CloseAnyListen(listen.ReasonStopped)
+}
+
+// TurnStreamActive reports whether a bounded (lockMic) turn is streaming.
+func (d *DataClient) TurnStreamActive() bool {
+	d.micMu.Lock()
+	defer d.micMu.Unlock()
+	return d.micActive && d.micWantedLock
+}
+
+func (d *DataClient) stopMic() {
 	d.micMu.Lock()
 	defer d.micMu.Unlock()
 	// Cleared even when no stream is running, and that is the point: a
@@ -629,11 +731,17 @@ func (d *DataClient) connect(ctx context.Context, baseURL string) error {
 	// below.)
 	defer func() {
 		d.micMu.Lock()
-		if d.micActive && d.micConn == conn {
+		owned := d.micActive && d.micConn == conn
+		if owned {
 			close(d.micStopCh)
 			d.micActive = false
 		}
 		d.micMu.Unlock()
+		// A session's audio rode this connection; it cannot continue on the
+		// next one, whose first frames the controller would read as new.
+		if owned {
+			d.CloseAnyListen(listen.ReasonLink)
+		}
 
 		d.connMu.Lock()
 		if d.conn == conn {
@@ -848,12 +956,7 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 		sc.Reset()
 	}
 
-	sendFrame := func(payload []byte) {
-		frame := make([]byte, 3+len(payload))
-		frame[0] = frameTypeMic
-		binary.BigEndian.PutUint16(frame[1:3], seqNum)
-		seqNum++
-		copy(frame[3:], payload)
+	writeFrame := func(frame []byte) {
 		d.connMu.Lock()
 		conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 		err := conn.WriteMessage(websocket.BinaryMessage, frame)
@@ -865,6 +968,30 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 			// immediately instead of waiting out the read deadline.
 			conn.Close()
 		}
+	}
+	sendFrame := func(payload []byte) {
+		frame := make([]byte, 3+len(payload))
+		frame[0] = frameTypeMic
+		binary.BigEndian.PutUint16(frame[1:3], seqNum)
+		seqNum++
+		copy(frame[3:], payload)
+		writeFrame(frame)
+	}
+	// Session audio numbers its frames per session, from 0, so a gap inside
+	// one session is visible to the controller.
+	var listenSession uint32
+	var listenSeq uint16
+	sendListenFrame := func(session uint32, payload []byte) {
+		if session != listenSession {
+			listenSession, listenSeq = session, 0
+		}
+		frame := make([]byte, 7+len(payload))
+		frame[0] = frameTypeListen
+		binary.BigEndian.PutUint32(frame[1:5], session)
+		binary.BigEndian.PutUint16(frame[5:7], listenSeq)
+		listenSeq++
+		copy(frame[7:], payload)
+		writeFrame(frame)
 	}
 
 	// noSpeechTimer fires if speech is never detected within noSpeechTimeout
@@ -1063,8 +1190,12 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 				}
 			}
 
-			// Ungated wake stream: the always-on (!lockMic) stream sends
-			// every processed period, batched into 80ms chunks — no VAD
+			// The always-on (!lockMic) wake stream. Every processed period,
+			// batched into 80ms chunks, is scored locally when a scorer is
+			// loaded; what then leaves the device depends on listenState
+			// (docs/listening.md): in ListenStream every chunk is sent, in
+			// ListenLocal only an open session's audio, in ListenDegraded
+			// nothing. The scorer always sees the continuous stream — no VAD
 			// gate, no preroll, no end-of-speech sentinels. openwakeword
 			// is a streaming model whose internal mel-spectrogram buffer
 			// assumes continuous audio; feeding it VAD-gated bursts spliced
@@ -1078,20 +1209,39 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 			// gate below now serves only bounded lockMic turns.
 			if !lockMic {
 				buf = append(buf, mono...)
+				state := d.ListenState()
 				for len(buf) >= vadOwwChunkBytes {
-					// Score the SAME bytes on the SAME 80ms boundaries the
-					// controller receives, so a device/controller score
-					// difference can only be the engine and not the framing.
-					// PushBytes never blocks: it drops when the scorer is
-					// behind rather than delaying this loop, which reads
-					// 160ms ALSA batches out of a 160ms-deep ring.
-					// Re-read per frame: a config push can swap the scorer
-					// mid-stream, and the replaced one is closed.
-					if sc := d.ShadowScorer(); sc != nil {
-						sc.PushBytes(buf[:vadOwwChunkBytes])
-					}
-					sendFrame(buf[:vadOwwChunkBytes])
+					// One copy per frame, stamped once, shared by the scorer
+					// and the listen gate: the gate keeps frames in its ring,
+					// and a wake's session starts after the frame the scorer
+					// crossed on, which only works if both saw the same time.
+					chunk := make([]byte, vadOwwChunkBytes)
+					copy(chunk, buf[:vadOwwChunkBytes])
 					buf = buf[vadOwwChunkBytes:]
+					at := time.Now()
+					// Score the SAME bytes on the SAME 80ms boundaries the
+					// controller receives in stream mode, so a device/controller
+					// score difference can only be the engine, not the framing.
+					// Never blocks: it drops when the scorer is behind rather
+					// than delaying this loop, which reads 160ms ALSA batches
+					// out of a 160ms-deep ring. Re-read per frame: a config
+					// push can swap the scorer mid-stream and close the old one.
+					if sc := d.ShadowScorer(); sc != nil {
+						sc.PushBytesAt(chunk, at)
+					}
+					switch state {
+					case ListenLocal:
+						out, session, end := d.listenGate.Push(chunk, at)
+						d.endListen(end)
+						for _, f := range out {
+							sendListenFrame(session, f)
+						}
+					case ListenDegraded:
+						// Nothing leaves. The gate still tracks the floor.
+						d.listenGate.Push(chunk, at)
+					default:
+						sendFrame(chunk)
+					}
 				}
 				continue
 			}
