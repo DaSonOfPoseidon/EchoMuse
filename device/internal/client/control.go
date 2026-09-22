@@ -1114,9 +1114,15 @@ func capabilities() []string {
 	// Whether it IS doing so is listen_state, for the aec_hw_ref reason: it
 	// depends on the scorer loading and on the controller's features, neither
 	// known at registration.
+	//
+	// "output_chain": this firmware can run the speaker output chain (EQ,
+	// bass guard, limiter) itself, at the ALSA write. It runs it only when
+	// the controller's ack carries the same feature, which is the controller
+	// saying it has stopped: either half alone keeps the old path, and both
+	// together must never process the same audio twice.
 	caps := []string{"mic", "speaker", "leds", "led_anim", "buttons",
 		"oww_shadow", "oww_trigger", "button_hold", "audio_mix",
-		"aec_hw_ref", "oww_local_only"}
+		"aec_hw_ref", "oww_local_only", "output_chain"}
 	if als.Present() {
 		caps = append(caps, "ambient_light")
 	}
@@ -1359,6 +1365,11 @@ const FeatureBleAdvertsData = "ble_adverts_data"
 // wake-stream frames are arriving — a device that went quiet on it would be
 // deaf.
 const FeatureListenSession = "listen_session"
+
+// FeatureOutputChain is announced by a controller that sends this device's
+// audio UNPROCESSED and leaves EQ, bass guard and limiter to the device.
+// Absent, the controller is still processing and the device must not.
+const FeatureOutputChain = "output_chain"
 
 // SendBleAdverts forwards a batch of BLE advertisements to the controller
 // (bluetooth_proxy path). adverts is marshalled as-is — []bluetooth.Advert,

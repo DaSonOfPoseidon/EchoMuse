@@ -746,8 +746,16 @@ paced that far ahead of realtime, so processing happens when the audio is
 generated and the listener hears it a lead-time afterwards. Anyone A/B-ing must
 wait ~5s before judging; quick toggling reads as "nothing happened" because the
 old audio is still in the device buffer. Moving the chain onto the device is
-the only real fix and is filed as #243 — the same argument that forced ducking
-device-side.
+the only real fix (#243) — the same argument that forced ducking device-side —
+and it now exists: `device/internal/outchain`, negotiated as `output_chain` in
+BOTH directions. The device announces it; the controller announces it back on
+the ack and then sends that device's audio untouched (`em_eq.Passthrough`, gated
+on `Device.output_chain_on_device` at all three playback paths —
+`tests/test_output_chain_on_device.py` finds them by AST). A change there is
+heard within one period. **This Python is still the reference**: the Go is held
+bit-exact to vectors generated from it (`device/internal/outchain/testdata/`),
+and `tests/test_outchain_vectors.py` fails when the Python changes without the
+vectors being regenerated — carry the change to the Go in the same PR.
 
 **`bassGuardDb` barely moves the output, and the default hardly matters.**
 Measured 2026-08-19 on a 50Hz + 1kHz mix at ordinary level: across the whole

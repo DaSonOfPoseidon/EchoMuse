@@ -14,6 +14,7 @@ import (
 
 	"github.com/wilbowes/EchoMuse/internal/bindings/codec"
 	"github.com/wilbowes/EchoMuse/internal/bindings/mixer"
+	"github.com/wilbowes/EchoMuse/internal/outchain"
 
 	"github.com/Binozo/GoTinyAlsa/pkg/pcm"
 	"github.com/Binozo/GoTinyAlsa/pkg/tinyalsa"
@@ -88,6 +89,15 @@ type PcmSpeaker struct {
 	duckTarget atomic.Int32
 	mixer      Mixer
 
+	// chain is the output chain (EQ, bass guard, limiter), run on the MIX,
+	// after the duck and before the taps and the DAC. Inactive until the
+	// controller says it has stopped processing (SetOutputChainActive), so
+	// the chain never runs twice. chainBuf is where a silent period is
+	// processed while filter tails decay: silencePeriod is shared and must
+	// never be written.
+	chain    *outchain.Chain
+	chainBuf []byte
+
 	// echoTap, when non-nil, receives every period pumped to ALSA — real
 	// audio and silence alike — so an AEC reference stream advances in
 	// lockstep with the playback clock. Fixed at construction (silenceLoop
@@ -129,6 +139,8 @@ func NewPcmSpeaker(echoTap func([]byte), levelTap func(rms float64)) (*PcmSpeake
 		deadCh:   make(chan struct{}),
 		echoTap:  echoTap,
 		levelTap: levelTap,
+		chain:    outchain.New(48000),
+		chainBuf: make([]byte, periodBytes),
 	}
 	s.voice = newAudioStream(audioChanDepth, s.deadCh)
 	s.music = newAudioStream(audioChanDepth, s.deadCh)
@@ -375,8 +387,19 @@ func (p *PcmSpeaker) silenceLoop() {
 		}
 
 		out := p.mixer.Mix(voice, music, p.duckTarget.Load())
+		process := out != nil
 		if out == nil {
 			out = silencePeriod
+			if !p.chain.Idle() {
+				// Filter tails still ringing out of the last audio.
+				copy(p.chainBuf, silencePeriod)
+				out, process = p.chainBuf, true
+			}
+		}
+		if process {
+			if applied := p.chain.Process(out); applied != nil {
+				log.Printf("[speaker] output chain: %s", applied)
+			}
 		}
 
 		// Taps see the MIXED output, which is what the speaker actually
@@ -407,6 +430,13 @@ func (p *PcmSpeaker) report(st *StreamStats, plane string) {
 	if st == nil {
 		log.Printf("[speaker] UNDERRUN: %s channel drained mid-stream — injecting silence", plane)
 		return
+	}
+	if p.chain.Active() {
+		// What the chain DID over the stream, as em_eq.describe_activity
+		// reports it controller-side. Maxima since the last stream ended.
+		cs := p.chain.TakeStats()
+		log.Printf("[speaker] %s output chain: guard_reduction=%.2fdB limiter_reduction=%.2fdB clipped=%d/%d bypassed",
+			plane, cs.GuardReductionDb, cs.LimiterReductionDb, cs.Clipped, cs.ClippedBypassed)
 	}
 	log.Printf("[speaker] %s stream complete — returning to silence "+
 		"(periods=%d underruns=%d minDepth=%d primeWait=%dms recvSpan=%dms maxGap=%dms)",
@@ -465,6 +495,27 @@ func (p *PcmSpeaker) PumpMusic(data []byte) error {
 // it would land on exactly the moment the user started speaking.
 func (p *PcmSpeaker) SetDuck(db float64) {
 	p.duckTarget.Store(DuckGain(db))
+}
+
+// SetOutputChain sets the output chain's configuration; it lands on the next
+// period, keeping filter and limiter state, so a change mid-song is heard
+// within ~43ms and does not click.
+func (p *PcmSpeaker) SetOutputChain(params outchain.Params) { p.chain.SetParams(params) }
+
+// SetOutputChainActive hands the output chain to this device (true) or back
+// to the controller (false). Only the controller's `output_chain` feature
+// may turn it on: a controller that does not announce it is still
+// processing the audio itself, and the chain run twice doubles the EQ.
+func (p *PcmSpeaker) SetOutputChainActive(on bool) {
+	if on == p.chain.Active() {
+		return
+	}
+	where := "the controller"
+	if on {
+		where = "this device"
+	}
+	log.Printf("[speaker] output chain now runs on %s", where)
+	p.chain.SetActive(on)
 }
 
 // VoiceAudible reports whether a VOICE stream is audible: arriving, queued,

@@ -328,7 +328,12 @@ BLE_ADVERTS_TYPE   = 0x06
 # (docs/listening.md): listen_state, session-tagged oww_wake, 0x07 session
 # audio and the listen_* replies. A device goes quiet only when it sees this —
 # an older controller acts on a device wake only when stream frames arrive.
-CONTROLLER_FEATURES = ["ble_adverts_data", "listen_session"]
+#
+# "output_chain": this controller sends UNPROCESSED audio to a device that
+# announced the same capability, and leaves EQ, bass guard and limiter to it.
+# The device runs its chain only when it sees this, so neither half alone
+# changes anything and the two can never both process the same audio.
+CONTROLLER_FEATURES = ["ble_adverts_data", "listen_session", "output_chain"]
 SPEAKER_FRAME_TYPE = 0x02
 SPEAKER_EOS_TYPE   = 0x03
 MIC_HEADER_LEN     = 3   # [type][seq_hi][seq_lo]
@@ -906,6 +911,19 @@ class Device:
         behaviour.
         """
         return "audio_mix" in (self.capabilities or [])
+
+    @property
+    def output_chain_on_device(self) -> bool:
+        """
+        Whether this device runs EQ, bass guard and limiter itself, at its
+        ALSA write — in which case every playback path here sends the audio
+        untouched (em_eq.Passthrough).
+
+        On the device, a change is heard within one period. Here it could not
+        reach the ~5.5s already queued on the device, and the dashboard's EQ
+        was only ever "immediate" for audio not yet sent.
+        """
+        return "output_chain" in (self.capabilities or [])
 
     @property
     def timer_alarm_ringing(self) -> bool:
@@ -1822,17 +1840,21 @@ async def _run_post_turn_playback(device: Device, voice_response: bytes) -> None
     # call and can be asked what they actually did — see em_eq.describe_*.
     # One response is one buffer, so these are per-response instances and
     # carry no state between turns.
-    _limiter = _limiter_for(device)
-    _guard   = _guard_for(device)
+    on_device = device.output_chain_on_device
+    _limiter = None if on_device else _limiter_for(device)
+    _guard   = None if on_device else _guard_for(device)
     log.info(
         f"[{device.device_id}] Output chain: "
-        f"{em_eq.describe_chain(device.eq_bands, device.eq_loudness, _limiter, _guard)}"
+        + ("on the device" if on_device else
+           em_eq.describe_chain(device.eq_bands, device.eq_loudness, _limiter, _guard))
     )
     # EQ is a solid numpy crunch (hundreds of ms for a long response) — run
     # it off the event loop, which otherwise freezes every device's LED
     # frames, shell proxying, and WS handling right as playback starts
     # (observed as spinner stutter and console typing judder).
     def _prepare_pcm() -> bytes:
+        if on_device:
+            return voice_response
         return em_eq.apply(voice_response, SPEAKER_RATE, device.eq_bands,
                            device.eq_loudness, limiter=_limiter,
                            guard=_guard)
@@ -2208,17 +2230,21 @@ async def _run_streaming_post_turn_playback(device: Device, pcm_chunks) -> int:
     Closing any layer at an arbitrary network boundary would corrupt decoding,
     reset the EQ filters, or turn each chunk into a separate announcement.
     """
-    log.info(
-        f"[{device.device_id}] Streaming EQ: bands={device.eq_bands} "
-        f"loudness={device.eq_loudness}"
-    )
-    stream_eq = em_eq.StreamingEQ(
-        SPEAKER_RATE,
-        device.eq_bands,
-        device.eq_loudness,
-        limiter=_limiter_for(device),
-        guard=_guard_for(device),
-    )
+    if device.output_chain_on_device:
+        log.info(f"[{device.device_id}] Streaming EQ: on the device")
+        stream_eq = em_eq.Passthrough()
+    else:
+        log.info(
+            f"[{device.device_id}] Streaming EQ: bands={device.eq_bands} "
+            f"loudness={device.eq_loudness}"
+        )
+        stream_eq = em_eq.StreamingEQ(
+            SPEAKER_RATE,
+            device.eq_bands,
+            device.eq_loudness,
+            limiter=_limiter_for(device),
+            guard=_guard_for(device),
+        )
     # Registered BEFORE streaming starts, so a report that arrives while we
     # are still writing has a waiter to resolve. A fresh Event per playback
     # cannot carry a stale set from the previous response, which is what the

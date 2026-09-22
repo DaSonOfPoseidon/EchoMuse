@@ -360,6 +360,9 @@ func main() {
 			pulseCancel = nil
 		}
 		pulseKind = ""
+		// Who runs the output chain is decided by THIS controller's ack, and
+		// settled before any of its audio can arrive.
+		pcmSpeaker.SetOutputChainActive(controlClient.HasFeature(client.FeatureOutputChain))
 		// Session restored: the ring goes back to the controller, the mute
 		// ring reasserts below if it applies, and the buttons work again.
 		s.SetLinkDown(false)
@@ -411,6 +414,11 @@ func main() {
 	// the (partial) message so unmentioned fields keep their values.
 	controlClient.OnConfigApplied(func(msg config.ConfigMessage) {
 		applyHardwareConfig(msg)
+		// The merged config, not the partial message, for the reason given
+		// above. Active is re-read from the ack on every push: a reconnect
+		// can land on a controller that does not hand the chain over.
+		pcmSpeaker.SetOutputChain(config.Get().OutputChain())
+		pcmSpeaker.SetOutputChainActive(controlClient.HasFeature(client.FeatureOutputChain))
 		// startupVolume is the controller's persisted record of this
 		// device's volume (updated on every volume_state report) — restore
 		// it through the Server, not a raw tinymix write: SeedVolume keeps
