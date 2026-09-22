@@ -23,6 +23,18 @@ import (
 // cardNr/deviceNr live in pcmstatus.go so the host test can pin them against
 // the status path — this file is ARM-only (build tag `server`).
 const periodSize  = 2048
+
+// The hardware tier: what ALSA holds ahead of the DAC. It is sized ONLY for
+// this loop's scheduling lateness — WiFi is the deep queue's job — and every
+// frame of it is latency a duck cannot touch, since ducking happens as audio
+// leaves the deep queue. It was 4 x 2048 (171ms). Measured on VVV 2026-09-22
+// under music, wake scoring, the output chain and turns: the loop was never
+// more than 19ms late (worst gap 61.7ms against a 42.7ms period). 4 x 1024 is
+// 85ms. Each mixed period is written as two halves, so the mix cadence, the
+// stream units and the wire are all unchanged.
+const alsaPeriodSize = 1024
+const alsaPeriodCount = 4
+const alsaBufferFrames = alsaPeriodSize * alsaPeriodCount
 const periodBytes = periodSize * 2 * 2 // 2 channels * 2 bytes = 8192
 
 // The wire carries MONO 48kHz — PumpPeriod duplicates L=R before queueing.
@@ -178,12 +190,12 @@ func (p *PcmSpeaker) Init() error {
 	device := tinyalsa.NewDevice(cardNr, deviceNr, pcm.Config{
 		Channels:         2,
 		SampleRate:       48000,
-		PeriodSize:       periodSize,
-		PeriodCount:      4,
+		PeriodSize:       alsaPeriodSize,
+		PeriodCount:      alsaPeriodCount,
 		Format:           tinyalsa.PCM_FORMAT_S16_LE,
-		StartThreshold:   periodSize,
-		StopThreshold:    periodSize * 4,
-		SilenceThreshold: periodSize * 4,
+		StartThreshold:   alsaPeriodSize,
+		StopThreshold:    alsaBufferFrames,
+		SilenceThreshold: alsaBufferFrames,
 	})
 
 	session, err := device.NewAudioSession()
@@ -425,7 +437,7 @@ func (p *PcmSpeaker) silenceLoop() {
 		}
 		workDone = time.Now()
 		workStart := lastPump
-		if err := p.session.Pump(out); err != nil {
+		if err := p.pump(out); err != nil {
 			log.Printf("silenceLoop: pump error: %v", err)
 			return
 		}
@@ -446,10 +458,27 @@ func (p *PcmSpeaker) silenceLoop() {
 		if now.Sub(windowStart) >= time.Minute {
 			log.Printf("[speaker] write loop: max gap %.1fms, max work %.1fms over %d periods (period %.1fms, hw buffer %.0fms)",
 				float64(maxGap.Microseconds())/1000, float64(maxWork.Microseconds())/1000, periods,
-				float64(periodSize)*1000/48000, float64(periodSize*4)*1000/48000)
+				float64(periodSize)*1000/48000, float64(alsaBufferFrames)*1000/48000)
 			windowStart, maxGap, maxWork, periods = now, 0, 0, 0
 		}
 	}
+}
+
+// pump writes one mixed period to ALSA in hardware-period pieces, so the
+// buffer is topped up a hardware period at a time rather than waiting for
+// room for the whole mixed period — which would let it drain to half.
+func (p *PcmSpeaker) pump(out []byte) error {
+	const chunk = alsaPeriodSize * 4 // stereo S16
+	for off := 0; off < len(out); off += chunk {
+		end := off + chunk
+		if end > len(out) {
+			end = len(out)
+		}
+		if err := p.session.Pump(out[off:end]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // report logs and forwards a completed stream's stats. A nil st is an
@@ -593,7 +622,7 @@ func (p *PcmSpeaker) EndMusicStream() { p.music.endStream() }
 //      ~1.3s skip). The controller sends the EOS on the cancel path too, so
 //      the discard always terminates.
 //
-// Up to PeriodCount ALSA periods (~170ms) already handed to the hardware
+// Up to alsaBufferFrames (~85ms) already handed to the hardware
 // still play — cutting those needs a stream restart, which costs more in
 // click/pop than it saves.
 func (p *PcmSpeaker) Flush() { p.voice.flush() }

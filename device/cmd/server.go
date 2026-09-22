@@ -102,6 +102,10 @@ func main() {
 	s := server.NewServer(buttonController, microphone, pcmSpeaker)
 	srvPtr.Store(s)
 
+	// Local duck at the device's own wake crossing, confirmed or released by
+	// the controller's duck message (OnDuck below).
+	localDuck = speaker.NewLocalDuck(pcmSpeaker.SetDuck, speaker.LocalDuckHold)
+
 	buttonController.SetVolumeCallback(func(direction string) {
 		// Inert without a controller: nothing is playing to be louder or
 		// quieter, and showing the arc would acknowledge a device that
@@ -185,6 +189,9 @@ func main() {
 		case "listen_ack":
 			dataClient.AckListen(session)
 		case "listen_close":
+			// A session the controller closes before confirming a duck is a
+			// wake it did not take (ceded, or refused): un-duck the music.
+			localDuck.Cancel()
 			if dataClient.CloseListen(session) {
 				log.Printf("[listen] session %d closed by the controller", session)
 			}
@@ -201,6 +208,7 @@ func main() {
 		dataClient.StartMic(false)
 	})
 	dataClient.OnListenEnd(func(e listen.End) {
+		localDuck.Cancel()
 		controlClient.SendListenEnd(e.Session, string(e.Reason))
 	})
 
@@ -459,6 +467,7 @@ func main() {
 	// The depth is read at duck time rather than latched, so a config change
 	// takes effect on the next turn without a restart.
 	controlClient.OnDuck(func(on bool) {
+		localDuck.Confirm()
 		if on {
 			pcmSpeaker.SetDuck(config.Get().DuckDb)
 		} else {
@@ -1173,6 +1182,9 @@ func actsOnCrossings(mode string) string {
 // the audio after the wake word is already on its way when the controller
 // reads the wake. A crossing while a session is open is words inside it, not a
 // new wake, and is dropped.
+// localDuck is set in main before any wake can cross.
+var localDuck *speaker.LocalDuck
+
 func onWakeCrossing(cc *client.ControlClient, dc *client.DataClient,
 	spk *speaker.PcmSpeaker, srv *server.Server,
 	score, crossed float32, at time.Time) {
@@ -1217,6 +1229,11 @@ func onWakeCrossing(cc *client.ControlClient, dc *client.DataClient,
 				srv.StartAnim(spec)
 			}
 		}
+	}
+	// Duck with the ring, not a round trip later. Music only: a reply being
+	// barged over is cut by the controller's speaker_flush, not ducked.
+	if spk != nil && localDuck != nil && spk.MusicAudible(0) {
+		localDuck.Start(config.Get().DuckDb)
 	}
 	barge := spk != nil && spk.VoiceAudible(wakeword.ScoreSpan)
 	cc.SendOwwWake(score, crossed, at, session, dc.ListenFloor(), barge)
