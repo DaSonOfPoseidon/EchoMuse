@@ -4409,12 +4409,12 @@ async def reconcile_oww_assets(device_id: str, live) -> None:
     effective = await loop.run_in_executor(
         None, db.get_effective_device_config, device_id
     )
-    # With owwOnDevice=off the controller does the scoring and what is on the
-    # device is irrelevant — the common case, and it costs nothing here.
-    if em_shadow.normalise_mode(effective.get("owwOnDevice")) == em_shadow.MODE_OFF:
-        return
+    # Firmware that cannot load a runtime can use none of this. The wake word
+    # MODE is deliberately not checked: every device carries the full set, so
+    # a mode switch never waits on an install (em_oww_assets.reconcile_action).
     if not live.oww_shadow_capable:
         return
+    mode_off = em_shadow.normalise_mode(effective.get("owwOnDevice")) == em_shadow.MODE_OFF
 
     desired, _ = em_oww_assets.desired_assets(_oww_wanted_models(device_id))
     try:
@@ -4425,19 +4425,19 @@ async def reconcile_oww_assets(device_id: str, live) -> None:
         return
 
     missing = em_oww_assets.missing_selected_classifier(desired, state["installed"])
-    if missing is None:
-        live.oww_model_ready = True
+    gaps = em_oww_assets.missing_assets(desired, state["installed"])
+    action = em_oww_assets.reconcile_action(mode_off, missing, gaps)
+    if action != "degrade":
+        live.oww_model_ready = missing is None
         live.oww_on_device = em_shadow.effective_mode(
             effective.get("owwOnDevice"), live.oww_trigger_capable,
-            model_ready=True,
+            model_ready=missing is None,
             local_capable=live.oww_local_capable,
         )
-        # The device can score TODAY, so nothing is degraded and no warning is
-        # owed — but it may still be short of the other stock classifiers, in
-        # which case selecting one of them tomorrow is the deaf device this
-        # whole path exists to prevent. Repair quietly; see missing_assets.
-        gaps = em_oww_assets.missing_assets(desired, state["installed"])
-        if gaps:
+        # Nothing is deaf, so no warning is owed — but anything missing is a
+        # device that cannot switch mode, change wake word or gate on Silero
+        # tomorrow. Repair quietly; see missing_assets.
+        if action == "repair":
             log.info(f"[api] [{device_id}] oww reconcile: {len(gaps)} asset(s) "
                      f"missing ({', '.join(gaps)}) — installing")
             try:

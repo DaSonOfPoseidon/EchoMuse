@@ -470,3 +470,43 @@ def test_the_image_builds_the_model_where_the_plan_looks():
     from pathlib import Path
     df = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text()
     assert f"COPY --from=silero /silero_vad.onnx {A.RUNTIME_DIR}/{A.VAD_NAME}" in df
+
+
+# ── Reconcile: every device carries the full set, whatever its mode ──────────
+
+@pytest.mark.parametrize("mode_off", [False, True])
+def test_a_complete_device_needs_nothing(mode_off):
+    assert A.reconcile_action(mode_off, None, []) == "none"
+
+
+@pytest.mark.parametrize("mode_off", [False, True])
+def test_gaps_are_repaired_in_either_mode(mode_off):
+    """The mode never decides WHETHER a device is repaired: one on the
+    controller's wake word must already hold what switching needs, and the
+    speech gate uses the VAD model in both."""
+    assert A.reconcile_action(mode_off, None, [A.VAD_NAME]) == "repair"
+
+
+def test_a_locally_scoring_device_without_its_model_is_stood_down_first():
+    assert A.reconcile_action(False, "hey_jarvis_v0.1.onnx", ["hey_jarvis_v0.1.onnx"]) == "degrade"
+
+
+def test_a_controller_scoring_device_without_its_model_is_only_repaired():
+    """Nobody to stand down: the controller is already scoring for it."""
+    assert A.reconcile_action(True, "hey_jarvis_v0.1.onnx", ["hey_jarvis_v0.1.onnx"]) == "repair"
+
+
+def test_the_connect_reconcile_is_not_gated_on_the_wake_word_mode():
+    """It returned early under owwOnDevice=off until 2026-09-22, so a device on
+    the controller's wake word never got the runtime or the speech gate's
+    model, and could not switch mode without an install first."""
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "em_api.py").read_text()
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == "reconcile_oww_assets")
+    for node in ast.walk(fn):
+        if isinstance(node, ast.If) and "MODE_OFF" in ast.unparse(node.test):
+            assert not any(isinstance(b, ast.Return) for b in node.body), (
+                "reconcile_oww_assets returns early on the wake word mode")
+    assert "reconcile_action(" in ast.unparse(fn)

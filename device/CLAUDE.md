@@ -573,8 +573,9 @@ enabled it and nothing happened" this removes.
   never evictable; a device without it gates on RMS as before, and picks it up
   on the next turn once installed, no restart. Measured on VVV: 9.2% of one
   core at 12.5 frames/s continuous, p50 6.9ms; it only runs while a turn is
-  open. Note assets only reconcile under `owwOnDevice` on/shadow, so a device
-  on the controller's wake word keeps the RMS gate.
+  open. Every device carries the full asset set whatever its wake word mode
+  (controller `reconcile_action`), so this reaches controller-scoring devices
+  too, on their next connect.
 
 ## The external audio jack
 

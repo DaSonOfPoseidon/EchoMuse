@@ -396,6 +396,32 @@ def missing_assets(desired: list[Asset],
             if (actual.get(a.name) or (None,))[0] != a.md5]
 
 
+def reconcile_action(mode_off: bool, selected_missing: str | None,
+                     gaps: list[str]) -> str:
+    """
+    What the connect-time reconcile does with a device whose inventory it has
+    read. One of "none", "repair" or "degrade".
+
+    Every device carries the full set whatever its wake word mode (Wil,
+    2026-09-22: "either could be switched to the other mode and should be
+    already in a state to accommodate the switch"). So the mode never decides
+    WHETHER assets are repaired — a device on the controller's wake word is
+    repaired exactly like one scoring locally, and switching it later never
+    waits on an install. The mode decides only one thing: a device scoring
+    locally whose selected classifier is missing is DEAF, so it is stood down
+    to controller scoring first ("degrade"). With the controller already
+    scoring there is nobody to stand down, and it is just a repair.
+
+    The speech gate's model rides the same set, which is what made the old
+    mode gate wrong: it is used on every device regardless of mode.
+    """
+    if selected_missing is not None and not mode_off:
+        return "degrade"
+    if selected_missing is not None or gaps:
+        return "repair"
+    return "none"
+
+
 def parse_free_mb(df_line: str) -> int | None:
     """
     Free megabytes from a `busybox df -m` data line.
