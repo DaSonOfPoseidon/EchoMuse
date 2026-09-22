@@ -251,6 +251,29 @@ def heard_at(arrived: float, age_ms, srtt_ms) -> float:
     return arrived - age - one_way
 
 
+class Frame(bytes):
+    """
+    Stream mic audio stamped with when it arrived, in the loop's clock.
+
+    A controller-scored wake is heard when its frame ARRIVED, not when
+    inference on it finished: the frame can wait behind a backlog in
+    mic_queue (up to 5s) and the executor. Timing the claim at the crossing
+    put that wait into every arbitration against an Echo that reports its
+    own capture age, and the wait grows with the fleet. A bytes subclass so
+    every other reader of the queues is unchanged.
+    """
+
+    def __new__(cls, data: bytes, arrived: float):
+        f = super().__new__(cls, data)
+        f.arrived = arrived
+        return f
+
+
+def arrival(payload, default: float) -> float:
+    """When `payload` arrived; `default` for audio that was never stamped."""
+    return getattr(payload, "arrived", default)
+
+
 def arbitration_slack(rto_ms_values) -> float:
     """
     How long past its window a claim is held, so a claim delayed in flight

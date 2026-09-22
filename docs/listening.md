@@ -176,12 +176,18 @@ First to **hear** wins, not first to arrive. Each claim carries the time its
 audio was captured, in the controller's clock:
 
 - a wake the Echo detected: arrival − `ageMs` − half the Echo's smoothed RTT;
-- a wake the controller scored: when it was scored − half the Echo's smoothed
-  RTT.
+- a wake the controller scored: when the frame that crossed **arrived** − half
+  the Echo's smoothed RTT.
 
 The RTT is the control-plane round trip, smoothed as TCP does (RFC 6298) — the
-only one measured. Queue delay inside the controller is not subtracted; it is
-the same for every Echo and small beside the link.
+only one measured. A controller-scored wake is dated from its frame's arrival,
+not from the end of inference: a frame can wait behind a backlog in the
+controller's queue (up to 5s) and in the scorer, that wait grows with the
+number of streaming Echoes, and an Echo that wakes itself has none of it — so
+timing the claim at the crossing made a mixed fleet answer one utterance
+twice. What remains uncorrected is the Echo's send batching, at most one 80 ms
+frame, well inside `wakeArbitrationMs`. The wake log line reports how long
+after arrival each controller-scored wake was scored.
 
 A claim cedes if it was heard within `wakeArbitrationMs` of the current
 winner's, whenever it arrives. So a slow link can no longer turn a near Echo's

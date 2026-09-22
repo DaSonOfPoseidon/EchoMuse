@@ -1638,6 +1638,7 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
                 # across it are not consecutive for either two-frame rule
                 continue
             buf.extend(payload)
+            arrived = em_listen.arrival(payload, loop.time())
             while len(buf) >= CHUNK_BYTES:
                 frame = bytes(buf[:CHUNK_BYTES])
                 del buf[:CHUNK_BYTES]
@@ -1723,11 +1724,11 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
                     serves = esphome.can_serve_turn(device.device_id)
                     won_by = device.device_id
                     if serves and device.wake_arb_ms > 0 and len(_devices) > 1:
-                        # Scored here on arrival, so heard one link delay ago.
+                        # Heard one link delay before its frame arrived.
                         won_by = _wake_arbiter.claim(
                             device.device_id, device.wake_arb_ms / 1000.0,
                             heard_at=em_listen.heard_at(
-                                loop.time(), 0, device.rtt_est.srtt),
+                                arrived, 0, device.rtt_est.srtt),
                             slack_s=_arbitration_slack(),
                         )
                     device.barge_ceded = (not serves) or won_by != device.device_id
@@ -3208,6 +3209,8 @@ async def _stream_listen(device: Device):
                 continue
 
             buf.extend(payload)
+            # The chunk scored below is completed by this payload.
+            arrived = em_listen.arrival(payload, loop.time())
             while len(buf) >= CHUNK_BYTES:
                 frame   = bytes(buf[:CHUNK_BYTES])
                 del buf[:CHUNK_BYTES]
@@ -3373,7 +3376,10 @@ async def _stream_listen(device: Device):
                         f"[{device.device_id}] Wake word detected "
                         f"(source={source}, score={score:.3f}, "
                         f"threshold={eff_threshold:.3f}, "
-                        f"rms={rms:.4f}, floor={device.noise_floor:.4f})"
+                        f"rms={rms:.4f}, floor={device.noise_floor:.4f}"
+                        + (f", scored {(loop.time() - arrived) * 1000:.0f}ms "
+                           f"after arrival" if source == "controller" else "")
+                        + ")"
                     )
                     db.log_device(
                         device.device_id, "info", "device",
@@ -3478,17 +3484,19 @@ async def _stream_listen(device: Device):
                             # full window on EVERY wake (~364ms measured)
                             # even when no other device was contending.
                             # Capture time, not arrival (docs/listening.md):
-                            # a device wake reports its age, and either kind
-                            # crossed the link once before reaching here.
-                            age_ms = (
-                                (em_shadow.now() - dev_wake["at"]) * 1000.0
-                                if source == "device" else 0
-                            )
+                            # a device wake reports its age; ours dates from
+                            # the frame's arrival, not the end of inference.
+                            # Either kind crossed the link once.
+                            if source == "device":
+                                seen_at = loop.time()
+                                age_ms = (em_shadow.now() - dev_wake["at"]) * 1000.0
+                            else:
+                                seen_at, age_ms = arrived, 0
                             won_by = _wake_arbiter.claim(
                                 device.device_id,
                                 device.wake_arb_ms / 1000.0,
                                 heard_at=em_listen.heard_at(
-                                    loop.time(), age_ms, device.rtt_est.srtt),
+                                    seen_at, age_ms, device.rtt_est.srtt),
                                 slack_s=_arbitration_slack(),
                             )
                         if not serves or won_by != device.device_id:
@@ -4825,7 +4833,8 @@ async def handle_data(ws: WebSocketServerProtocol, secure: bool = False):
                     except asyncio.QueueFull:
                         log.error(f"[{device.device_id}] VAD sentinel lost — queue still full after drain")
                     continue
-                payload = raw[MIC_HEADER_LEN:]
+                payload = em_listen.Frame(raw[MIC_HEADER_LEN:],
+                                          asyncio.get_event_loop().time())
                 q = device.voice_queue if device.oww_paused.is_set() else device.mic_queue
                 try:
                     q.put_nowait(payload)

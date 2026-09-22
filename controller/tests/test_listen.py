@@ -159,3 +159,17 @@ def test_parse_wake_refuses_what_it_cannot_act_on():
 def test_parse_wake_tolerates_missing_optionals():
     ev = L.parse_wake({"session": 2, "score": 0.9}, 1.0)
     assert ev["floor"] is None and ev["threshold"] is None and ev["age_ms"] == 0
+
+
+def test_frame_is_bytes_to_every_other_reader():
+    f = L.Frame(b"\x01\x02\x03\x04", 12.5)
+    assert f == b"\x01\x02\x03\x04" and isinstance(f, bytes)
+    assert not isinstance(f, str)          # queue sentinels are str
+    buf = bytearray(); buf.extend(f)
+    assert bytes(buf[:2]) == b"\x01\x02"
+    assert L.arrival(f, 99.0) == 12.5
+
+
+def test_unstamped_audio_arrives_now():
+    assert L.arrival(b"\x00\x00", 99.0) == 99.0
+    assert L.arrival("listen_mode", 99.0) == 99.0

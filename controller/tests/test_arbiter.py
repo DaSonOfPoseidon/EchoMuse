@@ -156,3 +156,36 @@ def test_separate_utterance_heard_outside_the_window_wins():
         arb.claim("office", WINDOW, heard_at=t - 1.0, slack_s=3.0)
         return arb.claim("lounge", WINDOW, heard_at=t, slack_s=3.0)
     assert run(main()) == "lounge"
+
+
+# ── a mixed fleet: one Echo wakes itself, one is scored here ────────────────
+
+def _mixed_pair(stamp_from_arrival: bool) -> str:
+    """Office wakes on the Echo; Lounge streams and is scored here, behind a
+    backlog. Both heard the same utterance at the same instant."""
+    import em_listen
+
+    async def main():
+        arb = WakeArbiter()
+        loop = asyncio.get_running_loop()
+        t = loop.time()
+        # Office's wake arrives 150ms after capture, reporting its age.
+        arb.claim("office", 0.3, heard_at=em_listen.heard_at(t, 110, 80),
+                  slack_s=1.0)
+        # Lounge's crossing frame arrived at t too, then waited for scoring.
+        frame = em_listen.Frame(b"\0" * 2560, t)
+        await asyncio.sleep(0.5)
+        seen = em_listen.arrival(frame, loop.time()) if stamp_from_arrival else loop.time()
+        return arb.claim("lounge", 0.3, heard_at=em_listen.heard_at(seen, 0, 80),
+                         slack_s=1.0)
+    return run(main())
+
+
+def test_mixed_fleet_backlogged_controller_wake_cedes():
+    assert _mixed_pair(stamp_from_arrival=True) == "office"
+
+
+def test_mixed_fleet_timed_at_scoring_answered_twice():
+    """What stamping the claim at the end of inference did: the backlog read
+    as a separate utterance and the second Echo answered too."""
+    assert _mixed_pair(stamp_from_arrival=False) == "lounge"
