@@ -52,4 +52,13 @@ def test_committed_vectors_match_the_python_chain(case):
     assert np.array_equal(_read(case["name"], "in"), x)
     assert np.array_equal(_read(case["name"], "out"), y), \
         "the Python chain no longer produces the committed output"
-    assert MANIFEST[case["name"]] == gen.manifest_entry(case, stats)
+    # The audio above is compared exactly; the manifest's float stats cannot
+    # be. They are reductions over the whole render, and numpy's SIMD paths
+    # differ between CI runners in the last bit (limiterReductionDb
+    # 11.059648197723096 against 11.0596481977231, same commit, two runs).
+    want, got = MANIFEST[case["name"]], gen.manifest_entry(case, stats)
+    assert {k: v for k, v in want.items() if k != "stats"} == \
+           {k: v for k, v in got.items() if k != "stats"}
+    assert want["stats"].keys() == got["stats"].keys()
+    for k, v in want["stats"].items():
+        assert got["stats"][k] == pytest.approx(v, rel=1e-9, abs=1e-12), k
