@@ -84,6 +84,7 @@ import em_ns
 import em_announce
 import em_recordings
 import em_runbarrier
+import em_speechgate
 import em_oww_models
 import em_oww_metadata
 import em_player
@@ -1676,6 +1677,14 @@ class EchoMuseSatellite(SatelliteServerProtocol):
         first_speech_at = None
         last_speech_at  = None
 
+        # Speech gate (em_speechgate): audio is held until Silero hears speech,
+        # so a turn nobody speaks in sends HA nothing to transcribe. Once
+        # open, speech_seen comes from the gate rather than the RMS check,
+        # which ducked-music residue passes. None = model unavailable, and
+        # the turn streams ungated exactly as before.
+        vad = em_speechgate.new_turn()
+        gate = em_speechgate.SpeechGate() if vad is not None else None
+
         def _is_speech(chunk: bytes) -> bool:
             samples = np.frombuffer(chunk, dtype=np.int16)
             if samples.size == 0:
@@ -1826,77 +1835,90 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                     if self._trace:
                         self._trace.t_first_frame_ms = self._trace.elapsed_ms()
 
-                # Every frame, not just until the first hit: the controller's
-                # own endpoint needs to know when speech LAST was, not only
-                # that it once happened.
-                if _is_speech(payload):
-                    now = time.monotonic()
-                    last_speech_at = now
-                    if first_speech_at is None:
-                        first_speech_at = now
+                if gate is None:
+                    frames = [payload]
+                else:
+                    prob = await asyncio.get_running_loop().run_in_executor(
+                        None, vad.prob, payload)
+                    frames = gate.push(payload, prob)
+                    if gate.open and not speech_seen:
+                        speech_seen = True
+                        log.info(f"[{self._log_name}] Speech gate {gate.summary()}, p={prob:.2f}")
+                        asyncio.ensure_future(device.beam_lock())
+                for payload in frames:
+                    # Every frame, not just until the first hit: the controller's
+                    # own endpoint needs to know when speech LAST was, not only
+                    # that it once happened.
+                    if _is_speech(payload):
+                        now = time.monotonic()
+                        last_speech_at = now
+                        if first_speech_at is None:
+                            first_speech_at = now
 
-                if not speech_seen and last_speech_at is not None:
-                    speech_seen = True
-                    log.debug(
-                        f"[{self._log_name}] Speech detected (above noise floor "
-                        f"{getattr(device, 'noise_floor', 0.0):.4f}) — no-speech timeout disarmed"
-                    )
-                    # Lock the beamformer onto the speaker now that they're
-                    # audibly talking. Matters for continuation turns (the wake
-                    # turn already locked at detection — the device no-ops a
-                    # second lock) and after any TTS mic restart, which resets
-                    # the beam to ch6 omni.
-                    asyncio.ensure_future(device.beam_lock())
-
-                if denoiser is not None:
-                    raw_payload = payload
-                    try:
-                        payload = await asyncio.get_running_loop().run_in_executor(
-                            None, denoiser.process, payload
+                    if gate is None and not speech_seen and last_speech_at is not None:
+                        speech_seen = True
+                        log.debug(
+                            f"[{self._log_name}] Speech detected (above noise floor "
+                            f"{getattr(device, 'noise_floor', 0.0):.4f}) — no-speech timeout disarmed"
                         )
-                    except Exception as e:
-                        log.warning(
-                            f"[{self._log_name}] NS failed mid-turn ({e}) — "
-                            f"raw audio for the rest of this turn"
-                        )
-                        # Dropped from the loop, but the counters it collected
-                        # up to the failure still describe this turn.
-                        ns_reporter = denoiser
-                        denoiser = None
-                        payload = raw_payload
-                    else:
-                        if em_ns.DEBUG_DIR:
-                            ns_debug_raw.extend(raw_payload)
-                            ns_debug_out.extend(payload)
+                        # Lock the beamformer onto the speaker now that they're
+                        # audibly talking. Matters for continuation turns (the wake
+                        # turn already locked at detection — the device no-ops a
+                        # second lock) and after any TTS mic restart, which resets
+                        # the beam to ch6 omni.
+                        asyncio.ensure_future(device.beam_lock())
 
-                # Utterance capture sits HERE, below the denoiser, so the saved
-                # file is byte-for-byte what goes on the wire to HA — i.e. what
-                # STT actually heard. Tapping above NS (as this first shipped)
-                # answered "how good is the mic" but could not answer "why was
-                # the transcript wrong" on any device with nsAsr on, which is
-                # the question people actually ask. If NS fails mid-turn the
-                # payload falls back to raw for the rest of the turn and the
-                # capture follows it, which stays correct by construction.
-                if capture is not None and len(capture) < em_recordings.MAX_UTTERANCE_BYTES:
-                    capture.extend(payload)
+                    if denoiser is not None:
+                        raw_payload = payload
+                        try:
+                            payload = await asyncio.get_running_loop().run_in_executor(
+                                None, denoiser.process, payload
+                            )
+                        except Exception as e:
+                            log.warning(
+                                f"[{self._log_name}] NS failed mid-turn ({e}) — "
+                                f"raw audio for the rest of this turn"
+                            )
+                            # Dropped from the loop, but the counters it collected
+                            # up to the failure still describe this turn.
+                            ns_reporter = denoiser
+                            denoiser = None
+                            payload = raw_payload
+                        else:
+                            if em_ns.DEBUG_DIR:
+                                ns_debug_raw.extend(raw_payload)
+                                ns_debug_out.extend(payload)
 
-                if self._trace:
-                    self._trace.audio_frames += 1
-                pcm_buf.extend(payload)
+                    # Utterance capture sits HERE, below the denoiser, so the saved
+                    # file is byte-for-byte what goes on the wire to HA — i.e. what
+                    # STT actually heard. Tapping above NS (as this first shipped)
+                    # answered "how good is the mic" but could not answer "why was
+                    # the transcript wrong" on any device with nsAsr on, which is
+                    # the question people actually ask. If NS fails mid-turn the
+                    # payload falls back to raw for the rest of the turn and the
+                    # capture follows it, which stays correct by construction.
+                    if capture is not None and len(capture) < em_recordings.MAX_UTTERANCE_BYTES:
+                        capture.extend(payload)
 
-                # Send in 320-byte chunks (20ms at 16kHz mono S16_LE) —
-                # split small for smoother ESPHome API streaming.
-                AUDIO_CHUNK = 320
-                while len(pcm_buf) >= AUDIO_CHUNK:
-                    chunk = bytes(pcm_buf[:AUDIO_CHUNK])
-                    del pcm_buf[:AUDIO_CHUNK]
-                    self._send_one(api_pb2.VoiceAssistantAudio(data=chunk))
+                    if self._trace:
+                        self._trace.audio_frames += 1
+                    pcm_buf.extend(payload)
+
+                    # Send in 320-byte chunks (20ms at 16kHz mono S16_LE) —
+                    # split small for smoother ESPHome API streaming.
+                    AUDIO_CHUNK = 320
+                    while len(pcm_buf) >= AUDIO_CHUNK:
+                        chunk = bytes(pcm_buf[:AUDIO_CHUNK])
+                        del pcm_buf[:AUDIO_CHUNK]
+                        self._send_one(api_pb2.VoiceAssistantAudio(data=chunk))
         finally:
             # What the gate actually did to this turn. Logged unconditionally
             # when NS ran, because until now a denoiser chewing speech and a
             # quiet room were indistinguishable from any log, on either side
             # — which is why #137 spent nine days on two theories that a
             # single number would have settled.
+            if gate is not None and not gate.open:
+                log.info(f"[{self._log_name}] Speech gate {gate.summary()}")
             ns_reporter = denoiser if denoiser is not None else ns_reporter
             if ns_reporter is not None:
                 log.info(f"[{self._log_name}] NS: {ns_reporter.zero_report()}")
