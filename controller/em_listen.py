@@ -18,7 +18,7 @@ Three pieces:
   late frame of a closed session can arrive after the controller moved on.
   Untagged audio was routed by a flag, and a frame on the wrong side of a flag
   flip became the start of the next person's command.
-- `heard_at` / `arbitration_slack` — capture time in the controller's clock,
+- `heard_at` / `CaptureClock` / `DeviceClock` — capture time in the controller's clock,
   so arbitration picks the Echo that heard first rather than the one whose
   message arrived first.
 """
@@ -26,6 +26,7 @@ Three pieces:
 from __future__ import annotations
 
 import struct
+from collections import deque
 from dataclasses import dataclass, field
 
 # The controller's feature, announced on the ack. The device listens privately
@@ -51,9 +52,13 @@ PENDING_MAX_SESSIONS = 4
 # Closed ids remembered, so their stragglers are dropped rather than held.
 CLOSED_MEMORY = 32
 
-# Arbitration never holds a claim open longer than this past its window,
-# whatever the RTT estimate says — a claim window measured in many seconds
-# would swallow genuinely separate wakes in other rooms.
+# How long past its window a winning claim is held, so a claim for the same
+# utterance that spent seconds in a retransmit still finds it and cedes. A
+# fixed hold, not one sized from recent RTTs: those lag the very stall that
+# delays a claim. Holding costs nothing, because a claim cedes only if it was
+# HEARD within the window of the winner's — a separate wake in another room is
+# told apart by its capture time, not by when it arrives. 3s matches the
+# Echo's ack timeout, after which a late private wake's session is gone.
 MAX_ARB_SLACK_S = 3.0
 
 
@@ -257,20 +262,73 @@ def heard_at(arrived: float, age_ms, srtt_ms) -> float:
 
 class Frame(bytes):
     """
-    Stream mic audio stamped with when it arrived, in the loop's clock.
+    Stream mic audio stamped with when it arrived and when it was captured,
+    both in the loop's clock.
 
-    A controller-scored wake is heard when its frame ARRIVED, not when
-    inference on it finished: the frame can wait behind a backlog in
-    mic_queue (up to 5s) and the executor. Timing the claim at the crossing
-    put that wait into every arbitration against an Echo that reports its
-    own capture age, and the wait grows with the fleet. A bytes subclass so
-    every other reader of the queues is unchanged.
+    A controller-scored wake is heard when its frame was CAPTURED — not when
+    inference on it finished, and not when it arrived. The first put every
+    frame's wait in mic_queue (up to 5s) and the executor into arbitration
+    against Echoes that report their own capture age; the second put the
+    link's retransmits there. A bytes subclass, so every other reader of the
+    queues is unchanged.
     """
 
-    def __new__(cls, data: bytes, arrived: float):
+    def __new__(cls, data: bytes, arrived: float, captured: float | None = None):
         f = super().__new__(cls, data)
         f.arrived = arrived
+        f.captured = arrived if captured is None else captured
         return f
+
+
+class CaptureClock:
+    """
+    When each frame of an Echo's continuous mic stream was captured, in the
+    controller's clock, whatever the link did to it on the way.
+
+    Frame n of the ungated wake stream was captured n × 80ms after the
+    stream began: the Echo sends every frame, silence included. So
+    `arrived − n × 80ms` is the stream's start plus that frame's transit
+    delay, and the smallest value seen is the start plus the least delay
+    any frame had. Retransmits only ever make frames later, so they cannot
+    drag that minimum; a frame held a second in TCP is still dated to when
+    it was captured.
+
+    The minimum is over a sliding window, so it follows the Echo's sample
+    clock drifting against ours (~345ppm measured, ~10ms over the window).
+    Sequence numbers restart with each stream; a restart resets the clock.
+    """
+
+    FRAME_S = 0.08
+    WINDOW_S = 30.0
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self._last: int | None = None   # last raw u16 sequence
+        self._n = 0                     # frames since the stream began
+        self._mins: deque[tuple[float, float]] = deque()   # (arrived, offset), offsets increasing
+
+    def observe(self, seq: int, arrived: float) -> float:
+        """Record a frame; return when it was captured (≤ `arrived`)."""
+        if self._last is not None:
+            step = (seq - self._last) & 0xFFFF
+            # 0 or a jump backwards (a huge step) is a new stream from 0.
+            if step == 0 or step > 0x8000:
+                self.reset()
+            else:
+                self._n += step
+        if self._last is None:
+            self._n = 0
+        self._last = seq
+        offset = arrived - self._n * self.FRAME_S
+        while self._mins and self._mins[-1][1] >= offset:
+            self._mins.pop()
+        self._mins.append((arrived, offset))
+        while arrived - self._mins[0][0] > self.WINDOW_S:
+            self._mins.popleft()
+        captured = self._mins[0][1] + self._n * self.FRAME_S
+        return max(arrived - MAX_ARB_SLACK_S, min(arrived, captured))
 
 
 def arrival(payload, default: float) -> float:
@@ -278,17 +336,54 @@ def arrival(payload, default: float) -> float:
     return getattr(payload, "arrived", default)
 
 
-def arbitration_slack(rto_ms_values) -> float:
-    """
-    How long past its window a claim is held, so a claim delayed in flight
-    still finds it and cedes rather than reading as a new utterance.
+def captured(payload, default: float) -> float:
+    """When `payload` was captured; `default` for audio never stamped."""
+    return getattr(payload, "captured", default)
 
-    The worst retransmission timeout across the fleet (TCP's srtt + 4·rttvar)
-    bounds how late a message can plausibly arrive; capped at
-    MAX_ARB_SLACK_S.
+
+class DeviceClock:
     """
-    worst = max((float(v) for v in rto_ms_values if v), default=0.0)
-    return min(MAX_ARB_SLACK_S, worst / 1000.0)
+    An Echo's monotonic clock mapped onto ours, from the pings we already send.
+
+    Each reply carries the Echo's monotonic time (`mono`, ms) when it answered,
+    which lies between our send and our receipt; the midpoint is off by at
+    most half that round trip. So the sample with the SMALLEST round trip in a
+    sliding window is the best one, the rule NTP uses: a retransmit only ever
+    lengthens a round trip, so it is never chosen. Two minutes of 5s pings is
+    24 chances for one clean exchange, and short enough that the two clocks
+    drifting apart costs milliseconds.
+    """
+
+    WINDOW_S = 120.0
+
+    def __init__(self) -> None:
+        self._best: deque[tuple[float, float, float]] = deque()   # (received, rtt, offset), rtt increasing
+
+    def add(self, sent: float, received: float, device_ms) -> None:
+        try:
+            dev = float(device_ms) / 1000.0
+        except (TypeError, ValueError):
+            return
+        rtt = received - sent
+        if rtt < 0:
+            return
+        offset = (sent + received) / 2 - dev
+        while self._best and self._best[-1][1] >= rtt:
+            self._best.pop()
+        self._best.append((received, rtt, offset))
+        while received - self._best[0][0] > self.WINDOW_S:
+            self._best.popleft()
+
+    def to_local(self, device_ms, arrived: float) -> float | None:
+        """When device time `device_ms` was, in our clock; None if unknown.
+        Never after `arrived`, and never more than the hold before it."""
+        if not self._best or device_ms is None:
+            return None
+        try:
+            t = float(device_ms) / 1000.0 + self._best[0][2]
+        except (TypeError, ValueError):
+            return None
+        return max(arrived - MAX_ARB_SLACK_S, min(arrived, t))
 
 
 class RttEstimator:
@@ -338,6 +433,7 @@ def parse_wake(msg: dict, arrived: float) -> dict | None:
             return default
     age = _num("ageMs", 0.0)
     return {
+        "captured_mono": _num("capturedMono"),
         "session":   session,
         "score":     score,
         "threshold": _num("threshold"),

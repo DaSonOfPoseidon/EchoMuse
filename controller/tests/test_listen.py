@@ -127,12 +127,6 @@ def test_heard_at_without_information_is_arrival():
     assert L.heard_at(10.0, -40, None) == 10.0   # a negative age is noise
 
 
-def test_slack_is_the_worst_rto_capped():
-    assert L.arbitration_slack([100, 900, None]) == 0.9
-    assert L.arbitration_slack([60000]) == L.MAX_ARB_SLACK_S
-    assert L.arbitration_slack([]) == 0.0
-
-
 def test_rtt_estimator_follows_rfc6298():
     e = L.RttEstimator()
     assert e.rto is None
@@ -146,7 +140,8 @@ def test_parse_wake():
     ev = L.parse_wake({"session": 3, "score": 0.8, "threshold": 0.5,
                        "ageMs": 120, "floor": 0.002, "barge": True}, 5.0)
     assert ev == {"session": 3, "score": 0.8, "threshold": 0.5, "age_ms": 120,
-                  "floor": 0.002, "barge": True, "arrived": 5.0}
+                  "floor": 0.002, "barge": True, "arrived": 5.0,
+                  "captured_mono": None}
 
 
 def test_parse_wake_refuses_what_it_cannot_act_on():
@@ -181,3 +176,127 @@ def test_a_session_the_echo_closed_is_known_closed():
     r.close(8)                     # listen_end before its wake was acted on
     assert r.is_closed(8)
     assert r.frame(8, b"\0\0", 0.0) == []
+
+
+# ── CaptureClock: dating stream frames through a lossy link ─────────────────
+
+def _feed(clock, frames):
+    """frames: [(seq, arrived)] -> [captured]"""
+    return [clock.observe(s, a) for s, a in frames]
+
+
+def test_capture_clock_on_a_clean_link_is_arrival():
+    c = L.CaptureClock()
+    got = _feed(c, [(n, 100.0 + n * 0.08 + 0.004) for n in range(50)])
+    assert all(abs(g - (100.004 + n * 0.08)) < 1e-9 for n, g in enumerate(got))
+
+
+def test_a_frame_held_in_a_retransmit_is_dated_to_its_capture():
+    """The 2026-09-22 bench case: a second of 15LE's stream arrived late and
+    read as a separate utterance. Frames 20..32 held 1s, then a burst."""
+    c = L.CaptureClock()
+    frames = [(n, 10.0 + n * 0.08 + 0.003) for n in range(20)]
+    burst_at = 10.0 + 32 * 0.08 + 0.003
+    frames += [(n, max(burst_at, 10.0 + n * 0.08 + 1.0)) for n in range(20, 33)]
+    got = _feed(c, frames)
+    for n in range(20, 33):
+        assert abs(got[n] - (10.003 + n * 0.08)) < 1e-9, n
+        assert frames[n][1] - got[n] > 0.5          # arrival would be wrong
+
+
+def test_capture_clock_never_postdates_arrival_or_reaches_past_the_slack():
+    c = L.CaptureClock()
+    c.observe(0, 0.0)
+    assert c.observe(1, 0.05) <= 0.05              # early arrival: capped at arrival
+    c2 = L.CaptureClock()
+    c2.observe(0, 0.0)
+    # 60s of frames that all "arrive" at once — a count we cannot trust
+    assert c2.observe(750, 0.1) >= 0.1 - L.MAX_ARB_SLACK_S
+
+
+def test_a_new_stream_restarts_the_count():
+    c = L.CaptureClock()
+    _feed(c, [(n, 5.0 + n * 0.08) for n in range(100)])   # old stream, seq 0..99
+    got = c.observe(0, 50.0)                              # new stream from 0
+    assert got == 50.0
+    assert abs(c.observe(1, 50.08) - 50.08) < 1e-9
+
+
+def test_sequence_wraps_without_a_reset():
+    c = L.CaptureClock()
+    t0 = 1000.0
+    got = _feed(c, [((65530 + i) & 0xFFFF, t0 + i * 0.08) for i in range(12)])
+    assert abs(got[-1] - (t0 + 11 * 0.08)) < 1e-9
+
+
+def test_capture_clock_follows_the_echo_clock_drifting():
+    """ALSA runs ~345ppm fast on these Echoes. Over ten minutes, with one
+    frame in 97 held 300ms, the estimate must stay within the window's worth
+    of drift (30s x 345ppm ~ 10ms), not accumulate all of it — either way."""
+    for ppm in (-345e-6, 345e-6):
+        c = L.CaptureClock()
+        period = 0.08 * (1 + ppm)
+        worst = 0.0
+        for n in range(int(600 / period)):
+            arrived = n * period + 0.002 + (0.3 if n % 97 == 5 else 0.0)
+            err = abs(c.observe(n & 0xFFFF, arrived) - (n * period + 0.002))
+            worst = max(worst, err)
+        assert worst < 0.015, (ppm, worst)
+
+
+# ── DeviceClock: an Echo's monotonic clock in ours ──────────────────────────
+
+def _pings(clock, skew, samples):
+    """samples: [(sent, out_delay, back_delay)]; the Echo's clock = ours - skew."""
+    for sent, out, back in samples:
+        clock.add(sent, sent + out + back, (sent + out - skew) * 1000)
+
+
+def test_device_clock_maps_through_the_cleanest_exchange():
+    c = L.DeviceClock()
+    skew = 1234.5
+    # Mostly retransmit-delayed, asymmetric exchanges; one clean one.
+    _pings(c, skew, [(0, 0.9, 0.002), (5, 0.002, 1.4), (10, 0.0015, 0.0015),
+                     (15, 0.4, 0.3), (20, 2.1, 0.002)])
+    t = c.to_local((30.0 - skew) * 1000, arrived=30.5)
+    assert abs(t - 30.0) < 0.002
+
+
+def test_a_wake_held_three_seconds_in_flight_is_dated_to_its_capture():
+    """Bench, 14:59:35: VVV's wake arrived 3.1s after capture. Age plus half
+    an RTT would put it at arrival; the Echo's clock puts it where it was."""
+    c = L.DeviceClock()
+    skew = 500.0
+    _pings(c, skew, [(t, 0.002, 0.002) for t in range(0, 60, 5)])
+    captured_dev_ms = (100.0 - skew) * 1000
+    assert abs(c.to_local(captured_dev_ms, arrived=102.9) - 100.0) < 0.003
+    # Never before the hold: past it, the session is gone anyway.
+    assert c.to_local(captured_dev_ms, arrived=110.0) == 110.0 - L.MAX_ARB_SLACK_S
+    # And never after arrival.
+    assert c.to_local(captured_dev_ms, arrived=99.0) == 99.0
+
+
+def test_device_clock_without_samples_or_field_says_unknown():
+    c = L.DeviceClock()
+    assert c.to_local(1000, arrived=5.0) is None
+    c.add(0.0, 0.004, None)          # a pong from firmware that sends no mono
+    assert c.to_local(1000, arrived=5.0) is None
+    c.add(0.0, 0.004, 2.0)
+    assert c.to_local(None, arrived=5.0) is None
+
+
+def test_old_samples_leave_the_window():
+    """An exchange older than the window no longer counts, however clean —
+    otherwise the clocks drifting apart would never be followed."""
+    c = L.DeviceClock()
+    c.add(0.0, 0.001, 0.0)                    # superb, offset 0, but old
+    c.add(200.0, 200.010, (200.005 - 7.0) * 1000)   # offset 7s now
+    assert abs(c.to_local((250.0 - 7.0) * 1000, arrived=250.5) - 250.0) < 1e-6
+
+
+def test_parse_wake_carries_the_capture_instant():
+    ev = L.parse_wake({"type": "oww_wake", "session": 3, "score": 0.9,
+                       "ageMs": 40, "capturedMono": 123456}, 7.0)
+    assert ev["captured_mono"] == 123456
+    old = L.parse_wake({"type": "oww_wake", "session": 3, "score": 0.9}, 7.0)
+    assert old["captured_mono"] is None

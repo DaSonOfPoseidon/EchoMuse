@@ -1200,7 +1200,7 @@ func onWakeCrossing(cc *client.ControlClient, dc *client.DataClient,
 		}
 	}
 	barge := spk != nil && spk.VoiceAudible(wakeword.ScoreSpan)
-	cc.SendOwwWake(score, crossed, ageMs, session, dc.ListenFloor(), barge)
+	cc.SendOwwWake(score, crossed, at, session, dc.ListenFloor(), barge)
 }
 
 // syncListenState resolves what the device does with its wake stream and

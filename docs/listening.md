@@ -173,29 +173,46 @@ controller declines it (`listen_close`), so the rule lives in one place.
 ## Arbitration
 
 First to **hear** wins, not first to arrive. Each claim carries the time its
-audio was captured, in the controller's clock:
+audio was **captured**, in the controller's clock, measured so that time spent
+in flight cannot move it. A home WiFi link loses packets, TCP retransmits
+them, and a message can arrive seconds late; arrival time is exactly the
+number that lies.
 
-- a wake the Echo detected: arrival − `ageMs` − half the Echo's smoothed RTT;
-- a wake the controller scored: when the frame that crossed **arrived** − half
-  the Echo's smoothed RTT.
+- **A wake the controller scored** is dated by the frame that crossed. The
+  continuous stream sends every 80 ms frame, silence included, so frame *n*
+  was captured *n* × 80 ms after the stream began; the controller learns
+  when that was from the frames that arrived with the least delay
+  (`em_listen.CaptureClock`, a sliding minimum that follows the Echo's clock
+  drifting against ours). A frame held a second in a retransmit is still
+  dated to its capture, and so is one that waited in the controller's own
+  queue before it was scored.
+- **A wake the Echo detected** carries `capturedMono`, the capture instant
+  on the Echo's monotonic clock. The controller maps that clock onto its own
+  from the ping replies it already exchanges every 5 s, each of which
+  carries the Echo's `mono`: the reply with the shortest round trip in the
+  last two minutes pins the mapping to within half that round trip
+  (`em_listen.DeviceClock`, the rule NTP uses). A retransmit only lengthens a
+  round trip, so it is never the one chosen. Firmware that sends no
+  `capturedMono` falls back to arrival − `ageMs` − half the smoothed RTT,
+  which is right only when the message was not delayed.
 
-The RTT is the control-plane round trip, smoothed as TCP does (RFC 6298) — the
-only one measured. A controller-scored wake is dated from its frame's arrival,
-not from the end of inference: a frame can wait behind a backlog in the
-controller's queue (up to 5s) and in the scorer, that wait grows with the
-number of streaming Echoes, and an Echo that wakes itself has none of it — so
-timing the claim at the crossing made a mixed fleet answer one utterance
-twice. What remains uncorrected is the Echo's send batching, at most one 80 ms
-frame, well inside `wakeArbitrationMs`. The wake log line reports how long
-after arrival each controller-scored wake was scored.
+What remains uncorrected is the least delay any frame or ping had — a few
+milliseconds — and the Echo's send batching, at most one 80 ms frame; both
+are well inside `wakeArbitrationMs`. Neither estimate is ever later than
+arrival or more than 3 s before it.
 
 A claim cedes if it was heard within `wakeArbitrationMs` of the current
-winner's, whenever it arrives. So a slow link can no longer turn a near Echo's
-wake into a "new utterance" that starts a second answer. A granted claim is
-**never revoked** — that would cut off a turn already listening — so the
-winner is the first claim to arrive among those heard within the window, and
-the window is held open for `wakeArbitrationMs` plus the worst RTT the fleet
-has shown recently (capped at 3s), so a late claim still finds it.
+winner's, whenever it arrives. A granted claim is **never revoked** — that
+would cut off a turn already listening — so the winner is the first claim to
+arrive among those heard within the window, and the winner is held for
+`wakeArbitrationMs` plus 3 s so a late claim still finds it. Holding costs
+nothing: a separate wake in another room is told apart by when it was heard,
+not by when it arrived. 3 s is the Echo's ack timeout; a private wake later
+than that has already closed its session, and the controller ignores a wake
+for a session the Echo has closed.
+
+The wake log line reports, for a controller-scored wake, how long after
+arrival it was scored and how long its frame spent in transit.
 
 ## What each mode costs and loses
 

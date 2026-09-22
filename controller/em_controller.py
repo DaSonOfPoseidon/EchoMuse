@@ -583,6 +583,14 @@ class Device:
         self.private_turn_task: asyncio.Task | None = None
         # Smoothed control-plane RTT, for capture-time arbitration.
         self.rtt_est = em_listen.RttEstimator()
+        # When each 0x01 frame was captured, from its sequence number
+        # (em_listen.CaptureClock). Not meaningful on a VAD-gated turn
+        # stream, which skips frames — mic_gated says which is running.
+        self.capture_clock = em_listen.CaptureClock()
+        # The Echo's monotonic clock in ours, from ping replies carrying
+        # `mono` (em_listen.DeviceClock); dates a private wake's capture.
+        self.device_clock = em_listen.DeviceClock()
+        self.mic_gated = False
 
         # Per-room noise floor estimate (normalized RMS, 0..1), tracked from
         # the continuous wake stream in wake_word_listener. Measurement only —
@@ -1051,10 +1059,12 @@ class Device:
         await self.send_control({"type": "ping"})
 
     async def mic_start(self):
+        self.mic_gated = False
         await self.send_control({"type": "mic_start"})
 
     async def mic_start_turn(self):
         """Start mic for a voice turn — signals device to lock the best directional mic."""
+        self.mic_gated = True
         await self.send_control({"type": "mic_start", "lock_mic": True})
 
     async def mic_stop(self):
@@ -1638,7 +1648,7 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
                 # across it are not consecutive for either two-frame rule
                 continue
             buf.extend(payload)
-            arrived = em_listen.arrival(payload, loop.time())
+            heard = em_listen.captured(payload, loop.time())
             while len(buf) >= CHUNK_BYTES:
                 frame = bytes(buf[:CHUNK_BYTES])
                 del buf[:CHUNK_BYTES]
@@ -1724,11 +1734,12 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
                     serves = esphome.can_serve_turn(device.device_id)
                     won_by = device.device_id
                     if serves and device.wake_arb_ms > 0 and len(_devices) > 1:
-                        # Heard one link delay before its frame arrived.
                         won_by = _wake_arbiter.claim(
                             device.device_id, device.wake_arb_ms / 1000.0,
-                            heard_at=em_listen.heard_at(
-                                arrived, 0, device.rtt_est.srtt),
+                            # Capture time already carries the link's
+                            # least delay; its smoothed RTT would count it
+                            # twice, inflated by every retransmit.
+                            heard_at=heard,
                             slack_s=_arbitration_slack(),
                         )
                     device.barge_ceded = (not serves) or won_by != device.device_id
@@ -2856,10 +2867,17 @@ async def _private_listen(device: Device) -> None:
 
 
 def _arbitration_slack() -> float:
-    return em_listen.arbitration_slack(d.rtt_est.rto for d in _devices.values())
+    return em_listen.MAX_ARB_SLACK_S
 
 
 def _wake_heard_at(device: Device, ev: dict) -> float:
+    # The Echo's own capture instant, mapped through its clock, survives any
+    # time in flight; age plus half an RTT assumes the message was not
+    # delayed, which is exactly when it matters. The latter is for firmware
+    # that does not send it.
+    t = device.device_clock.to_local(ev.get("captured_mono"), ev["arrived"])
+    if t is not None:
+        return t
     return em_listen.heard_at(ev["arrived"], ev["age_ms"], device.rtt_est.srtt)
 
 
@@ -3221,6 +3239,7 @@ async def _stream_listen(device: Device):
             buf.extend(payload)
             # The chunk scored below is completed by this payload.
             arrived = em_listen.arrival(payload, loop.time())
+            heard = em_listen.captured(payload, arrived)
             while len(buf) >= CHUNK_BYTES:
                 frame   = bytes(buf[:CHUNK_BYTES])
                 del buf[:CHUNK_BYTES]
@@ -3388,7 +3407,8 @@ async def _stream_listen(device: Device):
                         f"threshold={eff_threshold:.3f}, "
                         f"rms={rms:.4f}, floor={device.noise_floor:.4f}"
                         + (f", scored {(loop.time() - arrived) * 1000:.0f}ms "
-                           f"after arrival" if source == "controller" else "")
+                           f"after arrival, {(arrived - heard) * 1000:.0f}ms "
+                           f"in transit" if source == "controller" else "")
                         + ")"
                     )
                     db.log_device(
@@ -3495,18 +3515,19 @@ async def _stream_listen(device: Device):
                             # even when no other device was contending.
                             # Capture time, not arrival (docs/listening.md):
                             # a device wake reports its age; ours dates from
-                            # the frame's arrival, not the end of inference.
-                            # Either kind crossed the link once.
+                            # when its frame was captured (CaptureClock).
                             if source == "device":
-                                seen_at = loop.time()
-                                age_ms = (em_shadow.now() - dev_wake["at"]) * 1000.0
+                                heard_at = em_listen.heard_at(
+                                    loop.time(),
+                                    (em_shadow.now() - dev_wake["at"]) * 1000.0,
+                                    device.rtt_est.srtt)
                             else:
-                                seen_at, age_ms = arrived, 0
+                                # Already includes the link's least delay.
+                                heard_at = heard
                             won_by = _wake_arbiter.claim(
                                 device.device_id,
                                 device.wake_arb_ms / 1000.0,
-                                heard_at=em_listen.heard_at(
-                                    seen_at, age_ms, device.rtt_est.srtt),
+                                heard_at=heard_at,
                                 slack_s=_arbitration_slack(),
                             )
                         if not serves or won_by != device.device_id:
@@ -4617,8 +4638,10 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                             _sent = device.ping_sent.pop(_seq, None)
                             _busy = device.ping_busy.pop(_seq, False)
                             if _sent is not None:
-                                _rtt = int((loop.time() - _sent) * 1000)
+                                _now = loop.time()
+                                _rtt = int((_now - _sent) * 1000)
                                 device.record_rtt(_rtt, _busy)
+                                device.device_clock.add(_sent, _now, msg.get("mono"))
                                 if _rtt >= RTT_EXCURSION_MS:
                                     # Busy excursions log one for one; idle
                                     # ones coalesce into a periodic summary.
@@ -4843,8 +4866,13 @@ async def handle_data(ws: WebSocketServerProtocol, secure: bool = False):
                     except asyncio.QueueFull:
                         log.error(f"[{device.device_id}] VAD sentinel lost — queue still full after drain")
                     continue
-                payload = em_listen.Frame(raw[MIC_HEADER_LEN:],
-                                          asyncio.get_event_loop().time())
+                _now = asyncio.get_event_loop().time()
+                payload = em_listen.Frame(
+                    raw[MIC_HEADER_LEN:], _now,
+                    # A VAD-gated turn stream skips frames, so its sequence
+                    # does not count time; arrival is the best it offers.
+                    _now if device.mic_gated else device.capture_clock.observe(
+                        int.from_bytes(raw[1:3], "big"), _now))
                 q = device.voice_queue if device.oww_paused.is_set() else device.mic_queue
                 try:
                     q.put_nowait(payload)

@@ -33,6 +33,17 @@ import (
 //	-ldflags "-X github.com/wilbowes/EchoMuse/internal/client.Version=v2.1.0"
 var Version = "dev"
 
+// monoEpoch anchors MonoMs. A time.Time from time.Now carries a monotonic
+// reading, so a difference between two of them ignores the wall clock being
+// stepped — which the controller does on every ack (time_ms).
+var monoEpoch = time.Now()
+
+// MonoMs is t on this process's monotonic clock, in ms. It rides ping replies
+// and wakes so the controller can map it onto its own clock through the
+// cleanest exchange it has seen (em_listen.DeviceClock) and date a wake by
+// when it was captured, however long the message spent in flight.
+func MonoMs(t time.Time) int64 { return t.Sub(monoEpoch).Milliseconds() }
+
 // ─── Message types ────────────────────────────────────────────────────────────
 
 type controlMessage struct {
@@ -873,18 +884,21 @@ func (c *ControlClient) connect(ctx context.Context, server *discovery.ServerInf
 
 		case "ping":
 			// Echo the controller's sequence id so it can pair the reply
-			// with the send it timed. The device deliberately does NOT
-			// stamp its own clock: Echos boot with bogus clocks pre-NTP
-			// (the same reason TLS verification is clamped to build time),
-			// so RTT is measured entirely controller-side against one
-			// monotonic clock. Without an id, the unsolicited keepalive
+			// with the send it timed. RTT is measured entirely
+			// controller-side against one monotonic clock; the device's
+			// wall clock is never sent (Echos boot with bogus clocks
+			// pre-NTP, the same reason TLS verification is clamped to
+			// build time). `mono` is the device's MONOTONIC time, which is
+			// what lets the controller map a wake's capture instant onto
+			// its own clock. Without an id, the unsolicited keepalive
 			// pongs below are indistinguishable from replies and would be
 			// paired with whatever ping happened to be outstanding.
 			var ping struct {
 				ID json.RawMessage `json:"id"`
 			}
 			if err := json.Unmarshal(raw, &ping); err == nil && len(ping.ID) > 0 {
-				c.writeJSON(map[string]any{"type": "pong", "id": ping.ID})
+				c.writeJSON(map[string]any{"type": "pong", "id": ping.ID,
+					"mono": MonoMs(time.Now())})
 			} else {
 				c.writeJSON(map[string]string{"type": "pong"})
 			}
@@ -1266,13 +1280,19 @@ func (c *ControlClient) SendOwwShadowCross(score float32, ageMs int64) {
 // (the controller can no longer measure it from a stream it does not get) and
 // whether the speaker was playing, which is what makes it a barge-in. Session
 // 0 means no session: the device is streaming, and those fields are omitted.
-func (c *ControlClient) SendOwwWake(score, threshold float32, ageMs int64,
+//
+// capturedMono is the same instant as ageMs on MonoMs's clock. ageMs is
+// measured when the message is built, so time the message then spends in
+// flight is invisible to it; capturedMono is not, once the controller has
+// mapped the clock from ping replies.
+func (c *ControlClient) SendOwwWake(score, threshold float32, capturedAt time.Time,
 	session uint32, floor float64, barge bool) {
 	msg := map[string]interface{}{
-		"type":      "oww_wake",
-		"score":     score,
-		"threshold": threshold,
-		"ageMs":     ageMs,
+		"type":         "oww_wake",
+		"score":        score,
+		"threshold":    threshold,
+		"ageMs":        time.Since(capturedAt).Milliseconds(),
+		"capturedMono": MonoMs(capturedAt),
 	}
 	if session != 0 {
 		msg["session"] = session

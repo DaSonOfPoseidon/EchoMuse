@@ -280,11 +280,18 @@ handler would be a second copy of the most delicate sequence in the controller.
   existing reader's `wakeword` prefix — including `_persist_turn`'s shadow
   block.
 
-**Arbitration compares capture times** (since 2026-09-21): each claim carries
-`heard_at` (arrival − `ageMs` − half the smoothed RTT), a claim heard within
-the window of the winner's cedes whenever it arrives, the winner is held for
-the window plus the fleet's worst RTO (capped 3s), and a granted claim is never
-revoked. See `em_arbiter` and docs/listening.md.
+**Arbitration compares capture times, measured so time in flight cannot move
+them** (2026-09-22; docs/listening.md is the reference). A wake carries
+`capturedMono`, the crossing frame's capture instant on `client.MonoMs`'s
+clock, and every ping reply carries `mono`; the controller maps the one onto
+its own clock through the cleanest exchange of the last two minutes
+(`em_listen.DeviceClock`). The first version dated a wake as arrival − `ageMs`
+− half the RTT, which is right only when the message was not delayed: on the
+bench a wake spent 3.1s in flight and read as a separate utterance.
+A controller-scored wake is dated from the stream's sequence numbers instead
+(`CaptureClock`), so no firmware is needed for that half. A claim heard
+within the window of the winner's cedes whenever it arrives, the winner is held
+for the window plus 3s, and a granted claim is never revoked.
 
 **Shadow mode scores and reports; it never acts.** It exists to answer whether
 on-device detection is good enough to trust, by comparing both detectors on the
@@ -319,10 +326,12 @@ Three things are load-bearing:
   drops are counted in exactly one place. Note the first frame must record NO
   gap: a zero-valued `lastPush` would report a gap of however long the process
   had been running and point at a producer stall that never happened.
-- **The device never sends a timestamp.** An Echo's wall clock is bogus before
-  NTP, so it reports how long *ago* a crossing happened and the controller
-  converts against its own monotonic clock — same reasoning as the RTT
-  instrumentation.
+- **The device never sends a WALL-CLOCK timestamp.** An Echo's wall clock is
+  bogus before NTP, so it reports how long *ago* a crossing happened and the
+  controller converts against its own monotonic clock — same reasoning as the
+  RTT instrumentation. `capturedMono` and the ping reply's `mono` are the
+  device's MONOTONIC clock, which is immune to that, and mean nothing until
+  the controller has mapped them.
 
 **Thresholds must match or the comparison is meaningless.** The controller drops
 its wake bar to `bargeInThreshold` while the speaker is streaming (echo at the
