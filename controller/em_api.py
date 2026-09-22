@@ -4475,7 +4475,37 @@ async def reconcile_oww_assets(device_id: str, live) -> None:
 
 async def _sync_oww_assets(live, device_id: str, progress=None) -> dict:
     """
-    Make a device's asset directory match what it needs. Idempotent.
+    Make a device's asset directory match what it needs, queued behind every
+    other multi-megabyte transfer on this controller.
+
+    Asset installs share `_ota_lock` with firmware updates. On an upgrade that
+    adds an asset, every device reconnects at once and each would start its
+    own push — ~14MB each for a device that never had the runtime, which is
+    most of an existing fleet on the controller's wake word (every device
+    carries the full set since 2026-09-22). Three concurrent OTAs over the same
+    transport stalled the event loop 11.1s (2026-09-02), and that loop feeds
+    speaker periods. Bounded by OTA_MAX_HOLD_S for the OTA path's reason: a
+    device that stops reading must not hold the queue for good.
+    """
+    if _ota_lock.locked():
+        log.info(f"[api] [{device_id}] oww assets: queued behind another transfer")
+        if progress:
+            await progress("info", "waiting for another device's transfer…")
+    async with _ota_lock:
+        try:
+            return await asyncio.wait_for(
+                _sync_oww_assets_locked(live, device_id, progress),
+                timeout=OTA_MAX_HOLD_S,
+            )
+        except asyncio.TimeoutError:
+            return {"ok": False,
+                    "error": f"abandoned after {OTA_MAX_HOLD_S:.0f}s so the queue could continue"}
+
+
+async def _sync_oww_assets_locked(live, device_id: str, progress=None) -> dict:
+    """
+    Make a device's asset directory match what it needs. Idempotent. Run with
+    `_ota_lock` held — call _sync_oww_assets.
 
     Push to `.part` then rename only once md5 matches, so an interrupted
     transfer can never leave a file the device would try to dlopen. md5 is
