@@ -216,6 +216,10 @@ class SessionRouter:
         self._remember_closed(target)
         return target
 
+    def is_closed(self, session: int) -> bool:
+        """True if `session` has ended, here or on the Echo."""
+        return session in self._closed
+
     def reset(self) -> None:
         """A new connection: nothing from the old one is routable."""
         self.__init__()

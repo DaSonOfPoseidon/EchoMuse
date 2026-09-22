@@ -173,3 +173,11 @@ def test_frame_is_bytes_to_every_other_reader():
 def test_unstamped_audio_arrives_now():
     assert L.arrival(b"\x00\x00", 99.0) == 99.0
     assert L.arrival("listen_mode", 99.0) == 99.0
+
+
+def test_a_session_the_echo_closed_is_known_closed():
+    r = L.SessionRouter()
+    assert not r.is_closed(8)
+    r.close(8)                     # listen_end before its wake was acted on
+    assert r.is_closed(8)
+    assert r.frame(8, b"\0\0", 0.0) == []

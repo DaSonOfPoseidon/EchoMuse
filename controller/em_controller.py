@@ -2829,6 +2829,16 @@ async def _private_listen(device: Device) -> None:
             ev = await asyncio.wait_for(device.listen_wakes.get(), timeout=1.0)
         except asyncio.TimeoutError:
             continue
+        if device.listen_router.is_closed(ev["session"]):
+            # The Echo gave up on it first (listen_end), so no audio will
+            # come: a wake delayed in flight past the ack timeout arrives
+            # alongside its own close. Acting on it ran a turn that could
+            # only end no_speech, and claimed the arbiter for it.
+            log.info(f"[{device.device_id}] wake for session {ev['session']} "
+                     f"ignored — already closed on the Echo "
+                     f"({(asyncio.get_event_loop().time() - ev['arrived']) * 1000:.0f}ms "
+                     f"after it arrived, {ev['age_ms']}ms old when sent)")
+            continue
         busy = (device.voice_lock.locked()
                 or (device.private_turn_task is not None
                     and not device.private_turn_task.done()))
