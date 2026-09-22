@@ -68,7 +68,7 @@ informational: the controller stores and displays them, and gates Android-only
 payloads on `base_os`. The kernel pair is omitted if `uname` fails. A device
 for a new board should send all of them.
 
-`capabilities` is the negotiation signal. The Dot announces eleven unconditionally
+`capabilities` is the negotiation signal. The Dot announces twelve unconditionally
 plus one conditional (`capabilities()` in `control.go`):
 
 | Capability | Condition | Meaning |
@@ -84,6 +84,7 @@ plus one conditional (`capabilities()` in `control.go`):
 | `audio_mix` | always | Holds music on its own frame types and mixes it under voice rather than pausing |
 | `oww_local_only` | always | Can listen **privately**: score its own wake word and send nothing until it fires. Whether it is doing so is `listen_state` — see [listening.md](listening.md) |
 | `aec_hw_ref` | always | Can take the AEC far-end reference from a playback loopback in the mic capture itself, and falls back to the software tap at the ALSA write when the board has none |
+| `output_chain` | always | Can run the speaker output chain (EQ → bass guard → limiter) itself, at the ALSA write, from the config keys `eqBands`, `eqLoudness`, `limiter*`, `bassGuard*`. Runs it only when the controller's `ack` carries `output_chain` too, which is the controller saying it has stopped processing: either half alone keeps the old path, so audio is never shaped twice |
 | `ambient_light` | only if the sensor is actually readable (`als.Present()`) | Reports light readings |
 
 **`aec_hw_ref` is a capability with a runtime companion, and both are needed.**
@@ -150,7 +151,7 @@ absent optional fields take prior/default behaviour.
 
 | `type` | Payload | Meaning |
 |--------|---------|---------|
-| `ack` | `device_id`, `features[]` | Registration accepted. `features` is the CONTROLLER's capability list — the mirror of the device's own, and read the same way: a feature that is absent is one the controller cannot do. Absent entirely on controllers before 2.23.0. Current: `ble_adverts_data`, `listen_session` |
+| `ack` | `device_id`, `features[]` | Registration accepted. `features` is the CONTROLLER's capability list — the mirror of the device's own, and read the same way: a feature that is absent is one the controller cannot do. Absent entirely on controllers before 2.23.0. Current: `ble_adverts_data`, `listen_session`, `output_chain` |
 | `leds` | `leds[]`, `listening?` | One LED frame; `listening:true` marks the listening ring so the direction overlay keys off it |
 | `led_anim` | `{pattern, colors, periodMs, ttlSec}` | Local animation spec; sent only if `led_anim` |
 | `mic_start` | `lock_mic?` | Start mic stream. `lock_mic:false`/absent = always-on ungated wake stream; `true` = bounded, VAD-gated turn |

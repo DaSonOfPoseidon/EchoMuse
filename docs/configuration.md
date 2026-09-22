@@ -597,7 +597,12 @@ bug, and it stays banished from that path).
 
 ### Speech gate
 
-Decides when a button-press utterance starts and stops:
+Decides when a button-press or follow-up utterance starts and stops. On
+current firmware the Dot decides "is this speech" with a small speech model
+(Silero) once the controller has installed it alongside the wake word files,
+so loud non-speech — music under a duck, a fan, the TV — no longer holds a
+turn open. The **Threshold** below is then only its fallback, used until the
+model is installed; the two gate timings apply either way.
 
 - **Threshold** — how loud counts as "speech". Measured in pre-gain units
   (the mic gain doesn't change what this number means). The default 0.001

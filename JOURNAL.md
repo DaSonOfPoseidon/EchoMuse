@@ -3409,3 +3409,181 @@ their `ci.yml` clashes on their branches; #565 and #552 have change requests
 out; every open issue now carries labels (new `area:emos`, `area:porting`); and
 all six release pages were stripped of the generated PR list that credited
 unrelated work.
+
+## 2026-09-20 — GA: firmware v2.16.0 and controller 2.24.0, and a production Echo moved to emOS
+
+**Released:** firmware `v2.16.0` from 9aab9aa (#586's every-valid-SSID and
+#591), and `controller-v2.24.0`, promoted from the build already green on the
+pin commit (558ad13) — GHCR `2.24.0` + `latest`, the GA add-on pinned, the
+changelog in both add-on directories. Wil updated his own system to GA the
+same morning: devices on the new binary, WiFi switching working on FireOS 5.
+
+Two faults were found on hardware on release day, and both came down to who
+can read a file. **An emOS older than v0.5 never reads the conf the firmware
+writes**: firmware writes `/data/emos/wpa.conf`, an older init starts the
+supplicant from Android's conf, so a WiFi change goes to a file nothing reads
+and the switch times out at 45s. EFF was on emOS 0.3; the fix was updating its
+emOS, not code. **#591: the conf was written root-only**, and Amazon's
+supplicant runs as uid `wifi`, so it exited, init left a zombie, and the
+device booted with no network. `confMode` now picks by the same test init uses
+(`/sbin/wpa_supplicant` present → root 0600, absent → `wifi:wifi` 0660), with
+`/data/emos` at 0770 root:wifi because the wizard's WiFi step calls
+`save_config` and the supplicant rewrites the file in place.
+
+**After GA, same day: `controller-v2.24.1`**, with two wizard changes found by
+Wil on hardware. #593 lets the wizard re-provision a known device and keep its
+controller record — the duplicate guard was client-side only, and
+`ensure_device_token` already keeps a row's token and approval — so a device
+keeps its id, ESPHome port, config and HA entities. Wil ran three devices
+through it end to end; it is the emOS upgrade path for GA users until #573.
+#594 refuses to Magisk-patch an emOS boot image: the FireOS flow patched
+whatever was in the slot, which bootloops an emOS device (Wil hit it and
+recovered by re-provisioning). Step 1 cannot catch it, because emOS mounts
+FireOS's `/system` and build.prop reports 5.1.1, so `isOurBootImage` matches
+the emOS slot probe's two markers — `emos.system=` and the full
+`ramoops.mem_address=0x44400000`, the second catching pre-0.5 images — and
+refuses before the pull.
+
+**The first production Echo moved from FireOS 5 to emOS through the
+provisioner**, data and cache wipe included (Wil, 14:18): the fielded path,
+not a bench one. Decided the same afternoon: no general restore-image button
+in the provisioner — the emOS Restore step only replays an escrow from the same
+run, which is what makes it safe; going back to FireOS 5 is the amonet
+instructions' job.
+
+The gap left open: an existing user has no in-place emOS upgrade.
+Re-provisioning works but assigns a new ESPHome port, by design, so every
+satellite has to be re-added in HA. #573 (emOS OTA) is next.
+
+## 2026-09-21 — the day after GA, and private listening built
+
+Seven commits to main in the morning. **`em-wifi` now ships on both bases**:
+it was installed only inside `build.sh`'s `if [ -f "$WPA_CLI" ]`, which a FireOS
+5 image never satisfies, because that image carries no `/sbin` userspace.
+**And it had been writing a conf FireOS 5 could not read** — the #591 bug again
+from the other side: a root-owned 0600 conf, unreadable to Amazon's
+supplicant running as uid 1010, which exits at every start while init respawns
+it every 5s. On 11NF em-wifi reported the join and the device dropped off the
+network seconds later. It now `chmod 660` and `chown 1010:1010` — by number,
+because there is no /etc/passwd to resolve a name. It passed cleanly on the
+FireOS 6 spare and hid there, since `/sbin` against `/system/bin` also means
+root against the `wifi` user, and nothing in the source says so. Also:
+**mksh never read the kernel hostname** — Android's mkshrc builds `$HOSTNAME`
+from `getprop ro.product.device`, empty with no property service, then the
+literal `android` — so init now passes it in the environment: `emos` for
+services, `em-<serial>` for the USB console, where somebody at a cable may not
+know which Echo they plugged in. Settings gained a System tab, the wizard's
+copy had a pass, and the v1/v2 partition story in the docs was corrected from
+amonet's own source: v2 undoes v1's GPT patch, so an `_x` alias on a v2 device
+means the restore never ran (#598, refusing correctly). **An `emos-v*` tag is
+owed before any controller release**, because `EMOS_SBIN_BOTH_ARCHES` names a
+payload member the current release lacks.
+
+**Wake word detection is now chosen per Echo, and one or the other.** Wil's
+direction: "stand by our privacy-first creds and have integrity" — docs must
+never imply one thing while the code does another. "On this Echo" (the default
+for new installs; existing fleets are pinned to "off" by migration v25, since
+defaults are layered under stored config) sends nothing until the Echo's own
+wake word fires, then only until end of speech. "On the controller" streams
+continuously and is labelled as streaming everywhere it shows; shadow leaves
+the UI as a developer diagnostic. `docs/listening.md` is the spec. The device
+side is `internal/listen` — a 2s ring, numbered sessions, and its own limits
+(3s ack timeout, 30s max, mute, link loss), so no controller failure can leave
+an Echo streaming. The controller side is `em_listen`: the privacy statement is
+resolved from what the Echo REPORTS (`listen_state`), never from configuration,
+and unknown is shown as unknown. An Echo that cannot run its own wake word is
+`degraded` — button only, saying why — and never falls back to streaming. PR
+#602.
+
+First bench test that night on VVV: three wakes each opened a session, were
+acknowledged and closed at HA's end of speech, with nothing sent in between;
+mute stopped the mic entirely; `listen: local` within 0.4s of connect.
+Barge-in did not fire over a 19-second reply, which is the next entry.
+
+## 2026-09-22 — barge-in from cold, the audio chain on the Echo, and nothing sent unless someone speaks
+
+**The barge bar dropped for a tenth of a second.** The device keyed its lower
+barge-in bar on `IsStreaming` — "still arriving on the wire" — which clears at
+end of stream, and a reply arrives in about 0.1s, so for nearly all of it the
+bar was back at 0.5. It now holds while the reply is audible, plus the 1.96s
+the wake model's window still contains echo (de03c18). Also merged: #609,
+fixing #607's shared capture buffer in the GoTinyAlsa fork.
+
+**Barge-in works from the first reply after a restart.** With the bar fixed,
+the remaining fault was the echo canceller's cold start: 10–20s of playback
+before it converged. Wil asked for best practice rather than a bodge, so the
+question went to a replay harness over raw 9-channel captures, scored on wake
+detection across 8 frame phases (one wake word moved 0.96→0.30 for a 2–4ms
+shift, so a single alignment proves nothing). WebRTC AEC3, the "best practice"
+hypothesis, lost: its suppressor ate near-end speech (2.4/5, 0.9/3). The winner
+was speex at a 64ms tail, starting from an echo path saved from a *different*
+capture: 5.0/5, 4.0/4, 20dB from the first second. Converged, 16ms and 300ms
+reach the same 20.3dB, so the long tail only ever slowed learning. The Echo
+now saves its echo path after a well-converged reply (at most daily) and
+reloads it at boot; the 64ms tail applies to the hardware reference only (PR
+#610).
+
+**Arbitration by capture time**, after Wil's push to "build for reasonably
+dodgy wifi": two Echoes answering one utterance happened when a late frame or
+a controller backlog made one wake look later than it was heard. Every claim is
+now dated by when the audio was captured — the controller's own wakes from the
+stream's sequence numbers, private wakes from the Echo's monotonic clock via a
+min-RTT ping — and a wake for a session the Echo has already closed is
+ignored. The wake model's reset moved off the event loop, where it had been
+costing ~400ms per controller-scored wake. Six shared wakes on the bench, one
+answer each.
+
+**The output chain runs on the Echo** (#243): EQ → bass guard → limiter in Go
+at the ALSA write, held bit-exact to vectors generated from the Python, and
+negotiated both ways as `output_chain` so audio is never shaped twice. EQ
+changes are heard within a period instead of after the 4s lead. On the way,
+VVV went deaf: a follow-up turn nobody answered ended on the device's own
+no-speech timeout and nothing handed back to the wake stream (4b9a557). Then
+Wil's requirement — "if I say the wake word and the LED lights I expect the
+music to duck at the same time" — met by a tiered buffer: the Echo ducks at its
+own wake crossing, the ALSA tier shrinks to 85ms (4×1024), and the controller's
+duck confirms it. Measured first: the write loop's worst gap between writes
+under load was 61.7ms.
+
+**Nothing is sent to HA unless someone speaks.** A false wake over music got
+"you're very welcome" in reply: HA's VAD engaged on ducked-music residue and
+Whisper heard "Thank you. Thank you." The controller now holds a turn's audio
+until Silero VAD (inside openwakeword already) scores a frame at 0.5, then
+releases all of it in order; silent turns peaked 0.03, speech 0.72–1.00. Over
+music on VVV, four wakes followed by silence and a real false wake all sent
+nothing. The Echo's own gate for button and follow-up turns moved from an RMS
+threshold to the same model: 9.2% of one core at 12.5 frames/s, only while a
+turn is open. **openwakeword's `silero_vad.onnx` takes ONNX Runtime 1.19 on
+armv7 down with SIGBUS inside `CreateSession`** — tensors stored as protobuf
+`raw_data` at arbitrary offsets; rewriting only the int64 tensors still
+faulted — and it looks like a hang, because debuggerd crashes dumping the
+32-bit process and leaves it stopped with an empty tombstone. Every tensor in
+its typed field loads and is bit-identical; a Docker stage builds it, pinned by
+sha256 in and out.
+
+The wake bar over music is not settled. A per-frame trace showed the logged
+wake score is the CROSSING frame, not the peak, so the day's first comparison
+of real and false wakes was wrong: real wakes peak 0.82–1.00 with one at
+0.446, the two traced false wakes 0.347 and 0.390. A longer run of frames
+does not separate them; a peak bar might. Collecting more.
+
+**Every Echo carries the full asset set whatever its wake word mode** (Wil:
+"either could be switched to the other mode and should be already in a state
+to accommodate the switch"), repaired on connect and queued behind the OTA lock,
+since an upgrade has the whole fleet reconnect at once. **A missing model never
+moves an Echo to the controller's wake word** — an opt-in was designed and
+dropped: "the button still works regardless."
+
+**The mid-answer gaps were partly ours.** HA's streaming TTS pauses between
+sentences while the LLM writes the next one, and ffmpeg's FLAC decoder held
+1.65s of audio (frame threading across 8 cores; 0.88s on one thread), which
+reached the Echo only when the next sentence did. TTS is now requested as WAV
+at the wire format and passed straight through. Four answers, one 49 seconds
+long: no underruns, against a 2s gap earlier the same evening. Music Assistant
+keeps sending its own FLAC, and plays as before.
+
+**Merged at close:** #602 → #610 → #613, in order, merge commits, CI green
+against main each time. One flake found on the way: the output chain vectors'
+float stats differ in the last bit between CI runners (11.059648197723096
+against 11.0596481977231); the audio is still compared exactly, the stats now
+to 1e-9. Nothing is released yet — an `emos-v*` tag is still owed first.
