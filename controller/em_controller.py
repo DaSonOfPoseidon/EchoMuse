@@ -542,25 +542,6 @@ class Device:
         # every push, so a device whose config has never arrived behaves
         # exactly as it always did.
         self.oww_on_device: str = em_shadow.MODE_OFF
-        # Whether this device is believed to HAVE the classifier it is
-        # configured to use. False stands it down to controller-side wake
-        # (em_shadow.effective_mode), because a device cannot score a model it
-        # does not have and "on" means nobody else is triggering for it —
-        # which is silent, and looks healthy (#191).
-        #
-        # Optimistic by default: absence of evidence is not evidence of
-        # absence, and standing every device down on a fresh controller would
-        # be a worse bug than the one this prevents.
-        #
-        # A BACKSTOP, not the primary mechanism. Config changes are handled by
-        # install-before-switch (em_api._hold_back_oww_model): a device is
-        # never told to use a model it does not have, so it cannot be deafened
-        # by an ordinary wake-word change. This covers the causes a config
-        # change cannot see — a file deleted underneath us, a device
-        # reprovisioned behind our back — and its writer is the
-        # reconcile-on-connect pass designed in #191, which is the first thing
-        # that will actually KNOW what a device has.
-        self.oww_model_ready: bool = True
         self.pending_wake: em_shadow.PendingWake = em_shadow.PendingWake()
         # This controller's own crossings while the DEVICE is triggering —
         # the comparison from the other side. Kept in "on" mode because the
@@ -4064,8 +4045,6 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
         # rather than being honoured.
         device.oww_on_device = em_shadow.effective_mode(
             config.get("owwOnDevice"), device.oww_trigger_capable,
-            device.oww_model_ready,
-            local_capable=device.oww_local_capable,
         )
         # Wake word assets, start script and debloat, reconciled against what
         # the device actually has — see api.reconcile_on_connect for why the

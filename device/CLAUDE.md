@@ -440,20 +440,19 @@ Only devices that actually score locally are held back — with
 old and the incoming mode are consulted, or a save that enables on-device
 scoring while changing the wake word slips through on the old mode.
 
-`em_shadow.effective_mode` also takes `model_ready` alongside
-`trigger_capable`. Its writer is **`em_api.reconcile_oww_assets`**, run as a
-background task from the connect handler: install-before-switch covers every
-path where the device is connected, and this covers the one where it was not.
-A device whose wake word changed while it was offline is told to use the new
-model by the ordinary connect-time config push, with nothing checking it has
-the classifier — so the check happens straight after, and the mode drops to
-`off` if it does not. A known-missing model degrades to **`off`, not `shadow`** —
-shadow cannot score either, so degrading to it would be the wrong answer
-dressed as a fallback; only `off` puts the controller back in charge of
-triggering, which is the one arrangement that still answers the user. It
-defaults **True**: absence of evidence is not evidence of absence, and standing
-every device down because the controller has not looked would be worse than the
-bug.
+**A missing model never changes the mode — for the offline case either.**
+Install-before-switch covers every path where the device is connected;
+**`em_api.reconcile_oww_assets`**, run in the background from the connect
+handler, covers the one where it was not — a device whose wake word changed
+while it was offline is told to use the new model by the ordinary connect-time
+config push, with nothing checking it has the classifier. The reconcile
+installs it and pushes the config again so the scorer rebuilds. Until then the
+device keeps its mode and answers the button. It used to drop the mode to
+`off` so the controller would trigger meanwhile (`effective_mode`'s
+`model_ready`); private-listening firmware was already exempt, and on
+2026-09-22 Wil removed it for older firmware too and declined an opt-in for it
+("the button still works regardless") — `effective_mode` now takes no
+readiness at all, and a test pins that the reconcile never assigns the mode.
 
 The hold-back is invisible at the call site — the config push looks entirely
 ordinary and the whole guard is that one key was swapped out first — so tests
@@ -489,15 +488,14 @@ that ride with it) closes the offline case, and three rules keep it from doing
 harm:
 
 - **Failure to LOOK is not evidence of absence.** Any error reading the
-  device's inventory leaves `model_ready` alone — the shell plane is very
-  likely not up yet moments after connect, and standing a device down because
-  the controller could not ask would be worse than the bug. Only a successful
-  listing that lacks the model counts.
-- **Degrade first, then repair** — the mode drops to `off` the moment the
-  model is known missing, so the controller triggers throughout the install
-  rather than only after it. Deliberately the opposite ordering to
-  `_install_then_switch`, where the device is on a wake word it can still hear
-  and must not be disturbed; here it is already deaf.
+  device's inventory changes nothing — the shell plane is very likely not up
+  yet moments after connect. Only a successful listing that lacks a file
+  counts.
+- **Repair, never switch.** The mode is left alone whatever is missing; a
+  device missing its selected model is warned about, repaired, and sent the
+  config again so its scorer rebuilds. **Every device carries the full set
+  whatever its mode** (`em_oww_assets.reconcile_action`), so switching modes
+  never waits on an install.
 - **Quiet when there is nothing to do.** Devices reconnect often on this
   fleet, so the ordinary path is one shell round trip and no log line.
 
@@ -506,8 +504,9 @@ its name, and counting that as installed leaves the device scoring against a
 classifier that silently disagrees with the controller.
 
 **"Can it score today" and "is it complete" are two questions, and only the
-first was ever asked.** `missing_selected_classifier` decides whether to stand
-the mode down, and correctly looks only at the selected model —
+first was ever asked.** `missing_selected_classifier` decides whether the
+device is deaf (warned about, config re-pushed once repaired), and correctly
+looks only at the selected model —
 a missing spare is not a deaf device. But nothing looked at the spares at all,
 so Office ran from 17 August to 2026-09-02 without `alexa`, `hey_mycroft` or
 `hey_rhasspy`, scoring its own wake word perfectly and reported healthy by

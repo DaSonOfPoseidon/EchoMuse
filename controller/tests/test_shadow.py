@@ -166,51 +166,22 @@ def test_capability_does_not_promote_a_lesser_mode():
 # ── a missing classifier must not deafen the device (#191) ───────────────────
 
 
-def test_a_missing_model_stands_the_device_down_to_controller_wake():
+def test_a_missing_model_never_changes_the_mode():
     """
-    A device cannot score a wake word whose classifier it does not have, and
-    under "on" the controller has stopped triggering on its behalf — so
-    nothing fires, nothing warns, and the dashboard reports it healthy.
-
-    Degrading to "shadow" would be the wrong answer dressed as a fallback:
-    shadow cannot score either. Only "off" puts the controller back in charge
-    of triggering, which is the one arrangement that still answers the user.
+    It used to drop "on" to "off" so the controller would trigger instead.
+    Wil, 2026-09-22: a device configured for its own wake word is never moved
+    to the controller's — it answers the button until the connect reconcile
+    installs the model. So readiness is not an input to the mode at all.
     """
-    assert em_shadow.effective_mode(
-        "on", trigger_capable=True, model_ready=False) == em_shadow.MODE_OFF
-    assert em_shadow.effective_mode(
-        "shadow", trigger_capable=True, model_ready=False) == em_shadow.MODE_OFF
-    assert em_shadow.effective_mode(
-        "on", trigger_capable=False, model_ready=False) == em_shadow.MODE_OFF
-
-
-def test_model_readiness_is_assumed_when_not_stated():
-    """
-    Absence of evidence is not evidence of absence. Callers that do not know
-    what is installed keep today's behaviour — standing every device down on a
-    controller that simply has not looked would be a worse bug than the one
-    this prevents.
-    """
+    import inspect
+    params = inspect.signature(em_shadow.effective_mode).parameters
+    assert not [p for p in params if "model" in p or "ready" in p or "fallback" in p]
     assert em_shadow.effective_mode("on", trigger_capable=True) == em_shadow.MODE_ON
-    assert em_shadow.effective_mode(
-        "on", trigger_capable=True, model_ready=True) == em_shadow.MODE_ON
-    assert em_shadow.effective_mode("shadow", trigger_capable=False) == em_shadow.MODE_SHADOW
 
 
-def test_a_ready_model_does_not_rescue_a_missing_capability():
-    """The two guards are independent; neither may mask the other."""
-    assert em_shadow.effective_mode(
-        "on", trigger_capable=False, model_ready=True) == em_shadow.MODE_SHADOW
-
-
-def test_off_stays_off_whatever_is_installed():
-    """
-    "off" already means the controller triggers, so there is nothing to stand
-    down and no reason for the model's presence to enter into it.
-    """
-    for ready in (True, False):
-        assert em_shadow.effective_mode(
-            "off", trigger_capable=True, model_ready=ready) == em_shadow.MODE_OFF
+def test_off_stays_off_whatever_the_capability():
+    for capable in (True, False):
+        assert em_shadow.effective_mode("off", trigger_capable=capable) == em_shadow.MODE_OFF
 
 
 def test_in_on_mode_only_the_device_triggers():
@@ -316,20 +287,3 @@ def test_absurd_wake_age_is_clamped_and_then_dropped():
     wake, age = p.take(at_now=1000.0)
     assert wake is None
     assert age == pytest.approx(em_shadow.MAX_AGE_S)
-
-
-def test_a_private_listener_is_never_degraded_into_streaming():
-    """docs/listening.md: a device that can listen privately and is missing
-    its model stays "on" and reports itself degraded. Falling back to "off"
-    would have the controller score a stream the operator chose not to send."""
-    assert em_shadow.effective_mode(
-        "on", trigger_capable=True, model_ready=False, local_capable=True
-    ) == em_shadow.MODE_ON
-    # Older firmware keeps the old rule: it streams in every mode anyway.
-    assert em_shadow.effective_mode(
-        "on", trigger_capable=True, model_ready=False
-    ) == em_shadow.MODE_OFF
-    # And "off" is always "off".
-    assert em_shadow.effective_mode(
-        "off", trigger_capable=True, local_capable=True
-    ) == em_shadow.MODE_OFF

@@ -1524,25 +1524,6 @@ def test_a_failed_install_leaves_the_device_on_its_old_wake_word():
 
 
 
-def test_both_effective_mode_call_sites_pass_readiness():
-    """
-    Config push and device registration both resolve the mode. A guard applied
-    to one and not the other is a device that is safe until it reconnects —
-    the same shape as the v7 stats-relay miss.
-    """
-    for name in ("em_api.py", "em_controller.py"):
-        src = (CONTROLLER / name).read_text()
-        # Non-greedy matching to the first ")" is wrong here: the argument
-        # itself contains one (`effective.get("owwOnDevice")`). Take a fixed
-        # window after each call instead — the call sites are three lines.
-        for m in re.finditer(r"effective_mode\(", src):
-            call = src[m.end():m.end() + 200]
-            assert "model_ready" in call or "oww_model_ready" in call, (
-                f"{name}: an effective_mode call omits model readiness — "
-                f"{call.splitlines()[0]!r}"
-            )
-
-
 def test_an_announcement_clears_the_cancel_flag_before_playing():
     """
     cancel_event is set by a cancel — a button press during a turn, a mute —

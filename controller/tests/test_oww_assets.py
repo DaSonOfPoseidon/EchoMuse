@@ -487,12 +487,12 @@ def test_gaps_are_repaired_in_either_mode(mode_off):
     assert A.reconcile_action(mode_off, None, [A.VAD_NAME]) == "repair"
 
 
-def test_a_locally_scoring_device_without_its_model_is_stood_down_first():
-    assert A.reconcile_action(False, "hey_jarvis_v0.1.onnx", ["hey_jarvis_v0.1.onnx"]) == "degrade"
+def test_a_locally_scoring_device_without_its_model_is_deaf_until_repaired():
+    assert A.reconcile_action(False, "hey_jarvis_v0.1.onnx", ["hey_jarvis_v0.1.onnx"]) == "deaf"
 
 
 def test_a_controller_scoring_device_without_its_model_is_only_repaired():
-    """Nobody to stand down: the controller is already scoring for it."""
+    """It can still hear its wake word: the controller is scoring for it."""
     assert A.reconcile_action(True, "hey_jarvis_v0.1.onnx", ["hey_jarvis_v0.1.onnx"]) == "repair"
 
 
@@ -510,3 +510,19 @@ def test_the_connect_reconcile_is_not_gated_on_the_wake_word_mode():
             assert not any(isinstance(b, ast.Return) for b in node.body), (
                 "reconcile_oww_assets returns early on the wake word mode")
     assert "reconcile_action(" in ast.unparse(fn)
+
+
+def test_the_reconcile_never_changes_a_devices_mode():
+    """Repair, never switch: a device missing its model keeps its mode and
+    answers the button until the install lands (Wil, 2026-09-22)."""
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "em_api.py").read_text()
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == "reconcile_oww_assets")
+    for node in ast.walk(fn):
+        if isinstance(node, (ast.Assign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for t in targets:
+                assert "oww_on_device" not in ast.unparse(t), (
+                    "reconcile_oww_assets changes the wake word mode")
