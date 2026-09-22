@@ -4581,8 +4581,11 @@ async def _sync_oww_assets(live, device_id: str, progress=None) -> dict:
     if sel:
         await _shell_run(live, f"touch {em_oww_assets.device_path(sel.name)}")
 
-    await say("info", f"installed {len(pushed)} file(s) — "
-                      f"restart the device to start scoring")
+    # Only the wake word needs a restart: the scorer is built once, while the
+    # speech gate's model is picked up by the next turn.
+    restart = any(a.kind != "vad" for a in plan.push)
+    await say("info", f"installed {len(pushed)} file(s)"
+                      + (" — restart the device to start scoring" if restart else ""))
     return {"ok": True, "pushed": pushed, "pruned": plan.prune, "problems": problems}
 
 
