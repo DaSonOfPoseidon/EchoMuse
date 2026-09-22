@@ -879,10 +879,10 @@ with no way for the user to tell which they had.
   wire action. When we duck, nothing was ever paused — the pause has to
   actually happen at release, or it is silently dropped and the music plays
   on.
-- **Music does NOT count as "streaming"** for the device's wake threshold
-  (`IsStreaming` is voice-only). It is a quiet continuous bed, not a response
-  being talked over; reporting it would drop the device's wake bar for the
-  length of a song.
+- **Music counts for the device's wake bar since private listening**
+  (`speakerPlaying` = `VoiceAudible || MusicAudible`), mirroring this side's
+  wake-over-music rule, since a private Echo sends nothing for the controller
+  to score. `VoiceAudible` alone still decides the `barge` flag on `oww_wake`.
 - Taps see the MIXED output, which is more correct than before: the AEC
   far-end reference is what needs cancelling from the mic, and with music
   under a response the echo is the sum.

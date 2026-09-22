@@ -328,7 +328,9 @@ Three things are load-bearing:
 its wake bar to `bargeInThreshold` while the speaker is streaming (echo at the
 mic is ~25dB louder than the person, so speech-over-TTS scores are depressed), so
 the device mirrors that: `shadow.Scorer.SetBargeThreshold` uses the lower bar
-while `PcmSpeaker.IsStreaming()` is true, and never *raises* the bar if
+while `PcmSpeaker.VoiceAudible(wakeword.ScoreSpan)` is true (arriving, queued, or
+played within the 1.96s the model can still see — it was `IsStreaming`, "still
+arriving", until 2026-09-22, which dropped the bar ~0.1s into a reply), and never *raises* the bar if
 misconfigured above the normal one. The device reports the threshold in force
 with each window summary; it lands on the turn as `dev_threshold` (schema v15).
 `turns.wake_threshold` now records the **effective** threshold the wake actually

@@ -34,6 +34,7 @@ import (
 	"github.com/wilbowes/EchoMuse/internal/listen"
 	"github.com/wilbowes/EchoMuse/internal/platform"
 	"github.com/wilbowes/EchoMuse/internal/server"
+	"github.com/wilbowes/EchoMuse/internal/wakeword"
 	"github.com/wilbowes/EchoMuse/internal/wakeword/shadow"
 	"github.com/wilbowes/EchoMuse/internal/wifi"
 	pkgbuttons "github.com/wilbowes/EchoMuse/pkg/buttons"
@@ -1113,8 +1114,14 @@ func applyShadowConfig(dc *client.DataClient, cc *client.ControlClient,
 // scored wake-over-music at the barge bar when barge-in is enabled, and this
 // is only ever installed when it is; a device that listens privately has to
 // apply the rule itself, since the controller no longer hears the stream.
+//
+// "Playing" runs until the speaker has been quiet for wakeword.ScoreSpan:
+// a wake word spoken in the last second of a reply is scored in frames whose
+// window still holds the reply's echo, so it needs the lower bar too.
 func speakerPlaying(spk *speaker.PcmSpeaker) func() bool {
-	return func() bool { return spk.IsStreaming() || spk.IsPlayingMusic() }
+	return func() bool {
+		return spk.VoiceAudible(wakeword.ScoreSpan) || spk.MusicAudible(wakeword.ScoreSpan)
+	}
 }
 
 // actsOnCrossings describes what a crossing will DO, for the log line. The
@@ -1192,7 +1199,7 @@ func onWakeCrossing(cc *client.ControlClient, dc *client.DataClient,
 			}
 		}
 	}
-	barge := spk != nil && spk.IsStreaming()
+	barge := spk != nil && spk.VoiceAudible(wakeword.ScoreSpan)
 	cc.SendOwwWake(score, crossed, ageMs, session, dc.ListenFloor(), barge)
 }
 
