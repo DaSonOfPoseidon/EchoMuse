@@ -22,7 +22,10 @@
 package shadow
 
 import (
+	"fmt"
 	"io"
+	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -154,6 +157,72 @@ type Scorer struct {
 	// the caller, because Detector is not safe for concurrent use and the
 	// caller is a different goroutine.
 	resetReq bool
+
+	// Bench trace: the per-frame scores around every frame at or above
+	// traceFloor, logged as one line, to choose between a higher bar and a
+	// longer run of frames for wakes over music. Scorer goroutine only.
+	traceLabel func() string
+	hist       []float32
+	trace      *scoreTrace
+}
+
+// traceFloor is below every bar in use, so near-misses are traced as well as
+// crossings; tracePre/tracePost are frames (80ms) either side of the trigger.
+const (
+	traceFloor = 0.15
+	tracePre   = 12
+	tracePost  = 12
+)
+
+type scoreTrace struct {
+	label   string
+	bar     float32
+	pre     []float32
+	post    []float32
+	crossed bool
+}
+
+// SetTraceLabel enables the bench score trace; label names what the speaker
+// is playing at the trigger frame.
+func (s *Scorer) SetTraceLabel(label func() string) {
+	s.mu.Lock()
+	s.traceLabel = label
+	s.mu.Unlock()
+}
+
+// traceFrame is called with mu held, once per scored frame.
+func (s *Scorer) traceFrame(score, bar float32, crossed bool) {
+	if s.traceLabel == nil {
+		return
+	}
+	if t := s.trace; t != nil {
+		t.post = append(t.post, score)
+		t.crossed = t.crossed || crossed
+		if len(t.post) >= tracePost {
+			var b strings.Builder
+			for _, v := range t.pre {
+				fmt.Fprintf(&b, " %.3f", v)
+			}
+			b.WriteString(" |")
+			for _, v := range t.post {
+				fmt.Fprintf(&b, " %.3f", v)
+			}
+			log.Printf("[shadow] trace %s bar=%.2f crossed=%v:%s", t.label, t.bar, t.crossed, b.String())
+			s.trace = nil
+		}
+	} else if score >= traceFloor {
+		s.trace = &scoreTrace{
+			label:   s.traceLabel(),
+			bar:     bar,
+			pre:     append([]float32(nil), s.hist...),
+			post:    []float32{score},
+			crossed: crossed,
+		}
+	}
+	s.hist = append(s.hist, score)
+	if len(s.hist) > tracePre {
+		s.hist = s.hist[1:]
+	}
 }
 
 // NewScorer starts a scorer. onCross is called from the scorer goroutine when
@@ -371,6 +440,7 @@ func (s *Scorer) run() {
 			s.mu.Lock()
 			s.ready = false
 			s.prevAbove = false
+			s.hist, s.trace = nil, nil
 			s.mu.Unlock()
 		}
 
@@ -424,6 +494,7 @@ func (s *Scorer) run() {
 			s.stats.Crossings++
 			s.lastCross = now
 		}
+		s.traceFrame(score, threshold, crossed)
 		s.mu.Unlock()
 
 		if crossed && s.onCross != nil {

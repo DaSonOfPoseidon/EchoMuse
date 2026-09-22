@@ -16,6 +16,7 @@ import (
 	"github.com/wilbowes/EchoMuse/internal/config"
 	"github.com/wilbowes/EchoMuse/internal/listen"
 	"github.com/wilbowes/EchoMuse/internal/processor"
+	"github.com/wilbowes/EchoMuse/internal/wakeword/ort"
 	"github.com/wilbowes/EchoMuse/internal/wakeword/shadow"
 	"github.com/wilbowes/EchoMuse/pkg/mic"
 	"github.com/wilbowes/EchoMuse/pkg/speaker"
@@ -207,6 +208,10 @@ type DataClient struct {
 	micWanted     bool
 	micWantedLock bool
 
+	// onTurnEnded is told when a bounded (lockMic) turn stream ENDS ITSELF —
+	// the no-speech timeout — rather than being stopped. See turnEndedItself.
+	onTurnEnded func()
+
 	// beamReq carries a pending beam lock/unlock request from the control
 	// plane to the mic streaming goroutine. Beamformer methods are not safe
 	// to call from other goroutines (same reason beam.Unlock is deferred
@@ -275,6 +280,15 @@ type DataClient struct {
 	// the new one's Lock()/Process(). Uncontended outside that brief
 	// overlap, so the cost is a no-op lock per 160ms batch.
 	pipeMu sync.Mutex
+
+	// The turn stream's speech gate (speechgate.go). newSpeechStream returns
+	// a scorer for one turn, or nil for the RMS threshold; a field so tests
+	// can substitute one. vad is the shared Silero session, loaded on first
+	// success; vadErr de-duplicates the "not loaded" log line.
+	newSpeechStream func() speechScorer
+	vadMu           sync.Mutex
+	vad             *ort.VAD
+	vadErr          string
 }
 
 // NewDataClient wires the mic/speaker pipeline. canceller is the shared AEC
@@ -292,6 +306,7 @@ func NewDataClient(deviceID string, microphone mic.Subscribable, spk speaker.Spe
 		aec:        canceller,
 		listenGate: listen.New(0, 0, 0),
 	}
+	d.newSpeechStream = d.sileroStream
 	d.listenState.Store(ListenStream)
 	// Seeded from the env default so a device that never reaches a
 	// controller still honours EM_AEC_HW_REF; the first config push
@@ -435,6 +450,31 @@ func (d *DataClient) SetListenState(state string) bool {
 func (d *DataClient) ListenState() string {
 	s, _ := d.listenState.Load().(string)
 	return s
+}
+
+// OnTurnEnded registers the callback for a turn stream that ended itself.
+// It runs on its own goroutine, after the stream is marked inactive.
+func (d *DataClient) OnTurnEnded(cb func()) { d.onTurnEnded = cb }
+
+// turnEndedItself retires a turn the DEVICE ended, and hands the mic back.
+//
+// The controller's instruction was "stream this turn", and the turn is over,
+// so the instruction is spent: left standing, the next reconnect's resumeMic
+// restores a turn stream nobody asked for, which times out in turn. And under
+// private listening nothing else hands back to the wake stream — the mic_stop
+// handler does so only while a turn stream is still running, which by the
+// time it arrives it is not. Both together left VVV deaf from a follow-up
+// turn nobody answered until the process restarted (2026-09-22 06:29:28).
+//
+// Called with the stream already inactive, so a StartMic from the callback
+// cannot be refused as "already active".
+func (d *DataClient) turnEndedItself() {
+	d.micMu.Lock()
+	d.micWanted, d.micWantedLock = false, false
+	d.micMu.Unlock()
+	if cb := d.onTurnEnded; cb != nil {
+		go cb()
+	}
 }
 
 // OnListenEnd registers the callback for sessions the device closes itself.
@@ -877,6 +917,7 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 	// the OWW chunk buffer, progressively killing wake detection until the
 	// process restarted. d.micStopCh is compared against our own stopCh as
 	// the identity token: they're equal only if no StartMic ran after us.
+	endedItself := false
 	defer func() {
 		d.micMu.Lock()
 		owner := d.micStopCh == stopCh
@@ -884,6 +925,9 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 			d.micActive = false
 		}
 		d.micMu.Unlock()
+		if owner && endedItself {
+			d.turnEndedItself()
+		}
 		// Unlock the beam only while still the current stream: if a
 		// replacement stream has already started (StopMic→StartMic pair),
 		// the beam belongs to it — this goroutine's late Unlock would
@@ -915,6 +959,17 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 	}
 	d.proc.ResetAGC()
 	d.pipeMu.Unlock()
+
+	// Speech gate for a bounded turn: Silero when loaded, else the RMS
+	// threshold. The wake stream warms the session in the background so the
+	// first turn does not pay for loading it.
+	var speechDet speechScorer
+	var speechPeak float32
+	if lockMic {
+		speechDet = d.newSpeechStream()
+	} else {
+		go d.loadSilero()
+	}
 
 	ch := d.mic.Subscribe()
 	defer d.mic.Unsubscribe(ch)
@@ -1035,8 +1090,13 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 			// this case would already be unreachable (timer stopped below).
 			// Unreachable entirely when !lockMic, since noSpeechTimerC is
 			// nil in that case and a nil channel never becomes ready.
-			log.Println("[data] streamMic: no speech detected within timeout — ending turn")
+			if speechDet != nil {
+				log.Printf("[data] streamMic: no speech detected within timeout (Silero peak %.2f) — ending turn", speechPeak)
+			} else {
+				log.Println("[data] streamMic: no speech detected within timeout — ending turn")
+			}
 			sendFrame([]byte{frameTypeNoSpeechTimeout})
+			endedItself = true
 			return
 
 		case raw, ok := <-ch:
@@ -1133,6 +1193,17 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 			// lockstep with micGainDb.
 			rms := vadPeriodRMS(mono)
 			speech := rms >= threshold*gainLin
+			if speechDet != nil {
+				if p, err := speechDet.Prob(monoFloat(mono)); err != nil {
+					log.Printf("[data] speech gate: %v — RMS threshold for the rest of this turn", err)
+					speechDet = nil
+				} else {
+					speech = p >= speechProb
+					if p > speechPeak {
+						speechPeak = p
+					}
+				}
+			}
 
 			// Gate windows in units of actual iterations: the mic delivers
 			// whole ALSA-buffer batches (160ms/2560 samples — see the

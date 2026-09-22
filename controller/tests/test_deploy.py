@@ -1411,7 +1411,7 @@ def test_entity_names_do_not_repeat_the_device_label():
 
 def test_asset_sync_does_not_shadow_its_accumulator():
     """
-    _sync_oww_assets keeps a `pushed` list of installed asset names. Assigning
+    _sync_oww_assets_locked keeps a `pushed` list of installed asset names. Assigning
     the per-file transfer result to that same name shadowed the list on the
     FIRST file, so the append at the end of the loop raised
     AttributeError: 'TransferResult' object has no attribute 'append'
@@ -1426,9 +1426,9 @@ def test_asset_sync_does_not_shadow_its_accumulator():
     installed" while the dashboard offered to send it and returned 500.
     """
     src = (CONTROLLER / "em_api.py").read_text()
-    fn = re.search(r"async def _sync_oww_assets\(.*?\n(?=\nasync def |\ndef )",
+    fn = re.search(r"async def _sync_oww_assets_locked\(.*?\n(?=\nasync def |\ndef )",
                    src, re.S)
-    assert fn, "_sync_oww_assets not found"
+    assert fn, "_sync_oww_assets_locked not found"
     body = fn.group(0)
 
     assert "pushed = []" in body, "the accumulator is gone"
@@ -1522,25 +1522,6 @@ def test_a_failed_install_leaves_the_device_on_its_old_wake_word():
         "device onto a model it does not have"
     )
 
-
-
-def test_both_effective_mode_call_sites_pass_readiness():
-    """
-    Config push and device registration both resolve the mode. A guard applied
-    to one and not the other is a device that is safe until it reconnects —
-    the same shape as the v7 stats-relay miss.
-    """
-    for name in ("em_api.py", "em_controller.py"):
-        src = (CONTROLLER / name).read_text()
-        # Non-greedy matching to the first ")" is wrong here: the argument
-        # itself contains one (`effective.get("owwOnDevice")`). Take a fixed
-        # window after each call instead — the call sites are three lines.
-        for m in re.finditer(r"effective_mode\(", src):
-            call = src[m.end():m.end() + 200]
-            assert "model_ready" in call or "oww_model_ready" in call, (
-                f"{name}: an effective_mode call omits model readiness — "
-                f"{call.splitlines()[0]!r}"
-            )
 
 
 def test_an_announcement_clears_the_cancel_flag_before_playing():
@@ -3059,3 +3040,23 @@ def test_the_fireos_flow_refuses_an_emos_boot_image_before_it_writes():
         "runPatchBoot must check whose image is in the slot before patching it")
     assert fn.index("isOurBootImage(") < fn.index("of=/tmp/work/boot.img"), (
         "the emOS check must precede the pull, or the refusal comes too late")
+
+
+def test_asset_installs_queue_behind_the_ota_lock():
+    """
+    An upgrade that adds an asset has every device reconnect and push at once
+    — ~14MB each for a device that never had the runtime — over the transport
+    where three concurrent OTAs stalled the event loop 11.1s. So asset installs
+    take the same global lock, and only the wrapper may reach the unlocked body.
+    """
+    import ast
+    src = (CONTROLLER / "em_api.py").read_text()
+    tree = ast.parse(src)
+    fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)}
+    wrapper = fns["_sync_oww_assets"]
+    assert any(isinstance(n, ast.AsyncWith) and "_ota_lock" in ast.unparse(n.items[0].context_expr)
+               for n in ast.walk(wrapper)), "_sync_oww_assets does not take _ota_lock"
+    callers = [name for name, fn in fns.items()
+               if name not in ("_sync_oww_assets", "_sync_oww_assets_locked")
+               and "_sync_oww_assets_locked(" in ast.unparse(fn)]
+    assert not callers, f"unlocked asset sync called from {callers}"

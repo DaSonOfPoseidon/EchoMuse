@@ -1167,8 +1167,6 @@ async def _apply_live_config(device_id: str, live, effective: dict) -> None:
         # that to shadow.
         live.oww_on_device = em_shadow.effective_mode(
             effective["owwOnDevice"], live.oww_trigger_capable,
-            getattr(live, "oww_model_ready", True),
-            local_capable=getattr(live, "oww_local_capable", False),
         )
     if "eqBands" in effective:
         live.eq_bands = effective["eqBands"]
@@ -4372,32 +4370,25 @@ def forget_reconcile(device_id: str) -> None:
 
 async def reconcile_oww_assets(device_id: str, live) -> None:
     """
-    On connect: make sure a locally-scoring device HAS the model it was told
-    to use, and put the controller back in charge if it does not.
+    On connect: make sure the device has every asset it should, whatever its
+    wake word mode (em_oww_assets.reconcile_action).
 
     Every other install path runs while the device is connected — the wizard
     over ADB, `_install_then_switch` on a config save, the Updates tab by hand.
     A device that was OFFLINE when its wake word changed has none of them: the
     connect handler pushes the effective config directly, so it is told to use
-    a classifier it may never have received. Under `owwOnDevice=on` that is a
-    device with no wake word at all — it cannot score, and the controller has
-    stood down and no longer triggers on its behalf (#191). Changing the wake
-    word, or re-scoping the wakeword section, while a device is unplugged is
-    enough to produce it.
+    a classifier it may never have received (#191), and a device on the
+    controller's wake word used to be skipped entirely.
 
-    This is `oww_model_ready`'s intended writer. Three rules:
+    Three rules:
 
     - **Failure to LOOK is not evidence of absence.** Any error reading the
-      device's inventory leaves `oww_model_ready` alone, so a shell plane that
-      is not up yet — likely, moments after connect — costs nothing. Only a
-      successful listing that does not contain the model stands the device
-      down. Absence of evidence, per em_shadow.effective_mode's own docstring.
-    - **Degrade first, then repair.** The mode is dropped to off the moment the
-      model is known missing, which puts the CONTROLLER back to triggering, so
-      the device answers throughout the install rather than only after it. That
-      ordering is the opposite of `_install_then_switch`, deliberately: there
-      the device is already on a wake word it can hear and must not be
-      disturbed, here it is already deaf.
+      device's inventory changes nothing, so a shell plane that is not up yet
+      — likely, moments after connect — costs nothing.
+    - **Repair, never switch.** A device missing its selected model is left in
+      its mode (it answers the button) and warned about; once the model is in,
+      a config push rebuilds its scorer. It is never moved to the controller's
+      wake word — see em_shadow.effective_mode.
     - **Quiet when there is nothing to do.** Devices on this fleet reconnect
       often, so the ordinary path is one shell round trip and no log line.
 
@@ -4409,12 +4400,12 @@ async def reconcile_oww_assets(device_id: str, live) -> None:
     effective = await loop.run_in_executor(
         None, db.get_effective_device_config, device_id
     )
-    # With owwOnDevice=off the controller does the scoring and what is on the
-    # device is irrelevant — the common case, and it costs nothing here.
-    if em_shadow.normalise_mode(effective.get("owwOnDevice")) == em_shadow.MODE_OFF:
-        return
+    # Firmware that cannot load a runtime can use none of this. The wake word
+    # MODE is deliberately not checked: every device carries the full set, so
+    # a mode switch never waits on an install (em_oww_assets.reconcile_action).
     if not live.oww_shadow_capable:
         return
+    mode_off = em_shadow.normalise_mode(effective.get("owwOnDevice")) == em_shadow.MODE_OFF
 
     desired, _ = em_oww_assets.desired_assets(_oww_wanted_models(device_id))
     try:
@@ -4425,45 +4416,26 @@ async def reconcile_oww_assets(device_id: str, live) -> None:
         return
 
     missing = em_oww_assets.missing_selected_classifier(desired, state["installed"])
-    if missing is None:
-        live.oww_model_ready = True
-        live.oww_on_device = em_shadow.effective_mode(
-            effective.get("owwOnDevice"), live.oww_trigger_capable,
-            model_ready=True,
-            local_capable=live.oww_local_capable,
-        )
-        # The device can score TODAY, so nothing is degraded and no warning is
-        # owed — but it may still be short of the other stock classifiers, in
-        # which case selecting one of them tomorrow is the deaf device this
-        # whole path exists to prevent. Repair quietly; see missing_assets.
-        gaps = em_oww_assets.missing_assets(desired, state["installed"])
-        if gaps:
-            log.info(f"[api] [{device_id}] oww reconcile: {len(gaps)} asset(s) "
-                     f"missing ({', '.join(gaps)}) — installing")
-            try:
-                result = await _sync_oww_assets(live, device_id)
-            except Exception as e:
-                result = {"ok": False, "error": str(e)}
-            if not result.get("ok"):
-                # Not an error event: the device is scoring correctly and the
-                # user has lost nothing today. A log line is the right weight.
-                log.warning(f"[api] [{device_id}] oww reconcile: could not install "
-                            f"the missing assets ({result.get('error')})")
+    gaps = em_oww_assets.missing_assets(desired, state["installed"])
+    action = em_oww_assets.reconcile_action(mode_off, missing, gaps)
+    if action == "none":
         return
 
-    live.oww_model_ready = False
-    live.oww_on_device = em_shadow.effective_mode(
-        effective.get("owwOnDevice"), live.oww_trigger_capable,
-        model_ready=False,
-        local_capable=live.oww_local_capable,
-    )
-    log.warning(f"[api] [{device_id}] oww reconcile: {missing} is not installed "
-                f"— controller-side scoring until it is")
-    await _push_log_event(
-        device_id, "warn", "controller",
-        f"Wake word model {missing} is missing — scoring on the controller "
-        f"while it installs"
-    )
+    # The mode is never changed here: a device missing its model keeps it,
+    # answers the button, and hears its wake word again once this installs.
+    if action == "deaf":
+        while_missing = ("this Echo cannot hear its wake word until it installs "
+                         "(the button still works)")
+        log.warning(f"[api] [{device_id}] oww reconcile: {missing} is not "
+                    f"installed — {while_missing}")
+        await _push_log_event(device_id, "warn", "controller",
+                              f"Wake word model {missing} is missing — {while_missing}")
+    else:
+        # Nothing is deaf, so no warning is owed — but anything missing is a
+        # device that cannot switch mode, change wake word or gate on Silero
+        # tomorrow. Repair quietly; see missing_assets.
+        log.info(f"[api] [{device_id}] oww reconcile: {len(gaps)} asset(s) "
+                 f"missing ({', '.join(gaps)}) — installing")
 
     try:
         result = await _sync_oww_assets(live, device_id)
@@ -4475,35 +4447,65 @@ async def reconcile_oww_assets(device_id: str, live) -> None:
         return
 
     if not result.get("ok"):
-        await _push_log_event(
-            device_id, "error", "controller",
-            f"Could not install {missing} ({result.get('error')}) — this "
-            f"device is scoring on the controller, not locally"
-        )
-        log.error(f"[api] [{device_id}] oww reconcile: install failed "
-                  f"({result.get('error')}) — left on controller-side scoring")
+        if action == "deaf":
+            await _push_log_event(
+                device_id, "error", "controller",
+                f"Could not install {missing} ({result.get('error')}) — "
+                f"this Echo still cannot hear its wake word"
+            )
+            log.error(f"[api] [{device_id}] oww reconcile: install failed "
+                      f"({result.get('error')})")
+        else:
+            # Not an error event: the device is working and the user has lost
+            # nothing today. A log line is the right weight.
+            log.warning(f"[api] [{device_id}] oww reconcile: could not install "
+                        f"the missing assets ({result.get('error')})")
         return
 
-    live.oww_model_ready = True
-    live.oww_on_device = em_shadow.effective_mode(
-        effective.get("owwOnDevice"), live.oww_trigger_capable,
-        model_ready=True,
-        local_capable=live.oww_local_capable,
-    )
-    # The device builds its scorer from the config push, so it needs telling
-    # the model is now there — same mechanism _install_then_switch relies on.
-    await live.send_control({"type": "config", **effective})
-    await _push_log_event(
-        device_id, "info", "controller",
-        f"Wake word model {missing} installed — scoring locally again"
-    )
-    log.info(f"[api] [{device_id}] oww reconcile: {missing} installed, "
-             f"mode restored to {live.oww_on_device}")
+    if action == "deaf":
+        # The device builds its scorer from the config push, so it needs telling
+        # the model is now there — same mechanism _install_then_switch relies on.
+        await live.send_control({"type": "config", **effective})
+        await _push_log_event(
+            device_id, "info", "controller",
+            f"Wake word model {missing} installed — listening for its wake word again"
+        )
+        log.info(f"[api] [{device_id}] oww reconcile: {missing} installed")
 
 
 async def _sync_oww_assets(live, device_id: str, progress=None) -> dict:
     """
-    Make a device's asset directory match what it needs. Idempotent.
+    Make a device's asset directory match what it needs, queued behind every
+    other multi-megabyte transfer on this controller.
+
+    Asset installs share `_ota_lock` with firmware updates. On an upgrade that
+    adds an asset, every device reconnects at once and each would start its
+    own push — ~14MB each for a device that never had the runtime, which is
+    most of an existing fleet on the controller's wake word (every device
+    carries the full set since 2026-09-22). Three concurrent OTAs over the same
+    transport stalled the event loop 11.1s (2026-09-02), and that loop feeds
+    speaker periods. Bounded by OTA_MAX_HOLD_S for the OTA path's reason: a
+    device that stops reading must not hold the queue for good.
+    """
+    if _ota_lock.locked():
+        log.info(f"[api] [{device_id}] oww assets: queued behind another transfer")
+        if progress:
+            await progress("info", "waiting for another device's transfer…")
+    async with _ota_lock:
+        try:
+            return await asyncio.wait_for(
+                _sync_oww_assets_locked(live, device_id, progress),
+                timeout=OTA_MAX_HOLD_S,
+            )
+        except asyncio.TimeoutError:
+            return {"ok": False,
+                    "error": f"abandoned after {OTA_MAX_HOLD_S:.0f}s so the queue could continue"}
+
+
+async def _sync_oww_assets_locked(live, device_id: str, progress=None) -> dict:
+    """
+    Make a device's asset directory match what it needs. Idempotent. Run with
+    `_ota_lock` held — call _sync_oww_assets.
 
     Push to `.part` then rename only once md5 matches, so an interrupted
     transfer can never leave a file the device would try to dlopen. md5 is
@@ -4581,8 +4583,11 @@ async def _sync_oww_assets(live, device_id: str, progress=None) -> dict:
     if sel:
         await _shell_run(live, f"touch {em_oww_assets.device_path(sel.name)}")
 
-    await say("info", f"installed {len(pushed)} file(s) — "
-                      f"restart the device to start scoring")
+    # Only the wake word needs a restart: the scorer is built once, while the
+    # speech gate's model is picked up by the next turn.
+    restart = any(a.kind != "vad" for a in plan.push)
+    await say("info", f"installed {len(pushed)} file(s)"
+                      + (" — restart the device to start scoring" if restart else ""))
     return {"ok": True, "pushed": pushed, "pruned": plan.prune, "problems": problems}
 
 

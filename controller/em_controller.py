@@ -328,7 +328,12 @@ BLE_ADVERTS_TYPE   = 0x06
 # (docs/listening.md): listen_state, session-tagged oww_wake, 0x07 session
 # audio and the listen_* replies. A device goes quiet only when it sees this —
 # an older controller acts on a device wake only when stream frames arrive.
-CONTROLLER_FEATURES = ["ble_adverts_data", "listen_session"]
+#
+# "output_chain": this controller sends UNPROCESSED audio to a device that
+# announced the same capability, and leaves EQ, bass guard and limiter to it.
+# The device runs its chain only when it sees this, so neither half alone
+# changes anything and the two can never both process the same audio.
+CONTROLLER_FEATURES = ["ble_adverts_data", "listen_session", "output_chain"]
 SPEAKER_FRAME_TYPE = 0x02
 SPEAKER_EOS_TYPE   = 0x03
 MIC_HEADER_LEN     = 3   # [type][seq_hi][seq_lo]
@@ -537,25 +542,6 @@ class Device:
         # every push, so a device whose config has never arrived behaves
         # exactly as it always did.
         self.oww_on_device: str = em_shadow.MODE_OFF
-        # Whether this device is believed to HAVE the classifier it is
-        # configured to use. False stands it down to controller-side wake
-        # (em_shadow.effective_mode), because a device cannot score a model it
-        # does not have and "on" means nobody else is triggering for it —
-        # which is silent, and looks healthy (#191).
-        #
-        # Optimistic by default: absence of evidence is not evidence of
-        # absence, and standing every device down on a fresh controller would
-        # be a worse bug than the one this prevents.
-        #
-        # A BACKSTOP, not the primary mechanism. Config changes are handled by
-        # install-before-switch (em_api._hold_back_oww_model): a device is
-        # never told to use a model it does not have, so it cannot be deafened
-        # by an ordinary wake-word change. This covers the causes a config
-        # change cannot see — a file deleted underneath us, a device
-        # reprovisioned behind our back — and its writer is the
-        # reconcile-on-connect pass designed in #191, which is the first thing
-        # that will actually KNOW what a device has.
-        self.oww_model_ready: bool = True
         self.pending_wake: em_shadow.PendingWake = em_shadow.PendingWake()
         # This controller's own crossings while the DEVICE is triggering —
         # the comparison from the other side. Kept in "on" mode because the
@@ -906,6 +892,19 @@ class Device:
         behaviour.
         """
         return "audio_mix" in (self.capabilities or [])
+
+    @property
+    def output_chain_on_device(self) -> bool:
+        """
+        Whether this device runs EQ, bass guard and limiter itself, at its
+        ALSA write — in which case every playback path here sends the audio
+        untouched (em_eq.Passthrough).
+
+        On the device, a change is heard within one period. Here it could not
+        reach the ~5.5s already queued on the device, and the dashboard's EQ
+        was only ever "immediate" for audio not yet sent.
+        """
+        return "output_chain" in (self.capabilities or [])
 
     @property
     def timer_alarm_ringing(self) -> bool:
@@ -1822,17 +1821,21 @@ async def _run_post_turn_playback(device: Device, voice_response: bytes) -> None
     # call and can be asked what they actually did — see em_eq.describe_*.
     # One response is one buffer, so these are per-response instances and
     # carry no state between turns.
-    _limiter = _limiter_for(device)
-    _guard   = _guard_for(device)
+    on_device = device.output_chain_on_device
+    _limiter = None if on_device else _limiter_for(device)
+    _guard   = None if on_device else _guard_for(device)
     log.info(
         f"[{device.device_id}] Output chain: "
-        f"{em_eq.describe_chain(device.eq_bands, device.eq_loudness, _limiter, _guard)}"
+        + ("on the device" if on_device else
+           em_eq.describe_chain(device.eq_bands, device.eq_loudness, _limiter, _guard))
     )
     # EQ is a solid numpy crunch (hundreds of ms for a long response) — run
     # it off the event loop, which otherwise freezes every device's LED
     # frames, shell proxying, and WS handling right as playback starts
     # (observed as spinner stutter and console typing judder).
     def _prepare_pcm() -> bytes:
+        if on_device:
+            return voice_response
         return em_eq.apply(voice_response, SPEAKER_RATE, device.eq_bands,
                            device.eq_loudness, limiter=_limiter,
                            guard=_guard)
@@ -2208,17 +2211,21 @@ async def _run_streaming_post_turn_playback(device: Device, pcm_chunks) -> int:
     Closing any layer at an arbitrary network boundary would corrupt decoding,
     reset the EQ filters, or turn each chunk into a separate announcement.
     """
-    log.info(
-        f"[{device.device_id}] Streaming EQ: bands={device.eq_bands} "
-        f"loudness={device.eq_loudness}"
-    )
-    stream_eq = em_eq.StreamingEQ(
-        SPEAKER_RATE,
-        device.eq_bands,
-        device.eq_loudness,
-        limiter=_limiter_for(device),
-        guard=_guard_for(device),
-    )
+    if device.output_chain_on_device:
+        log.info(f"[{device.device_id}] Streaming EQ: on the device")
+        stream_eq = em_eq.Passthrough()
+    else:
+        log.info(
+            f"[{device.device_id}] Streaming EQ: bands={device.eq_bands} "
+            f"loudness={device.eq_loudness}"
+        )
+        stream_eq = em_eq.StreamingEQ(
+            SPEAKER_RATE,
+            device.eq_bands,
+            device.eq_loudness,
+            limiter=_limiter_for(device),
+            guard=_guard_for(device),
+        )
     # Registered BEFORE streaming starts, so a report that arrives while we
     # are still writing has a waiter to resolve. A fresh Event per playback
     # cannot carry a stale set from the previous response, which is what the
@@ -4038,8 +4045,6 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
         # rather than being honoured.
         device.oww_on_device = em_shadow.effective_mode(
             config.get("owwOnDevice"), device.oww_trigger_capable,
-            device.oww_model_ready,
-            local_capable=device.oww_local_capable,
         )
         # Wake word assets, start script and debloat, reconciled against what
         # the device actually has — see api.reconcile_on_connect for why the

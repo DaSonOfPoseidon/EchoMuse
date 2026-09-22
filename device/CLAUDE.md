@@ -177,6 +177,7 @@ The always-on wake stream (`mic_start` without `lock_mic`) is **ungated and AGC-
 | `internal/wakeword/fixture/` | Shared golden-fixture parser, tolerance policy and `Verify`. Used by both the host test and `tools/oww_probe`, deliberately — the probe's answer is the trusted one because it runs on hardware, so it must be exactly as strict as the test by construction. Tolerances are relative to the **tensor's** scale, not per element: per-element relative error is meaningless for tensors straddling zero |
 | `internal/bindings/als/` | Ambient light (ams **TSL2540** on i2c). Android does not expose it AT ALL — `dumpsys sensorservice` reports an empty list, nothing under `/sys/class/sensors`, no input device; it is visible only on the raw i2c bus, the same shape as the mute LED being on a different GPIO than the vendor HAL believed. Resolved **by name, not address** (`0-0039` is an enumeration accident). **The bus listing is not a hardware inventory**: both ALS names are registered by Amazon's board file, so a `tsl2540` at 0x39 and a `tsl2584tsv` at 0x29 appear on every unit whatever is soldered on (`modalias` is static kernel data). Which one answers differs by batch — ours have the 2540 and nothing at 0x29 (`taos_probe() err = -6`, ENXIO), the `G090LF096` batch has the 2584 instead, reachable only through IIO at `/sys/bus/iio/devices/iio:device0` (#90). A second-sourced part, not a driver fault, so the answer is to read the IIO sensor too, never to loosen the match to a `tsl` prefix. The **boot log is the real inventory** — both drivers probe on every unit and log what replied — but `dmesg` rolls, so it needs reading soon after a reboot. Never `unbind` the driver to experiment: it succeeds, leaves the `als_*` attributes in place, and the next read hangs the device until a power cycle. **Polled every 5s, not every 1s, and the reason is the kernel log rather than the syscalls.** The driver prints a line on every read under its darkness threshold (`tsl2540_get_lux: darkness (0 <= 10)`), so a 1Hz poll is ~86,000 kernel lines a day — and it only fires in the dark, so it runs all night, which is exactly when a device sits idle and a crash most needs explaining. Measured on EFF 2026-09-04: the whole log ring was that one line and `messages.last` had reached 609KB. The cost is not disk — MediaTek's ram_console is the ONLY crash channel this kernel has and it is a fixed-size ring we do not control, so anything filling it evicts the evidence. `MinInterval` already refuses to report more often than every 2s, so 1Hz was finer than the reporting floor it feeds; if #296 ever wants faster, make the poll adaptive rather than paying a permanent flood. `Lux()` returns **nil, never 0** — a covered sensor reads a genuine 0. `Watch` reports a step change immediately (25% relative, 10-lux floor, measured noise ±1.5%); the steady value rides the ~30s stats tick. `Report()` says **why** there is no sensor (`ok`/`no_chip`/`no_attribute`/`unknown`, plus every i2c name it saw) and rides the register message as `ambient_light_status` — absence used to be logged only to the device's own stdout, which support bundles do not collect, so two users could not be told apart without a shell session (#90). The whole bus is enumerated **before** matching: returning at the match truncated the list on working devices, which is exactly the side you compare against |
 | `internal/bindings/jack/` | Headphone jack detect (`/sys/class/switch/h2w`, mediatek accdet). Polled, not evented — the ACCDET input node reports no keys on this hardware. `Watch` dispatches the state it STARTS in as well as every change: accdet is edge-triggered and a boot has no edge, so a device booted with a cable in got no correction at all. The callback (`PcmSpeaker.SetJackRouting`) owns both positions — the amp switch, and the `HP Driver Gain Volume` that accdet drops to the floor of its range on insert and nothing used to raise. Output *destination* is still physical, done by the jack's own switch contacts, so no mux layer should be driven — but level is ours |
+| `internal/outchain/` | Speaker output chain — EQ → bass guard → limiter — run on the MIX at the ALSA write, after the duck and before the taps. A port of `em_eq`/`em_mbc`/`em_limiter`, held **bit-exact** to vectors the Python generates (`testdata/gen_vectors.py`), on the host and on VVV's A53. Inactive until the controller's ack carries `output_chain`, so it never runs twice. Processing is mono (L+R)/2 written to both channels — exact, since the wire is mono. Idles after ~2 silent periods, so a quiet speaker costs nothing. **Cost on VVV, 2026-09-22: 1.9ms per 42.7ms period at defaults (4.4% of one core), 2.6ms worst case (shaped EQ + speech boost, 6.2%)**, only while audio plays. Most of it is per-sample `Log`/`Exp` in the guard and 13 biquads; a `%` in the limiter cost a runtime divide call per sample, since Go's 32-bit ARM build has no divide instruction |
 | `internal/wifi/` | Safe WiFi network change with auto-rollback (wifi_change/wifi_commit/wifi_scan control messages; pending-marker recovery at startup). Reload path is `svc wifi disable/enable` ONLY — see package comment for the hardware-proven constraints. **An SSID is 0–32 arbitrary BYTES and is handled as bytes** (`ssid.go`): decoded from wpa_cli's printf_encode, carried as `ssid_hex`, compared as bytes, and written quoted when wpa_supplicant's quoted form can hold it (it reads to the LAST `"`, so quotes and backslashes are literal) or as hex when not. Until 2026-09-19 every path refused `"` and `\`, trimmed spaces, and wrote escaped text back as a different network — and the emOS wizard put SSIDs into a shell command |
 | `internal/bluetooth/` | BLE proxy — raw HCI passive scan over `/dev/stpbt` (single-owner, so Android's Bluedroid is durably `pm disable`d first), parsed into adverts and forwarded to the controller. `emit.go` decides which of them are worth sending; see "The BLE proxy" below, and read it before changing the scan cadence or the filtering |
 | `pkg/led/`, `pkg/mic/`, `pkg/speaker/`, `pkg/buttons/` | Hardware abstractions (interfaces) |
@@ -439,20 +440,19 @@ Only devices that actually score locally are held back — with
 old and the incoming mode are consulted, or a save that enables on-device
 scoring while changing the wake word slips through on the old mode.
 
-`em_shadow.effective_mode` also takes `model_ready` alongside
-`trigger_capable`. Its writer is **`em_api.reconcile_oww_assets`**, run as a
-background task from the connect handler: install-before-switch covers every
-path where the device is connected, and this covers the one where it was not.
-A device whose wake word changed while it was offline is told to use the new
-model by the ordinary connect-time config push, with nothing checking it has
-the classifier — so the check happens straight after, and the mode drops to
-`off` if it does not. A known-missing model degrades to **`off`, not `shadow`** —
-shadow cannot score either, so degrading to it would be the wrong answer
-dressed as a fallback; only `off` puts the controller back in charge of
-triggering, which is the one arrangement that still answers the user. It
-defaults **True**: absence of evidence is not evidence of absence, and standing
-every device down because the controller has not looked would be worse than the
-bug.
+**A missing model never changes the mode — for the offline case either.**
+Install-before-switch covers every path where the device is connected;
+**`em_api.reconcile_oww_assets`**, run in the background from the connect
+handler, covers the one where it was not — a device whose wake word changed
+while it was offline is told to use the new model by the ordinary connect-time
+config push, with nothing checking it has the classifier. The reconcile
+installs it and pushes the config again so the scorer rebuilds. Until then the
+device keeps its mode and answers the button. It used to drop the mode to
+`off` so the controller would trigger meanwhile (`effective_mode`'s
+`model_ready`); private-listening firmware was already exempt, and on
+2026-09-22 Wil removed it for older firmware too and declined an opt-in for it
+("the button still works regardless") — `effective_mode` now takes no
+readiness at all, and a test pins that the reconcile never assigns the mode.
 
 The hold-back is invisible at the call site — the config push looks entirely
 ordinary and the whole guard is that one key was swapped out first — so tests
@@ -488,15 +488,14 @@ that ride with it) closes the offline case, and three rules keep it from doing
 harm:
 
 - **Failure to LOOK is not evidence of absence.** Any error reading the
-  device's inventory leaves `model_ready` alone — the shell plane is very
-  likely not up yet moments after connect, and standing a device down because
-  the controller could not ask would be worse than the bug. Only a successful
-  listing that lacks the model counts.
-- **Degrade first, then repair** — the mode drops to `off` the moment the
-  model is known missing, so the controller triggers throughout the install
-  rather than only after it. Deliberately the opposite ordering to
-  `_install_then_switch`, where the device is on a wake word it can still hear
-  and must not be disturbed; here it is already deaf.
+  device's inventory changes nothing — the shell plane is very likely not up
+  yet moments after connect. Only a successful listing that lacks a file
+  counts.
+- **Repair, never switch.** The mode is left alone whatever is missing; a
+  device missing its selected model is warned about, repaired, and sent the
+  config again so its scorer rebuilds. **Every device carries the full set
+  whatever its mode** (`em_oww_assets.reconcile_action`), so switching modes
+  never waits on an install.
 - **Quiet when there is nothing to do.** Devices reconnect often on this
   fleet, so the ordinary path is one shell round trip and no log line.
 
@@ -505,8 +504,9 @@ its name, and counting that as installed leaves the device scoring against a
 classifier that silently disagrees with the controller.
 
 **"Can it score today" and "is it complete" are two questions, and only the
-first was ever asked.** `missing_selected_classifier` decides whether to stand
-the mode down, and correctly looks only at the selected model —
+first was ever asked.** `missing_selected_classifier` decides whether the
+device is deaf (warned about, config re-pushed once repaired), and correctly
+looks only at the selected model —
 a missing spare is not a deaf device. But nothing looked at the spares at all,
 so Office ran from 17 August to 2026-09-02 without `alexa`, `hey_mycroft` or
 `hey_rhasspy`, scoring its own wake word perfectly and reported healthy by
@@ -558,6 +558,23 @@ enabled it and nothing happened" this removes.
 - `DEVICE_DIR`, the shared model names and the classifier stem rule are pinned
   against the firmware constants **by test**. Drift installs assets the device
   never looks for, and the only symptom is shadow mode silently never starting.
+- **`silero_vad.onnx` rides the same path, for the turn stream's speech gate**
+  (`internal/client/speechgate.go`), and it is NOT openwakeword's copy. As
+  shipped, that file takes ORT 1.19 on armv7 down with SIGBUS (`BUS_ADRALN`)
+  inside `CreateSession`: its tensors are protobuf `raw_data` at arbitrary
+  offsets. Rewriting the int64 tensors alone still faulted and graph
+  optimisation off did not help; every tensor in its typed field loads and is
+  bit-identical (`controller/tools/silero_typed.py`, run in the Dockerfile's
+  `silero` stage, input and output pinned by sha256). **It presents as a
+  hang**: debuggerd itself crashes dumping the 32-bit process, the tombstone
+  is 340 bytes, and the process sits in state `T` with no output — look in
+  `logcat` for `BUS_ADRALN`, not in the tombstone. The asset is optional and
+  never evictable; a device without it gates on RMS as before, and picks it up
+  on the next turn once installed, no restart. Measured on VVV: 9.2% of one
+  core at 12.5 frames/s continuous, p50 6.9ms; it only runs while a turn is
+  open. Every device carries the full asset set whatever its wake word mode
+  (controller `reconcile_action`), so this reaches controller-scoring devices
+  too, on their next connect.
 
 ## The external audio jack
 
