@@ -1127,6 +1127,9 @@ func applyShadowConfig(dc *client.DataClient, cc *client.ControlClient,
 	if snap.BargeInEnabled != nil && *snap.BargeInEnabled && spk != nil {
 		sc.SetBargeThreshold(float32(snap.BargeInThreshold), speakerPlaying(spk))
 	}
+	if spk != nil {
+		sc.SetTraceLabel(playingLabel(spk))
+	}
 	dc.SetShadowScorer(sc)
 	shadowState.mode, shadowState.model, shadowState.lastErr = mode, model, ""
 	bargeNote := "barge-in off"
@@ -1149,6 +1152,19 @@ func applyShadowConfig(dc *client.DataClient, cc *client.ControlClient,
 func speakerPlaying(spk *speaker.PcmSpeaker) func() bool {
 	return func() bool {
 		return spk.VoiceAudible(wakeword.ScoreSpan) || spk.MusicAudible(wakeword.ScoreSpan)
+	}
+}
+
+// playingLabel names what the speaker is playing, for the bench score trace.
+func playingLabel(spk *speaker.PcmSpeaker) func() string {
+	return func() string {
+		switch {
+		case spk.VoiceAudible(wakeword.ScoreSpan):
+			return "voice"
+		case spk.MusicAudible(wakeword.ScoreSpan):
+			return "music"
+		}
+		return "quiet"
 	}
 }
 
