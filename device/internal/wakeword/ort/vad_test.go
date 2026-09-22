@@ -29,8 +29,9 @@ func TestVADMatchesPython(t *testing.T) {
 	defer v.Close()
 
 	audio, want := LoadVADFixture(t, "../testdata")
+	st := v.Stream()
 	for i, w := range want {
-		got, err := v.Prob(audio[i*1280 : (i+1)*1280])
+		got, err := st.Prob(audio[i*1280 : (i+1)*1280])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -38,11 +39,9 @@ func TestVADMatchesPython(t *testing.T) {
 			t.Errorf("frame %d: %.4f, Python %.4f", i, got, w)
 		}
 	}
-	// State is carried: a reset stream reproduces the first frame, and a
-	// stream that was not reset does not have to.
-	v.Reset()
-	if got, _ := v.Prob(audio[:1280]); math.Abs(float64(got-want[0])) > 1e-3 {
-		t.Errorf("after Reset: %.4f, want %.4f", got, want[0])
+	// A new stream starts from clean state and reproduces the first frame.
+	if got, _ := v.Stream().Prob(audio[:1280]); math.Abs(float64(got-want[0])) > 1e-3 {
+		t.Errorf("new stream: %.4f, want %.4f", got, want[0])
 	}
 }
 

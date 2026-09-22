@@ -559,6 +559,22 @@ enabled it and nothing happened" this removes.
 - `DEVICE_DIR`, the shared model names and the classifier stem rule are pinned
   against the firmware constants **by test**. Drift installs assets the device
   never looks for, and the only symptom is shadow mode silently never starting.
+- **`silero_vad.onnx` rides the same path, for the turn stream's speech gate**
+  (`internal/client/speechgate.go`), and it is NOT openwakeword's copy. As
+  shipped, that file takes ORT 1.19 on armv7 down with SIGBUS (`BUS_ADRALN`)
+  inside `CreateSession`: its tensors are protobuf `raw_data` at arbitrary
+  offsets. Rewriting the int64 tensors alone still faulted and graph
+  optimisation off did not help; every tensor in its typed field loads and is
+  bit-identical (`controller/tools/silero_typed.py`, run in the Dockerfile's
+  `silero` stage, input and output pinned by sha256). **It presents as a
+  hang**: debuggerd itself crashes dumping the 32-bit process, the tombstone
+  is 340 bytes, and the process sits in state `T` with no output — look in
+  `logcat` for `BUS_ADRALN`, not in the tombstone. The asset is optional and
+  never evictable; a device without it gates on RMS as before, and picks it up
+  on the next turn once installed, no restart. Measured on VVV: 9.2% of one
+  core at 12.5 frames/s continuous, p50 6.9ms; it only runs while a turn is
+  open. Note assets only reconcile under `owwOnDevice` on/shadow, so a device
+  on the controller's wake word keeps the RMS gate.
 
 ## The external audio jack
 

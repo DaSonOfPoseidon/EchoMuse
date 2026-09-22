@@ -7,7 +7,8 @@
 // the reason oww_probe does: ORT's thread pool can cost more between frames
 // than inside them.
 //
-// The model must be the typed-field rewrite, not openwakeword's file as shipped:
+// The model must be the typed-field rewrite (controller/tools/silero_typed.py),
+// not openwakeword's file as shipped:
 // ORT 1.19 on armv7 dies with SIGBUS (BUS_ADRALN) inside CreateSession on
 // tensors stored as raw_data, which protobuf leaves at arbitrary offsets, and
 // Android's debuggerd then crashes dumping it, leaving the process stopped (T)
@@ -74,8 +75,9 @@ func run(lib, model, fxDir string, seconds int, opts ort.Options) error {
 
 	fmt.Println("\n== phase 1: does it reproduce Python? ==")
 	var worst float64
+	st := v.Stream()
 	for i, w := range want {
-		p, err := v.Prob(audio[i*frame : (i+1)*frame])
+		p, err := st.Prob(audio[i*frame : (i+1)*frame])
 		if err != nil {
 			return err
 		}
@@ -103,10 +105,10 @@ func paced(v *ort.VAD, audio []float32, seconds int) {
 	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &ru0)
 	lat := make([]time.Duration, 0, frames)
 	start := time.Now()
-	v.Reset()
+	st := v.Stream()
 	for i := 0; i < frames; i++ {
 		t0 := time.Now()
-		if _, err := v.Prob(audio[(i%n)*frame : (i%n+1)*frame]); err != nil {
+		if _, err := st.Prob(audio[(i%n)*frame : (i%n+1)*frame]); err != nil {
 			fmt.Printf("  error: %v\n", err)
 			return
 		}

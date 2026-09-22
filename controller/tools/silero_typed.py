@@ -4,7 +4,10 @@ ORT 1.19 on armv7 takes SIGBUS (BUS_ADRALN) in CreateSession on the model as
 openwakeword ships it: raw_data sits at arbitrary offsets in the protobuf, and
 rewriting the int64 tensors alone was not enough. Output is bit-identical.
 
-    python3 typed_model.py <silero_vad.onnx> <out.onnx>
+    python3 silero_typed.py <silero_vad.onnx> <out.onnx>
+
+Run at image build time (Dockerfile); the result is distributed to devices
+with the wake word assets (em_oww_assets.VAD_NAME).
 """
 import sys
 

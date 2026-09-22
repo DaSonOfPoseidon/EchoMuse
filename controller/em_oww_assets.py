@@ -15,6 +15,7 @@ What has to land on a device, in `shadow.DefaultDir`:
     melspectrogram.onnx    1.1MB   shared feature models, same for every
     embedding_model.onnx   1.3MB   wake word
     <stem>.onnx           ~0.9MB   one classifier per wake model
+    silero_vad.onnx        1.9MB   the turn stream's speech gate (VAD_NAME)
 
 The runtime is vendored into the controller image at build time (pinned by
 version + sha256, the same treatment the Dockerfile already gives xterm and
@@ -54,6 +55,13 @@ SHARED_NAMES = ("melspectrogram.onnx", "embedding_model.onnx")
 
 # Where the vendored ARM runtime lands in the image (see Dockerfile).
 RUNTIME_DIR = "/app/models/oww_runtime"
+
+# Silero VAD for the device's turn-stream speech gate (device
+# internal/client/speechgate.go, sileroModel). Built into RUNTIME_DIR by the
+# Dockerfile's `silero` stage as the typed-field rewrite: openwakeword's own
+# copy crashes ORT on the Echo, so it must never be sourced from the package.
+# Optional — a device without it gates on RMS exactly as before.
+VAD_NAME = "silero_vad.onnx"
 
 # The stock wake words a user can actually select, and therefore the set every
 # device carries. Must match dashboard.jsx's WW_MODELS — there is a test.
@@ -165,7 +173,7 @@ class Asset:
     source: Path
     md5: str
     size: int
-    kind: str  # "runtime" | "shared" | "classifier"
+    kind: str  # "runtime" | "vad" | "shared" | "classifier"
 
 
 @dataclass
@@ -231,6 +239,15 @@ def desired_assets(models: list[str],
     else:
         assets.append(Asset(RUNTIME_NAME, rt, md5_file(rt),
                             rt.stat().st_size, "runtime"))
+        vad = Path(runtime_dir) / VAD_NAME
+        if vad.is_file():
+            assets.append(Asset(VAD_NAME, vad, md5_file(vad),
+                                vad.stat().st_size, "vad"))
+        else:
+            problems.append(
+                f"{VAD_NAME} is not in this controller image — devices keep "
+                f"the RMS speech gate"
+            )
 
     for name in SHARED_NAMES:
         p = (resources / name) if resources else None
@@ -306,7 +323,7 @@ def plan_sync(desired: list[Asset],
     # Extra classifiers already on the device, newest first. Anything that is
     # not a .onnx, or is one of the shared/desired files, is left alone —
     # this deletes only files it positively recognises as evictable.
-    required = set(want) | set(SHARED_NAMES) | {RUNTIME_NAME}
+    required = set(want) | set(SHARED_NAMES) | {RUNTIME_NAME, VAD_NAME}
     extras = sorted(
         (n for n in actual if n.endswith(".onnx") and n not in required),
         key=lambda n: actual[n][1],

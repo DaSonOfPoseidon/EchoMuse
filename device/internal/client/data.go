@@ -16,6 +16,7 @@ import (
 	"github.com/wilbowes/EchoMuse/internal/config"
 	"github.com/wilbowes/EchoMuse/internal/listen"
 	"github.com/wilbowes/EchoMuse/internal/processor"
+	"github.com/wilbowes/EchoMuse/internal/wakeword/ort"
 	"github.com/wilbowes/EchoMuse/internal/wakeword/shadow"
 	"github.com/wilbowes/EchoMuse/pkg/mic"
 	"github.com/wilbowes/EchoMuse/pkg/speaker"
@@ -279,6 +280,15 @@ type DataClient struct {
 	// the new one's Lock()/Process(). Uncontended outside that brief
 	// overlap, so the cost is a no-op lock per 160ms batch.
 	pipeMu sync.Mutex
+
+	// The turn stream's speech gate (speechgate.go). newSpeechStream returns
+	// a scorer for one turn, or nil for the RMS threshold; a field so tests
+	// can substitute one. vad is the shared Silero session, loaded on first
+	// success; vadErr de-duplicates the "not loaded" log line.
+	newSpeechStream func() speechScorer
+	vadMu           sync.Mutex
+	vad             *ort.VAD
+	vadErr          string
 }
 
 // NewDataClient wires the mic/speaker pipeline. canceller is the shared AEC
@@ -296,6 +306,7 @@ func NewDataClient(deviceID string, microphone mic.Subscribable, spk speaker.Spe
 		aec:        canceller,
 		listenGate: listen.New(0, 0, 0),
 	}
+	d.newSpeechStream = d.sileroStream
 	d.listenState.Store(ListenStream)
 	// Seeded from the env default so a device that never reaches a
 	// controller still honours EM_AEC_HW_REF; the first config push
@@ -949,6 +960,17 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 	d.proc.ResetAGC()
 	d.pipeMu.Unlock()
 
+	// Speech gate for a bounded turn: Silero when loaded, else the RMS
+	// threshold. The wake stream warms the session in the background so the
+	// first turn does not pay for loading it.
+	var speechDet speechScorer
+	var speechPeak float32
+	if lockMic {
+		speechDet = d.newSpeechStream()
+	} else {
+		go d.loadSilero()
+	}
+
 	ch := d.mic.Subscribe()
 	defer d.mic.Unsubscribe(ch)
 
@@ -1068,7 +1090,11 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 			// this case would already be unreachable (timer stopped below).
 			// Unreachable entirely when !lockMic, since noSpeechTimerC is
 			// nil in that case and a nil channel never becomes ready.
-			log.Println("[data] streamMic: no speech detected within timeout — ending turn")
+			if speechDet != nil {
+				log.Printf("[data] streamMic: no speech detected within timeout (Silero peak %.2f) — ending turn", speechPeak)
+			} else {
+				log.Println("[data] streamMic: no speech detected within timeout — ending turn")
+			}
 			sendFrame([]byte{frameTypeNoSpeechTimeout})
 			endedItself = true
 			return
@@ -1167,6 +1193,17 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 			// lockstep with micGainDb.
 			rms := vadPeriodRMS(mono)
 			speech := rms >= threshold*gainLin
+			if speechDet != nil {
+				if p, err := speechDet.Prob(monoFloat(mono)); err != nil {
+					log.Printf("[data] speech gate: %v — RMS threshold for the rest of this turn", err)
+					speechDet = nil
+				} else {
+					speech = p >= speechProb
+					if p > speechPeak {
+						speechPeak = p
+					}
+				}
+			}
 
 			// Gate windows in units of actual iterations: the mic delivers
 			// whole ALSA-buffer batches (160ms/2560 samples — see the

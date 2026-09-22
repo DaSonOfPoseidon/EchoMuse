@@ -425,3 +425,48 @@ def test_an_unreadable_inventory_reports_everything_missing():
     """
     desired = _base() + [_asset("selected.onnx", "c1", "classifier")]
     assert A.missing_assets(desired, {}) == [a.name for a in desired]
+
+
+# ── The speech gate's model ──────────────────────────────────────────────────
+
+def test_the_vad_model_is_never_evicted_as_a_leftover_classifier():
+    """
+    It is a .onnx the device was given and no desired list names as a
+    classifier — exactly the shape the LRU deletes. Deleting it drops every
+    device back to the RMS gate, silently.
+    """
+    desired = _base() + [_asset(A.VAD_NAME, "v1", "vad"),
+                         _asset("a.onnx", "c1", "classifier")]
+    actual = {a.name: (a.md5, NOW - 999_999) for a in desired}
+    assert A.VAD_NAME not in A.plan_sync(desired, actual, slots=0).prune
+    # Nor when this controller has no copy to offer (an older image): a
+    # device that already has one keeps it.
+    no_vad = [a for a in desired if a.kind != "vad"]
+    assert A.VAD_NAME not in A.plan_sync(no_vad, actual, slots=0).prune
+
+
+def test_the_vad_model_ships_from_the_image_not_the_package(tmp_path):
+    """openwakeword's own copy crashes ORT on the Echo; only the Dockerfile's
+    typed rewrite beside the runtime may be offered."""
+    (tmp_path / A.RUNTIME_NAME).write_bytes(b"rt")
+    assets, problems = A.desired_assets([], runtime_dir=tmp_path, include_stock=False)
+    assert A.VAD_NAME not in [a.name for a in assets]
+    assert any(A.VAD_NAME in p for p in problems), "a missing model is reported"
+
+    (tmp_path / A.VAD_NAME).write_bytes(b"vad")
+    assets, _ = A.desired_assets([], runtime_dir=tmp_path, include_stock=False)
+    vad = next(a for a in assets if a.name == A.VAD_NAME)
+    assert vad.kind == "vad" and vad.source == tmp_path / A.VAD_NAME
+
+
+def test_vad_name_matches_what_the_device_opens():
+    from pathlib import Path
+    go = (Path(__file__).resolve().parents[2]
+          / "device/internal/client/speechgate.go").read_text()
+    assert f'sileroModel = "{A.VAD_NAME}"' in go
+
+
+def test_the_image_builds_the_model_where_the_plan_looks():
+    from pathlib import Path
+    df = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text()
+    assert f"COPY --from=silero /silero_vad.onnx {A.RUNTIME_DIR}/{A.VAD_NAME}" in df
