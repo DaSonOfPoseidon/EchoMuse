@@ -23,6 +23,10 @@ Device WebSocket protocol:
     {"type": "button", "clickType": 138, "down": false}
     {"type": "log", "level": "info", "message": "..."}
     {"type": "playback_stats", "periods": 123, "underruns": 0}
+    {"type": "listen_state", "state": "local", "reason": ""}
+    {"type": "oww_wake", "score": .9, "threshold": .5, "ageMs": 80,
+     "session": 7, "floor": .002, "barge": false}   (docs/listening.md)
+    {"type": "listen_end", "session": 7, "reason": "ack_timeout"}
     {"type": "pong"}
 
   /control — Server → Device:
@@ -32,11 +36,14 @@ Device WebSocket protocol:
     {"type": "leds",    "leds": [...]}
     {"type": "mic_start"}
     {"type": "mic_stop"}
+    {"type": "listen_ack",   "session": 7}
+    {"type": "listen_close", "session": 7, "reason": "end_of_speech"}
     {"type": "ping"}
 
   /data — Device → Server:
     <binary> [0x01][seq_hi][seq_lo][PCM mono S16_LE 2560 bytes]
     <binary> [0x06][JSON {"adverts": [...]}]   (only if ble_adverts_data)
+    <binary> [0x07][session u32][seq u16][PCM]  (only if listen_session)
 
   /data — Server → Device:
     <binary> [0x02][PCM mono S16_LE 48kHz — 4096 bytes per period]
@@ -84,6 +91,7 @@ import em_shadow
 import em_oww_warmup
 import em_barge
 import em_arbiter
+import em_listen
 import em_button
 import em_tap_burst
 import em_esphome as esphome
@@ -315,7 +323,12 @@ BLE_ADVERTS_TYPE   = 0x06
 # ignores unknown frame types, so the adverts would vanish in silence, which is
 # a worse fault than the one being fixed. The control-plane `ble_adverts`
 # message stays handled forever, for firmware that predates this.
-CONTROLLER_FEATURES = ["ble_adverts_data"]
+#
+# `listen_session` says this controller understands private listening
+# (docs/listening.md): listen_state, session-tagged oww_wake, 0x07 session
+# audio and the listen_* replies. A device goes quiet only when it sees this —
+# an older controller acts on a device wake only when stream frames arrive.
+CONTROLLER_FEATURES = ["ble_adverts_data", "listen_session"]
 SPEAKER_FRAME_TYPE = 0x02
 SPEAKER_EOS_TYPE   = 0x03
 MIC_HEADER_LEN     = 3   # [type][seq_hi][seq_lo]
@@ -551,6 +564,34 @@ class Device:
         # only place a controller miss can be seen at all.
         self.ctrl_shadow: em_shadow.ShadowTracker = em_shadow.ShadowTracker()
 
+        # Private listening (docs/listening.md). What the device last said it
+        # is doing with its wake stream — "local", "stream" or "degraded" —
+        # and why. None until it reports on this connection: the dashboard
+        # must show that as unknown, never as private. `listen_view` combines
+        # it with the configured mode and the firmware's capability.
+        self.listen_reported: str | None = None
+        self.listen_reason: str = ""
+        # Which session audio reaches a turn (em_listen.SessionRouter), and
+        # the session the current turn is listening on.
+        self.listen_router = em_listen.SessionRouter()
+        self.listen_session: int | None = None
+        # Device wakes under private listening, consumed by _private_listen.
+        # Bounded: a wake is only worth acting on for MAX_PENDING_WAKE_S.
+        self.listen_wakes: asyncio.Queue = asyncio.Queue(maxsize=8)
+        # The turn a private wake started, so a second wake while it is being
+        # set up is treated as a barge, never as a second turn.
+        self.private_turn_task: asyncio.Task | None = None
+        # Smoothed control-plane RTT, for capture-time arbitration.
+        self.rtt_est = em_listen.RttEstimator()
+        # When each 0x01 frame was captured, from its sequence number
+        # (em_listen.CaptureClock). Not meaningful on a VAD-gated turn
+        # stream, which skips frames — mic_gated says which is running.
+        self.capture_clock = em_listen.CaptureClock()
+        # The Echo's monotonic clock in ours, from ping replies carrying
+        # `mono` (em_listen.DeviceClock); dates a private wake's capture.
+        self.device_clock = em_listen.DeviceClock()
+        self.mic_gated = False
+
         # Per-room noise floor estimate (normalized RMS, 0..1), tracked from
         # the continuous wake stream in wake_word_listener. Measurement only —
         # never applied to the audio (see 2026-07-06 architecture discussion:
@@ -738,6 +779,7 @@ class Device:
             self._playback_waiters.popleft().set()
 
     def record_rtt(self, rtt_ms: int, was_busy: bool) -> None:
+        self.rtt_est.add(rtt_ms)
         self.rtt_last_ms = rtt_ms
         self.rtt_sum_ms += rtt_ms
         self.rtt_count  += 1
@@ -921,6 +963,25 @@ class Device:
         return "oww_trigger" in (self.capabilities or [])
 
     @property
+    def oww_local_capable(self) -> bool:
+        """Whether this firmware can listen privately (docs/listening.md).
+        "Could it" — whether it IS comes from listen_view."""
+        return "oww_local_only" in (self.capabilities or [])
+
+    @property
+    def listen_view(self) -> "em_listen.ListenView":
+        """What this Echo is actually doing with its microphone."""
+        return em_listen.resolve(
+            em_shadow.normalise_mode(self.oww_on_device),
+            self.capabilities, self.listen_reported, self.listen_reason,
+        )
+
+    @property
+    def private_listening(self) -> bool:
+        """Turns start from device wakes with sessions; no wake stream."""
+        return self.listen_view.private
+
+    @property
     def aec_hw_ref_capable(self) -> bool:
         """
         Whether this firmware can take the AEC far-end reference from a
@@ -998,14 +1059,31 @@ class Device:
         await self.send_control({"type": "ping"})
 
     async def mic_start(self):
+        self.mic_gated = False
         await self.send_control({"type": "mic_start"})
 
     async def mic_start_turn(self):
         """Start mic for a voice turn — signals device to lock the best directional mic."""
+        self.mic_gated = True
         await self.send_control({"type": "mic_start", "lock_mic": True})
 
     async def mic_stop(self):
         await self.send_control({"type": "mic_stop"})
+
+    async def listen_ack(self, session: int):
+        await self.send_control({"type": "listen_ack", "session": session})
+
+    async def listen_close(self, session: int | None = None, reason: str = ""):
+        """End a private-listening session (the active one by default).
+        Closes it in the router too, so its stragglers are dropped."""
+        target = self.listen_router.close(session)
+        if session is None and target is None:
+            return
+        if target == self.listen_session:
+            self.listen_session = None
+        await self.send_control({"type": "listen_close",
+                                 "session": target if target is not None else session,
+                                 "reason": reason})
 
     async def beam_lock(self):
         # Lock the beamformer onto the speaker's perimeter mic mid-stream —
@@ -1258,6 +1336,20 @@ def _forget_oww_models(device_id: str) -> None:
     _oww_barge_models.pop(device_id, None)
 
 
+def _reset_wake_model(model) -> "asyncio.Future":
+    """Reset an openwakeword model off the event loop; await the result before
+    the model scores again.
+
+    reset() re-seeds the feature window from embeddings of 4s of random noise:
+    58ms on a desktop against 1.6ms to score a frame, and ~400ms on the HA
+    host. Called on the loop it stalled every Echo's speaker audio, LED frames
+    and control messages on every controller-scored wake (measured
+    2026-09-22: `event loop stalled 360ms`, and a neighbour's wake read 368ms
+    late). Scoring already ran in the executor for less than a thirtieth of
+    that cost."""
+    return asyncio.get_event_loop().run_in_executor(None, model.reset)
+
+
 async def _acquire_wake_model(device: "Device", name: str, speex: bool):
     """Return the device's wake model, reusing the cached one when the wake word
     and speex setting are unchanged, else building a fresh one and replacing any
@@ -1271,7 +1363,7 @@ async def _acquire_wake_model(device: "Device", name: str, speex: bool):
     cached = _oww_models.get(device.device_id)
     if cached is not None and cached[0] == name and cached[1] == speex:
         model = cached[2]
-        model.reset()
+        await _reset_wake_model(model)
         return model
     model = await loop.run_in_executor(
         None,
@@ -1520,7 +1612,7 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
     # name is the raw owwModel value; scoring needs the openwakeword prediction
     # key (path → stem).
     barge_pred_key = em_oww_models.prediction_key(name)
-    model.reset()
+    await _reset_wake_model(model)
     # reset() seeds the classifier's window with embeddings of random noise,
     # so the first FEATURE_WINDOW chunks score that noise as much as the room.
     # This watcher is where that hurt most: it reset and scored immediately,
@@ -1570,6 +1662,7 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
                 # across it are not consecutive for either two-frame rule
                 continue
             buf.extend(payload)
+            heard = em_listen.captured(payload, loop.time())
             while len(buf) >= CHUNK_BYTES:
                 frame = bytes(buf[:CHUNK_BYTES])
                 del buf[:CHUNK_BYTES]
@@ -1657,6 +1750,11 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
                     if serves and device.wake_arb_ms > 0 and len(_devices) > 1:
                         won_by = _wake_arbiter.claim(
                             device.device_id, device.wake_arb_ms / 1000.0,
+                            # Capture time already carries the link's
+                            # least delay; its smoothed RTT would count it
+                            # twice, inflated by every retransmit.
+                            heard_at=heard,
+                            slack_s=_arbitration_slack(),
                         )
                     device.barge_ceded = (not serves) or won_by != device.device_id
                     if device.barge_ceded:
@@ -2217,8 +2315,29 @@ async def _run_streaming_post_turn_playback(device: Device, pcm_chunks) -> int:
                 log.debug(f"[{device.device_id}] TTS stream close: {e}")
 
 
-async def _run_voice_locked(device: Device, trigger_label: str = "unknown", is_wakeword: bool = False):
+def _put_voice_frame(device: Device, chunk: bytes) -> None:
+    """Queue session audio for the turn, dropping the OLDEST when full — the
+    same rule as the stream path, for the same reason: STT wants the tail
+    contiguous with real time."""
+    q = device.voice_queue
+    try:
+        q.put_nowait(chunk)
+    except asyncio.QueueFull:
+        try:
+            q.get_nowait()
+            q.put_nowait(chunk)
+        except (asyncio.QueueEmpty, asyncio.QueueFull):
+            pass
+
+
+async def _run_voice_locked(device: Device, trigger_label: str = "unknown",
+                            is_wakeword: bool = False, session: int | None = None):
     """
+    session: the private-listening session this turn listens on
+    (docs/listening.md), or None for a turn fed by the stream or by a bounded
+    turn stream. Its held audio is delivered AFTER the stale-frame drain below,
+    and it is closed at end of speech.
+
     is_wakeword: explicit flag for whether this turn was triggered by wake-
     word detection (as opposed to a button press). Used to decide preroll
     discard (see C3) — kept as its own parameter rather than inferred by
@@ -2241,6 +2360,16 @@ async def _run_voice_locked(device: Device, trigger_label: str = "unknown", is_w
             break
     if drained:
         log.info(f"[{device.device_id}] Voice turn: drained {drained} stale frames")
+    if session is not None:
+        # After the drain, never before it: the drain is for stale audio, and
+        # this is the command. The router held whatever arrived ahead of the
+        # wake; from here its live frames land in voice_queue directly.
+        device.listen_session = session
+        held = device.listen_router.open(session, asyncio.get_event_loop().time())
+        for chunk in held:
+            _put_voice_frame(device, chunk)
+        log.info(f"[{device.device_id}] session {session}: {len(held)} frames "
+                 f"({len(held) * 80}ms) held ahead of the wake")
     # Voice preempts music: pause an active media session for the whole
     # conversation (incl. continuations) and resume it afterwards. The
     # matching resume_interrupted below only fires if this interrupt
@@ -2299,6 +2428,17 @@ async def _run_voice_locked(device: Device, trigger_label: str = "unknown", is_w
                     spin_task = asyncio.create_task(
                         leds_spin_green(device, stop_spin)
                     )
+                if device.private_listening:
+                    # End of speech is where a private Echo stops sending:
+                    # close the session, or end the bounded turn stream of a
+                    # button press or follow-up. Either way it goes back to
+                    # listening locally, which is also how it hears a
+                    # barge-in (_private_barge) — so no watcher here.
+                    if device.listen_session is not None:
+                        await device.listen_close(reason="end_of_speech")
+                    else:
+                        await device.mic_stop()
+                    return
                 # Barge-in watcher starts here, not at playback: STT has
                 # ended (VAD_END), so anything on the mic from now on is
                 # a potential interruption. Spans thinking → playback;
@@ -2360,7 +2500,13 @@ async def _run_voice_locked(device: Device, trigger_label: str = "unknown", is_w
 
                     pcm_chunks = _meter_at_playback_start(pcm_chunks, _meter_on)
 
-                if device.barge_in_enabled:
+                if device.private_listening:
+                    # Nothing is streaming (closed at end of speech), and the
+                    # Echo hears a barge-in itself. Defensive for a turn that
+                    # reached TTS without an end of speech.
+                    if device.listen_session is not None:
+                        await device.listen_close(reason="playback")
+                elif device.barge_in_enabled:
                     # Barge-in (§3.2): keep the mic running through
                     # playback — the device's AEC subtracts the speaker
                     # output, which is what makes this safe (enable AEC
@@ -2508,7 +2654,16 @@ async def _run_voice_locked(device: Device, trigger_label: str = "unknown", is_w
                     # trigger_voice_turn will read from voice_queue,
                     # which is fed only while the device stream is
                     # running. No lock_mic — same ch6 stream as wake.
-                    await device.mic_start()
+                    #
+                    # A private Echo has no wake stream to reuse: the answer
+                    # to a follow-up rides a bounded turn stream, exactly as
+                    # a button press does — the user is expected to speak,
+                    # and it ends at their end of speech.
+                    if device.private_listening:
+                        await device.mic_stop()
+                        await device.mic_start_turn()
+                    else:
+                        await device.mic_start()
                     # Fresh stream starts with the VAD gate closed — the
                     # user must speak again from zero, same onset cost
                     # as any post-mic_stop restart. Acceptable for v1 of
@@ -2563,6 +2718,11 @@ async def _run_voice_locked(device: Device, trigger_label: str = "unknown", is_w
                 f"[{device.device_id}] oww_paused drain: "
                 f"{_drained} stale frames cleared before routing flip"
             )
+        if device.listen_session is not None:
+            # Every exit path, including a cancel mid-command: the Echo must
+            # not keep sending for a turn that is over.
+            with contextlib.suppress(Exception):
+                await device.listen_close(reason="turn_end")
         device.oww_paused.clear()
         device.oww_paused_since = None
         log.info(f"[{device.device_id}] oww_paused cleared")
@@ -2656,6 +2816,240 @@ def _supervise_wake_listener(device: "Device", failures: int = 0) -> asyncio.Tas
 
 
 async def wake_word_listener(device: Device):
+    """
+    Listen for this Echo's wake word, whichever side detects it.
+
+    Two paths, chosen per Echo from what it reports (docs/listening.md):
+    `_private_listen` when the Echo scores its own wake word and sends nothing
+    until it fires, `_stream_listen` when it streams continuously and this
+    controller scores it (or, for firmware from before private listening, when
+    it streams and triggers). Each returns when the Echo moves to the other,
+    so a mode change in the dashboard takes effect without a reconnect. Only
+    a superseded connection ends this loop.
+    """
+    while _devices.get(device.device_id) is device:
+        if device.private_listening:
+            await _private_listen(device)
+        else:
+            await _stream_listen(device)
+
+
+async def _private_listen(device: Device) -> None:
+    """
+    Wait for the Echo's own wakes and act on them.
+
+    Nothing to score and no stream to watch: the Echo sends audio only inside
+    a session its wake opened. mic_start still matters — it is what runs the
+    Echo's local wake stream, which feeds its scorer.
+
+    A wake while a turn is running is a barge-in (or words inside the turn),
+    and is decided at once rather than queued behind the turn: the turn is a
+    task, never awaited here, so this loop stays free to hear the interruption.
+    """
+    log.info(f"[{device.device_id}] listening privately — the Echo detects its "
+             f"own wake word and streams nothing until it does")
+    await device.mic_start()
+    while _devices.get(device.device_id) is device and device.private_listening:
+        try:
+            ev = await asyncio.wait_for(device.listen_wakes.get(), timeout=1.0)
+        except asyncio.TimeoutError:
+            continue
+        if device.listen_router.is_closed(ev["session"]):
+            # The Echo gave up on it first (listen_end), so no audio will
+            # come: a wake delayed in flight past the ack timeout arrives
+            # alongside its own close. Acting on it ran a turn that could
+            # only end no_speech, and claimed the arbiter for it.
+            log.info(f"[{device.device_id}] wake for session {ev['session']} "
+                     f"ignored — already closed on the Echo "
+                     f"({(asyncio.get_event_loop().time() - ev['arrived']) * 1000:.0f}ms "
+                     f"after it arrived, {ev['age_ms']}ms old when sent)")
+            continue
+        busy = (device.voice_lock.locked()
+                or (device.private_turn_task is not None
+                    and not device.private_turn_task.done()))
+        if busy:
+            await _private_barge(device, ev)
+            continue
+        if device.speaking and not device.timer_alarm_ringing:
+            # An announcement is playing and no turn owns it — the stream path
+            # skips its own frames here too, so a wake over it is not acted on.
+            await device.listen_close(ev["session"], "speaking")
+            continue
+        device.private_turn_task = asyncio.create_task(_private_wake_turn(device, ev))
+        device.private_turn_task.add_done_callback(_log_task_exception)
+    log.info(f"[{device.device_id}] no longer listening privately")
+
+
+def _arbitration_slack() -> float:
+    return em_listen.MAX_ARB_SLACK_S
+
+
+def _wake_dating(device: Device, ev: dict) -> tuple[float, str]:
+    """When a device wake was heard, and how that was worked out.
+
+    The Echo's own capture instant, mapped through its clock, survives any
+    time in flight; age plus half an RTT assumes the message was not delayed,
+    which is exactly when it matters. The latter is for firmware that does
+    not send capturedMono, and until the first ping reply maps the clock.
+    """
+    t = device.device_clock.to_local(ev.get("captured_mono"), ev["arrived"])
+    if t is not None:
+        return t, "device clock"
+    return em_listen.heard_at(ev["arrived"], ev["age_ms"], device.rtt_est.srtt), "age + RTT"
+
+
+def _wake_heard_at(device: Device, ev: dict) -> float:
+    return _wake_dating(device, ev)[0]
+
+
+async def _private_wake_turn(device: Device, ev: dict) -> None:
+    """
+    One wake from a privately listening Echo: arbitrate, then run the turn on
+    the session's audio. Mirrors the stream path's detection block in
+    `_stream_listen` step for step; the differences are where the audio comes
+    from and that nothing here was scored by this controller.
+    """
+    session = ev["session"]
+    score = ev["score"]
+    threshold = ev["threshold"] if ev["threshold"] is not None else device.oww_threshold
+    age_s = ev["age_ms"] / 1000.0
+    if age_s > em_shadow.MAX_PENDING_WAKE_S:
+        # The person has finished speaking; answering now answers silence.
+        log.warning(f"[{device.device_id}] on-device wake dropped — {age_s:.1f}s old "
+                    f"(limit {em_shadow.MAX_PENDING_WAKE_S:.1f}s)")
+        await device.listen_close(session, "stale")
+        return
+    if device.muted:
+        await device.listen_close(session, "muted")
+        return
+    if ev["floor"] is not None:
+        # The controller cannot measure the floor from a stream it does not
+        # get; the Echo tracks it the same way and sends it with the wake.
+        device.noise_floor = float(ev["floor"])
+    ringing = device.timer_alarm_ringing
+    log.info(
+        f"[{device.device_id}] Wake word detected (source=device, private, "
+        f"session={session}, score={score:.3f}, threshold={threshold:.3f}, "
+        f"floor={device.noise_floor:.4f})"
+    )
+    db.log_device(device.device_id, "info", "device",
+                  f"Wake word detected (score={score:.3f}, device)")
+    if ringing:
+        device.duck_timer_alarm()
+    device.cancel_event.clear()
+    device.last_wake_mono = em_shadow.now() - age_s
+    device.last_wake = {
+        "model":       em_oww_models.prediction_key(device.oww_model),
+        "score":       round(float(score), 4),
+        "threshold":   round(float(threshold), 4),
+        "noise_floor": round(device.noise_floor, 5),
+    }
+
+    serves = esphome.can_serve_turn(device.device_id)
+    won_by = device.device_id
+    if serves and device.wake_arb_ms > 0 and len(_devices) > 1:
+        won_by = _wake_arbiter.claim(
+            device.device_id, device.wake_arb_ms / 1000.0,
+            heard_at=_wake_heard_at(device, ev), slack_s=_arbitration_slack(),
+        )
+    if not serves or won_by != device.device_id:
+        wake_info = device.last_wake
+        device.last_wake = None
+        await device.listen_close(session, "no_ha" if not serves else "ceded")
+        if not serves:
+            await esphome.record_dropped_wake(device, f"wakeword({score:.3f})", wake_info)
+            await _leds_turn_end(device)
+            log.info(f"[{device.device_id}] Wake heard but no HA connection — standing down "
+                     f"(score={score:.3f})")
+            db.log_device(device.device_id, "info", "controller",
+                          "Wake heard but no HA connection")
+        else:
+            # The Echo lit its own listening ring at the crossing; nothing on
+            # a ceding path darkens it otherwise.
+            await leds_off(device)
+            log.info(f"[{device.device_id}] Wake ceded to {won_by} "
+                     f"(arbitration; score={score:.3f})")
+            db.log_device(device.device_id, "info", "controller",
+                          f"Wake ceded to {won_by} (arbitration)")
+        return
+
+    await device.listen_ack(session)
+    device.oww_paused.set()
+    device.oww_paused_since = asyncio.get_event_loop().time()
+    await device.beam_lock()
+    try:
+        await _run_voice_locked(device, trigger_label=f"wakeword-dev({score:.3f})",
+                                is_wakeword=True, session=session)
+    finally:
+        # Idempotent: normally closed at end of speech already.
+        if device.listen_session == session:
+            await device.listen_close(session, "turn_end")
+        await device.beam_unlock()
+
+
+async def _private_barge(device: Device, ev: dict) -> None:
+    """
+    A wake from a privately listening Echo while a turn is running.
+
+    The stream path's `_barge_watcher` scores the turn's own audio; a private
+    Echo sends none after end of speech, so it detects the interruption itself
+    (at the barge-in bar with two consecutive frames during playback — the
+    same rule as em_barge.decide) and this acts on it exactly as the watcher's
+    fire block does. A wake while the user is still speaking is words inside
+    the command, and a wake with barge-in off is declined: both are closed.
+    """
+    session = ev["session"]
+    in_playback = device.speaking or device.speaker_busy > 0
+    phase = "playback" if in_playback else ("thinking" if device.thinking else None)
+    if not device.barge_in_enabled or phase is None or device.barge_detected:
+        await device.listen_close(session, "busy")
+        log.info(f"[{device.device_id}] wake during a turn declined "
+                 f"({'barge-in off' if not device.barge_in_enabled else phase or 'listening'})")
+        return
+    score = ev["score"]
+    threshold = ev["threshold"] if ev["threshold"] is not None else device.barge_threshold
+    log.info(f"[{device.device_id}] Barge-in: wake word during {phase} "
+             f"(device, score={score:.3f}) — cancelling turn")
+    db.log_device(device.device_id, "info", "device",
+                  f"Barge-in during {phase} (score={score:.3f})")
+    device.barge_detected = True
+    serves = esphome.can_serve_turn(device.device_id)
+    won_by = device.device_id
+    if serves and device.wake_arb_ms > 0 and len(_devices) > 1:
+        won_by = _wake_arbiter.claim(
+            device.device_id, device.wake_arb_ms / 1000.0,
+            heard_at=_wake_heard_at(device, ev), slack_s=_arbitration_slack(),
+        )
+    device.barge_ceded = (not serves) or won_by != device.device_id
+    if device.barge_ceded:
+        await device.listen_close(session, "ceded")
+        log.info(f"[{device.device_id}] Barge-in ceded to "
+                 f"{won_by if serves else 'nothing — no HA'} — stopping playback, "
+                 f"not taking the turn")
+    else:
+        # The interrupting turn reads this session. Opened in the router now,
+        # so frames already held are delivered ahead of the live ones.
+        await device.listen_ack(session)
+        device.listen_session = session
+        for chunk in device.listen_router.open(session, asyncio.get_event_loop().time()):
+            _put_voice_frame(device, chunk)
+    if ev["floor"] is not None:
+        device.noise_floor = float(ev["floor"])
+    device.last_wake = {
+        "model":       em_oww_models.prediction_key(device.oww_model),
+        "score":       round(float(score), 4),
+        "threshold":   float(threshold),
+        "noise_floor": round(device.noise_floor, 5),
+    }
+    device.cancel_event.set()
+    if in_playback:
+        await device.send_control({"type": "speaker_flush"})
+        esphome.abort_ha_run(device.device_id)
+    else:
+        esphome.cancel_voice_turn(device.device_id, abort_ha=True, reason="barged")
+
+
+async def _stream_listen(device: Device):
     loop = asyncio.get_event_loop()
 
     current_model_name = device.oww_model
@@ -2696,6 +3090,9 @@ async def wake_word_listener(device: Device):
             # superseded one stands down here. The replacement listener reset()s
             # the model on acquire, wiping any residue from this one.
             if _devices.get(device.device_id) is not device:
+                return
+            if device.private_listening:
+                # The Echo now listens privately; wake_word_listener switches.
                 return
             if device.oww_model != current_model_name or device.oww_speex_ns != current_speex_ns:
                 new_name  = device.oww_model
@@ -2861,6 +3258,9 @@ async def wake_word_listener(device: Device):
                 continue
 
             buf.extend(payload)
+            # The chunk scored below is completed by this payload.
+            arrived = em_listen.arrival(payload, loop.time())
+            heard = em_listen.captured(payload, arrived)
             while len(buf) >= CHUNK_BYTES:
                 frame   = bytes(buf[:CHUNK_BYTES])
                 del buf[:CHUNK_BYTES]
@@ -3026,7 +3426,11 @@ async def wake_word_listener(device: Device):
                         f"[{device.device_id}] Wake word detected "
                         f"(source={source}, score={score:.3f}, "
                         f"threshold={eff_threshold:.3f}, "
-                        f"rms={rms:.4f}, floor={device.noise_floor:.4f})"
+                        f"rms={rms:.4f}, floor={device.noise_floor:.4f}"
+                        + (f", scored {(loop.time() - arrived) * 1000:.0f}ms "
+                           f"after arrival, {(arrived - heard) * 1000:.0f}ms "
+                           f"in transit" if source == "controller" else "")
+                        + ")"
                     )
                     db.log_device(
                         device.device_id, "info", "device",
@@ -3053,7 +3457,15 @@ async def wake_word_listener(device: Device):
                         # preroll discard in _stream_mic_audio.
                         # TTS mic_stop/mic_start remains untouched — that
                         # acoustic-feedback guard is load-bearing.
-                        model.reset()
+                        #
+                        # The reset runs in the executor and is NOT awaited
+                        # here: routing to the turn (oww_paused, below) must
+                        # happen on this tick, or frames arriving during the
+                        # reset land in mic_queue and the turn drains them as
+                        # stale — the start of the command. Nothing scores
+                        # with the model until listening resumes, which
+                        # awaits it first.
+                        model_reset = _reset_wake_model(model)
                         warmup.reset()
                         buf.clear()
                         device.cancel_event.clear()
@@ -3130,9 +3542,22 @@ async def wake_word_listener(device: Device):
                             # this same tick. The old version awaited the
                             # full window on EVERY wake (~364ms measured)
                             # even when no other device was contending.
+                            # Capture time, not arrival (docs/listening.md):
+                            # a device wake reports its age; ours dates from
+                            # when its frame was captured (CaptureClock).
+                            if source == "device":
+                                heard_at = em_listen.heard_at(
+                                    loop.time(),
+                                    (em_shadow.now() - dev_wake["at"]) * 1000.0,
+                                    device.rtt_est.srtt)
+                            else:
+                                # Already includes the link's least delay.
+                                heard_at = heard
                             won_by = _wake_arbiter.claim(
                                 device.device_id,
                                 device.wake_arb_ms / 1000.0,
+                                heard_at=heard_at,
+                                slack_s=_arbitration_slack(),
                             )
                         if not serves or won_by != device.device_id:
                             wake_info = device.last_wake
@@ -3172,6 +3597,7 @@ async def wake_word_listener(device: Device):
                                     device.device_id, "info", "controller",
                                     "Wake heard but no HA connection"
                                 )
+                                await model_reset
                                 continue
                             # The loser is lit: since #263 the device draws
                             # the listening ring at its own crossing, before
@@ -3193,6 +3619,7 @@ async def wake_word_listener(device: Device):
                                 device.device_id, "info", "controller",
                                 f"Wake ceded to {won_by} (arbitration)"
                             )
+                            await model_reset
                             continue
 
                         # "wakeword-dev" rather than a separate field: every
@@ -3221,7 +3648,8 @@ async def wake_word_listener(device: Device):
                                 f"[{device.device_id}] OWW: "
                                 f"drained {drained} stale frames post-turn"
                             )
-                        model.reset()
+                        await model_reset
+                        await _reset_wake_model(model)
                         warmup.reset()
                         buf.clear()
                         # mic_start without lock_mic — device stays on ch6 omni
@@ -3236,7 +3664,7 @@ async def wake_word_listener(device: Device):
                             f"[{device.device_id}] Voice turn active — "
                             f"ignoring wake"
                         )
-                        model.reset()
+                        await _reset_wake_model(model)
                         warmup.reset()
 
     except asyncio.CancelledError:
@@ -3611,6 +4039,7 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
         device.oww_on_device = em_shadow.effective_mode(
             config.get("owwOnDevice"), device.oww_trigger_capable,
             device.oww_model_ready,
+            local_capable=device.oww_local_capable,
         )
         # Wake word assets, start script and debloat, reconciled against what
         # the device actually has — see api.reconcile_on_connect for why the
@@ -4022,6 +4451,19 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                         # delivery-margin fields and is absent on older devices.
                         periods   = int(msg.get("periods", 0))
                         underruns = int(msg.get("underruns", 0))
+                        _bw = msg.get("barge")
+                        if isinstance(_bw, dict) and device.private_listening:
+                            # The private path's "Barge watcher done" line:
+                            # the Echo scores its own barge-in, so only it can
+                            # say how close one came. frames 0 = the barge bar
+                            # never applied (barge-in off).
+                            log.info(
+                                f"[{device_id}] Barge window (device): "
+                                f"{_bw.get('frames')} frames at bar "
+                                f"{float(_bw.get('bar') or 0):.2f}, peak "
+                                f"{float(_bw.get('peak') or 0):.3f}"
+                                + ("" if device.barge_in_enabled else " — barge-in off")
+                            )
                         pstats    = msg.get("stats") or {}
                         # Release _run_post_turn_playback: this report IS the
                         # end of audio, and the ring clears on it rather than
@@ -4109,7 +4551,31 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                         # controller-triggered one and the Activity tab does not
                         # have to special-case which side fired.
                         device.shadow.record_cross(msg.get("score"), msg.get("ageMs"))
-                        if device.oww_on_device != em_shadow.MODE_ON:
+                        if msg.get("session"):
+                            # Private listening: the wake opened a session,
+                            # whose audio is already arriving as 0x07 frames.
+                            # Queued for _private_listen, which owns turn
+                            # setup exactly as the stream path does.
+                            ev = em_listen.parse_wake(msg, asyncio.get_event_loop().time())
+                            if ev is None:
+                                log.warning(f"[{device_id}] malformed oww_wake dropped: {msg!r}")
+                            else:
+                                try:
+                                    device.listen_wakes.put_nowait(ev)
+                                    _heard, _how = _wake_dating(device, ev)
+                                    log.info(
+                                        f"[{device_id}] on-device wake: score="
+                                        f"{ev['score']:.3f} age={ev['age_ms']}ms "
+                                        f"session={ev['session']}"
+                                        f"{' (over playback)' if ev['barge'] else ''}"
+                                        f", heard {(ev['arrived'] - _heard) * 1000:.0f}ms "
+                                        f"before arrival ({_how})"
+                                    )
+                                except asyncio.QueueFull:
+                                    await device.listen_close(ev["session"], "busy")
+                                    log.warning(f"[{device_id}] wake queue full — "
+                                                f"session {ev['session']} closed")
+                        elif device.oww_on_device != em_shadow.MODE_ON:
                             # Firmware triggering while the controller thinks it
                             # should not: a config push in flight, or a rollback
                             # to a mode this device no longer has. Logged rather
@@ -4131,6 +4597,44 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                             log.warning(
                                 f"[{device_id}] malformed oww_wake dropped: {msg!r}"
                             )
+
+                    elif msg_type == "listen_state":
+                        # What the device is DOING with its microphone — the
+                        # "is it" to oww_local_only's "could it". Sent on every
+                        # change and after every ack.
+                        before = device.listen_view
+                        device.listen_reported = str(msg.get("state") or "") or None
+                        device.listen_reason   = str(msg.get("reason") or "")
+                        after = device.listen_view
+                        if after.private and not before.private:
+                            # Wake the stream listener off its 10s frame wait
+                            # so it hands over now: a text payload is read as
+                            # a stream boundary and it re-checks the mode.
+                            with contextlib.suppress(asyncio.QueueFull):
+                                device.mic_queue.put_nowait("listen_mode")
+                        if after != before:
+                            log.info(
+                                f"[{device_id}] listening: {after.state}"
+                                f"{' (streams continuously)' if after.streams else ''}"
+                                f"{f' — {after.reason}' if after.reason else ''}"
+                            )
+                            if after.state == em_listen.STATE_DEGRADED:
+                                db.log_device(device_id, "warning", "device",
+                                              f"Wake word unavailable, button only: {after.reason}")
+                        await _push_device_state(device)
+
+                    elif msg_type == "listen_end":
+                        # The device closed a session itself: a deadline, a
+                        # mute or a link drop. Its audio has stopped, so the
+                        # turn will end on its own timers; this just keeps the
+                        # router honest and says why.
+                        sess = msg.get("session")
+                        if isinstance(sess, int) and sess:
+                            device.listen_router.close(sess)
+                            if device.listen_session == sess:
+                                device.listen_session = None
+                            log.info(f"[{device_id}] session {sess} closed on the device "
+                                     f"({msg.get('reason')})")
 
                     elif msg_type == "ble_adverts":
                         # BLE proxy data path — batched adverts from the
@@ -4169,8 +4673,10 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                             _sent = device.ping_sent.pop(_seq, None)
                             _busy = device.ping_busy.pop(_seq, False)
                             if _sent is not None:
-                                _rtt = int((loop.time() - _sent) * 1000)
+                                _now = loop.time()
+                                _rtt = int((_now - _sent) * 1000)
                                 device.record_rtt(_rtt, _busy)
+                                device.device_clock.add(_sent, _now, msg.get("mono"))
                                 if _rtt >= RTT_EXCURSION_MS:
                                     # Busy excursions log one for one; idle
                                     # ones coalesce into a periodic summary.
@@ -4329,6 +4835,9 @@ async def handle_data(ws: WebSocketServerProtocol, secure: bool = False):
         # the silence as a zombie stream.
         device.frames_seen_this_connection = False
         device.data_connected_at = asyncio.get_event_loop().time()
+        # A session's audio rode the old connection, and the device closes
+        # its session on a link drop; nothing from before is routable.
+        device.listen_router.reset()
         device.data_ready.set()
         log.info(f"[data] Data connection established: {device_id}")
 
@@ -4357,6 +4866,19 @@ async def handle_data(ws: WebSocketServerProtocol, secure: bool = False):
                         device.device_id, body.get("adverts") or []
                     )
                     continue
+                if raw and raw[0] == em_listen.FRAME_TYPE:
+                    # Private-listening session audio. The router holds it
+                    # until its wake arrives, and drops it once the session
+                    # is closed — never routed by a flag.
+                    parsed = em_listen.parse_frame(raw)
+                    if parsed is None:
+                        continue
+                    session, _seq, pcm = parsed
+                    device.frames_seen_this_connection = True
+                    for chunk in device.listen_router.frame(
+                            session, pcm, asyncio.get_event_loop().time()):
+                        _put_voice_frame(device, chunk)
+                    continue
                 if len(raw) <= MIC_HEADER_LEN:
                     continue
                 if raw[0] != MIC_FRAME_TYPE:
@@ -4379,7 +4901,13 @@ async def handle_data(ws: WebSocketServerProtocol, secure: bool = False):
                     except asyncio.QueueFull:
                         log.error(f"[{device.device_id}] VAD sentinel lost — queue still full after drain")
                     continue
-                payload = raw[MIC_HEADER_LEN:]
+                _now = asyncio.get_event_loop().time()
+                payload = em_listen.Frame(
+                    raw[MIC_HEADER_LEN:], _now,
+                    # A VAD-gated turn stream skips frames, so its sequence
+                    # does not count time; arrival is the best it offers.
+                    _now if device.mic_gated else device.capture_clock.observe(
+                        int.from_bytes(raw[1:3], "big"), _now))
                 q = device.voice_queue if device.oww_paused.is_set() else device.mic_queue
                 try:
                     q.put_nowait(payload)

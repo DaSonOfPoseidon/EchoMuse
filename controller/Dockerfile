@@ -101,6 +101,7 @@ COPY em_oww_models.py .
 COPY em_oww_metadata.py .
 COPY em_oww_warmup.py .
 COPY em_arbiter.py .
+COPY em_listen.py .
 COPY em_button.py .
 COPY em_tap_burst.py .
 COPY em_player.py .

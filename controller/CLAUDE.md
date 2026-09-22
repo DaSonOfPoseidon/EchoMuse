@@ -648,7 +648,15 @@ Two guards sit in front of that, both tested by reintroducing the bug:
 
 ## Controller audio pipeline
 
-1. **Wake word** — openwakeword (ONNX) runs in a thread executor per device on `mic_queue`. When 2+ devices are connected, `em_arbiter.py` applies **first-detector-wins** suppression: the first device to cross threshold answers *immediately* (no added latency, the claim is synchronous) and any other device detecting within `wakeArbitrationMs` (default 700, 0 = off) stands down and logs "Wake ceded". The claim is released at turn end. Do NOT reinstate the original best-SNR-after-a-wait design: it taxed every wake ~364ms (it gated on devices *connected*, not in earshot) and field data showed SNR at detection was indistinguishable across devices (0.9/1.15/0.93) while the SNR winner produced a worse transcript than the first detector.
+1. **Wake word** — **two paths, chosen per Echo from its own `listen_state`** (docs/listening.md). `wake_word_listener` dispatches to `_private_listen` for an Echo listening privately (it detects its own wake word and sends a `0x07` session only after it) and to `_stream_listen` otherwise, and each returns when the Echo moves to the other. Rules for the private path:
+
+    - **Turns run as tasks; the loop never awaits them**, so a wake during a turn is decided at once (`_private_barge`) rather than queued behind the turn it should interrupt. The stream path gets that from `_barge_watcher`, which a private Echo gives nothing to score.
+    - **End of speech closes the session** (`on_thinking_esphome`), or ends the lock_mic stream of a button/follow-up turn with `mic_stop` — which on a private Echo returns it to local listening rather than stopping it. `_run_voice_locked`'s finally closes any session still open, on every exit path.
+    - **Session audio is routed by `SessionRouter`, never by `oww_paused`.** It arrives on another socket from its `oww_wake`, before or after it; the router holds it, then `_run_voice_locked(session=)` delivers it AFTER the stale-frame drain. A flag-routed frame on the wrong side of a flip became the start of the next command.
+    - **Follow-up questions use the bounded turn stream** (`mic_stop` + `mic_start_turn`), exactly as the button does — there is no controller-opened session.
+    - **Controller-only measurements are absent, not zero**: `ctrl_wake_score` is not recorded (and no "controller MISS" is logged), `owwNearMisses` is null, `noise_floor` comes from the Echo's `floor` on each wake.
+
+    On the stream path, openwakeword (ONNX) runs in a thread executor per device on `mic_queue`. When 2+ devices are connected, `em_arbiter.py` applies **first-detector-wins** suppression: the first device to HEAR the wake answers *immediately* (no added latency, the claim is synchronous; each claim carries its capture time, arrival − device-reported age − half the smoothed RTT, so a late message cannot turn a near Echo's wake into a second answer) and any other device detecting within `wakeArbitrationMs` (default 700, 0 = off) stands down and logs "Wake ceded". The claim is released at turn end. Do NOT reinstate the original best-SNR-after-a-wait design: it taxed every wake ~364ms (it gated on devices *connected*, not in earshot) and field data showed SNR at detection was indistinguishable across devices (0.9/1.15/0.93) while the SNR winner produced a worse transcript than the first detector.
 
     **A device with no HA behind it stands down BEFORE arbitration, and never runs the turn at all** (`em_esphome.can_serve_turn`, the same `get_server`/`get_satellite` pair `trigger_voice_turn` refuses on, so a device counted as able cannot turn out to be unable a tick later). Detection order is a **proximity** proxy and says nothing about whether HA has ever dialled that device's satellite port, so unqualified first-detector-wins hands the utterance to an unlinked Echo, stands down the linked one, and the winner then dies `no_ha` in milliseconds: nothing answers, and the device that could have is the one that went dark. Measured on the fleet 2026-08-29 — a device scoring **0.912** lost to one scoring 0.609 that crossed 449ms earlier, so loudness and detection order do genuinely disagree; that is one observation and not a case for reopening best-SNR, which stays settled. The ordering is the guard: a check after the claim leaves the claim taken, and `tests/test_deploy.py` pins that `can_serve_turn` precedes `_wake_arbiter.claim` and gates it. `em_arbiter` deliberately does **not** know about any of this — a second copy of the rule is one that can disagree with the first.
 
@@ -871,10 +879,10 @@ with no way for the user to tell which they had.
   wire action. When we duck, nothing was ever paused — the pause has to
   actually happen at release, or it is silently dropped and the music plays
   on.
-- **Music does NOT count as "streaming"** for the device's wake threshold
-  (`IsStreaming` is voice-only). It is a quiet continuous bed, not a response
-  being talked over; reporting it would drop the device's wake bar for the
-  length of a song.
+- **Music counts for the device's wake bar since private listening**
+  (`speakerPlaying` = `VoiceAudible || MusicAudible`), mirroring this side's
+  wake-over-music rule, since a private Echo sends nothing for the controller
+  to score. `VoiceAudible` alone still decides the `barge` flag on `oww_wake`.
 - Taps see the MIXED output, which is more correct than before: the AEC
   far-end reference is what needs cancelling from the mic, and with music
   under a response the echo is the sum.
@@ -1021,7 +1029,8 @@ single written ladder. `docs/audio-states.md` §2 is the nearest thing.
 | `em_shadow.py` | On-device wake word shadow mode — correlates device-reported threshold crossings with the controller's own detections (clock domains, match window, consume-on-match) |
 | `em_scenes.py` | LED ring scenes — resolves `ledScene`/`ledListenColor`/`ledThinkColor` config into render-ready listening/spinner frames |
 | `em_esphome.py` | ESPHome-mode satellite servers (`EchoMuseSatellite`, `DeviceESPhomeServer`) |
-| `em_arbiter.py` | Multi-device wake arbitration — pools same-utterance detections, best SNR answers |
+| `em_arbiter.py` | Multi-device wake arbitration — first to HEAR wins: claims carry capture time (`heard_at`) and the winner is held for window + slack, never revoked |
+| `em_listen.py` | Private listening (docs/listening.md): `resolve` (what an Echo is actually doing with its mic — the only source for privacy statements), `SessionRouter` (which `0x07` session audio may reach a turn), capture-time maths. Pure, tested in test_listen.py |
 | `em_player.py` | Media playback sessions — `media_player.play_media` → streaming ffmpeg decode → paced 0x02 feed; pause/resume/stop; voice preempts music (`interrupt`/`resume_interrupted`) |
 | `em_config_sections.py` | Fleet-vs-device config scoping — the six sections, `STATE_KEYS`, and the merge that resolves a device's effective config |
 | `em_tap_burst.py` | Coalesces a burst of action-button taps into one single/double/triple event. The window is restarted per tap and `enabled()` is re-checked at expiry, both correct. **The window is timed at the CONTROLLER, on arrival**, so the gap it measures is the real gap plus the RTT difference between the two taps — 26.4% of probes on this fleet exceed 200ms, which is why double/triple are unreliable below ~350ms (#115). The fix is a device-measured gap, the same reasoning as `heldMs` |

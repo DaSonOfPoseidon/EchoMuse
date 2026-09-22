@@ -38,14 +38,16 @@ log = logging.getLogger("echomuse.db")
 # ─── Default device config ────────────────────────────────────────────────────
 
 DEFAULT_DEVICE_CONFIG = {
-    # owwOnDevice: on-device wake word scoring. "off" or "shadow".
-    # Shadow scores the wake stream on the device and reports what it WOULD
-    # have detected, without acting on it, so the two can be compared on the
-    # same audio. Default off and it should stay that way: it costs ~38% of one
-    # core permanently on top of the ~18-20% mic-pipeline baseline, and it
-    # needs ONNX Runtime plus the models installed on the device out of band
-    # (they are not in the firmware). Enable on ONE device at a time.
-    "owwOnDevice":      "off",
+    # owwOnDevice: where the wake word is detected (docs/listening.md).
+    # "on" — on the Echo, which sends nothing until it hears it; "off" — on
+    # the controller, from a continuous stream; "shadow" — both, a streaming
+    # diagnostic. "on" is the default for NEW installs since 2026-09-21: it
+    # costs the Echo ~0.4 of a core, and privacy is what the project stands
+    # on. Existing installs keep what they had — _fixup_v25 pins "off" into a
+    # fleet config that never stored the key, because defaults are layered
+    # UNDER stored config and changing this line alone would silently switch
+    # every existing fleet.
+    "owwOnDevice":      "on",
     "adcDigitalGain":   88,
     "adcMicpga":        40,
     # micGainDb: fixed digital gain (dB) the device applies to the full
@@ -976,6 +978,17 @@ MIGRATIONS: list[str] = [
     """
     UPDATE system_config SET value = '24' WHERE key = 'schema_version';
     """,
+
+    # ── v25 — keep existing fleets' wake word mode through the new default ──
+    #
+    # owwOnDevice's default moved "off" → "on" (private listening,
+    # docs/listening.md). Defaults are layered under stored fleet config, so
+    # a fleet that never saved the key would flip on upgrade. Wil's call:
+    # existing deployments keep their configuration, and the release notes
+    # tell them how to switch. The work is in _fixup_v25.
+    """
+    UPDATE system_config SET value = '25' WHERE key = 'schema_version';
+    """,
 ]
 
 # Post-migration fixups that need Python rather than SQL. Keyed by the schema
@@ -1071,7 +1084,34 @@ def _fixup_v24(conn) -> None:
                 (json.dumps(fixed),))
 
 
-_MIGRATION_FIXUPS = {11: _fixup_v11, 19: _fixup_v19, 24: _fixup_v24}
+def _fixup_v25(conn) -> None:
+    """
+    Pin owwOnDevice="off" into a stored fleet config that lacks it.
+
+    A fresh database already carries the key — v3 seeds the whole of
+    DEFAULT_DEVICE_CONFIG — so this touches only fleets that predate it,
+    which is exactly the set whose behaviour the new default would change.
+    Device rows need nothing: a key a device does not store falls through to
+    the fleet's. A config that will not parse is left alone.
+    """
+    row = conn.execute(
+        "SELECT value FROM system_config WHERE key = 'global_device_config'").fetchone()
+    if not row:
+        return
+    try:
+        cfg = json.loads(row["value"] or "{}") or {}
+    except (json.JSONDecodeError, TypeError):
+        return
+    if "owwOnDevice" in cfg:
+        return
+    cfg["owwOnDevice"] = "off"
+    conn.execute(
+        "UPDATE system_config SET value = ? WHERE key = 'global_device_config'",
+        (json.dumps(cfg),))
+
+
+_MIGRATION_FIXUPS = {11: _fixup_v11, 19: _fixup_v19, 24: _fixup_v24,
+                     25: _fixup_v25}
 
 # ─── Connection management ────────────────────────────────────────────────────
 

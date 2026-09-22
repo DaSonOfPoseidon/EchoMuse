@@ -467,7 +467,12 @@ func (p *PcmSpeaker) SetDuck(db float64) {
 	p.duckTarget.Store(DuckGain(db))
 }
 
-// IsStreaming reports whether a VOICE stream is currently mid-flight.
+// VoiceAudible reports whether a VOICE stream is audible: arriving, queued,
+// or played within hold. The hold lets a caller cover what follows the last
+// period out of the speaker, such as a model whose window still holds echo.
+//
+// It replaced IsStreaming, which reported only "still arriving on the wire"
+// and so dropped the barge bar ~0.1s into a 3s reply (2026-09-22).
 //
 // Added for on-device wake word scoring: while the speaker is playing, the
 // controller lowers its wake threshold to bargeInThreshold, because echo at the
@@ -480,10 +485,14 @@ func (p *PcmSpeaker) SetDuck(db float64) {
 // the same rule on its side (wake-over-music scores against bargeInThreshold
 // only when barge-in is enabled). Reporting music as "streaming" would drop
 // the device's bar for as long as a song plays.
-func (p *PcmSpeaker) IsStreaming() bool { return p.voice.isActive() }
+func (p *PcmSpeaker) VoiceAudible(hold time.Duration) bool {
+	return p.voice.playedWithin(time.Now(), hold)
+}
 
-// IsPlayingMusic reports whether a music stream is mid-flight.
-func (p *PcmSpeaker) IsPlayingMusic() bool { return p.music.isActive() }
+// MusicAudible is VoiceAudible for the music plane.
+func (p *PcmSpeaker) MusicAudible(hold time.Duration) bool {
+	return p.music.playedWithin(time.Now(), hold)
+}
 
 // EndStream marks the in-flight voice stream complete (0x03). Always arrives
 // after every 0x02 period of that stream has been handed to PumpPeriod —

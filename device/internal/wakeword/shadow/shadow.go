@@ -103,7 +103,7 @@ type Scorer struct {
 	refract        time.Duration
 	onCross        func(score, threshold float32, at time.Time)
 
-	ch   chan []int16
+	ch   chan queued
 	done chan struct{}
 	stop sync.Once
 	// quit ends the scorer goroutine. Close must NOT close `ch`: the mic
@@ -139,6 +139,17 @@ type Scorer struct {
 	stats     Stats
 	ready     bool
 	lastCross time.Time
+	// prevAbove is whether the previous scored frame cleared the bar in force,
+	// for the two-frame rule at the barge-in bar.
+	prevAbove bool
+	// The barge window: frames scored at the barge-in bar since the last
+	// TakeBargeWindow, and the highest score among them. The answer to "did
+	// barge-in nearly fire, or was it nowhere close" — the controller's
+	// barge watcher logged exactly this, and a privately listening Echo
+	// gives the watcher nothing to score.
+	bargePeak   float32
+	bargeFrames uint64
+	bargeBar    float32
 	// resetReq is consumed by the scorer goroutine rather than acted on by
 	// the caller, because Detector is not safe for concurrent use and the
 	// caller is a different goroutine.
@@ -148,6 +159,10 @@ type Scorer struct {
 // NewScorer starts a scorer. onCross is called from the scorer goroutine when
 // the score reaches threshold, so it must not block — the controller-bound
 // send it wraps is buffered for that reason.
+//
+// `at` is when the crossing frame was CAPTURED (handed to Push), not when
+// inference finished: the queue can hold 640ms, and both the arbitration age
+// and where a private-listening session starts are measured from capture.
 //
 // It receives the threshold actually crossed, which during playback is the
 // lower barge-in bar. Reported from here rather than re-derived by the caller
@@ -160,7 +175,7 @@ func NewScorer(inf wakeword.Inferer, threshold float32, onCross func(score, thre
 		threshold: threshold,
 		refract:   DefaultRefractory,
 		onCross:   onCross,
-		ch:        make(chan []int16, queueFrames),
+		ch:        make(chan queued, queueFrames),
 		done:      make(chan struct{}),
 		quit:      make(chan struct{}),
 	}
@@ -211,13 +226,17 @@ func (s *Scorer) effectiveThresholdLocked() float32 {
 func (s *Scorer) Push(samples []int16) {
 	cp := make([]int16, len(samples))
 	copy(cp, samples)
-	s.enqueue(cp)
+	s.enqueue(cp, time.Now())
 }
 
 // PushBytes is Push for little-endian S16 bytes, which is what the mic
 // pipeline carries. An odd trailing byte cannot happen (frames are whole
 // samples) and is dropped rather than silently shifting every sample after it.
-func (s *Scorer) PushBytes(b []byte) {
+func (s *Scorer) PushBytes(b []byte) { s.PushBytesAt(b, time.Now()) }
+
+// PushBytesAt is PushBytes with the frame's capture time supplied by the
+// caller, so the scorer and the listen gate stamp a frame identically.
+func (s *Scorer) PushBytesAt(b []byte, at time.Time) {
 	n := len(b) / 2
 	if n == 0 {
 		return
@@ -226,13 +245,19 @@ func (s *Scorer) PushBytes(b []byte) {
 	for i := 0; i < n; i++ {
 		cp[i] = int16(uint16(b[2*i]) | uint16(b[2*i+1])<<8)
 	}
-	s.enqueue(cp)
+	s.enqueue(cp, at)
+}
+
+// queued is one frame and its capture time.
+type queued struct {
+	pcm []int16
+	at  time.Time
 }
 
 // enqueue is the only path into the scorer, and the only place a drop can
 // happen — deliberately one place, so "never block the audio path" is a
 // property of one function rather than a convention.
-func (s *Scorer) enqueue(cp []int16) {
+func (s *Scorer) enqueue(cp []int16, at time.Time) {
 	// A closed scorer still receives frames: the mic goroutine holds the
 	// pointer it captured when the stream started, and a config push can
 	// replace and close it mid-stream.
@@ -252,7 +277,7 @@ func (s *Scorer) enqueue(cp []int16) {
 	}
 
 	select {
-	case s.ch <- cp:
+	case s.ch <- queued{pcm: cp, at: at}:
 	default:
 		s.mu.Lock()
 		s.stats.Drops++
@@ -294,6 +319,17 @@ func (s *Scorer) Drain() Stats {
 	return out
 }
 
+// TakeBargeWindow returns and resets the barge window: how many frames were
+// scored at the barge-in bar, the highest score among them, and the bar.
+// frames is 0 when the bar never applied (barge-in off, or nothing played).
+func (s *Scorer) TakeBargeWindow() (peak, bar float32, frames uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	peak, bar, frames = s.bargePeak, s.bargeBar, s.bargeFrames
+	s.bargePeak, s.bargeFrames = 0, 0
+	return
+}
+
 // Info describes the loaded inference engine, for a log line at startup.
 func (s *Scorer) Info() string { return s.info }
 
@@ -315,16 +351,18 @@ func (s *Scorer) Close() {
 func (s *Scorer) run() {
 	defer close(s.done)
 	for {
-		var pcm []int16
+		var q queued
 		select {
 		case <-s.quit:
 			return
-		case pcm = <-s.ch:
+		case q = <-s.ch:
 		}
+		pcm := q.pcm
 		s.mu.Lock()
 		reset := s.resetReq
 		s.resetReq = false
 		threshold := s.effectiveThresholdLocked()
+		lowBar := threshold < s.threshold
 		s.stats.Threshold = threshold
 		s.mu.Unlock()
 
@@ -332,6 +370,7 @@ func (s *Scorer) run() {
 			s.det.Reset()
 			s.mu.Lock()
 			s.ready = false
+			s.prevAbove = false
 			s.mu.Unlock()
 		}
 
@@ -367,7 +406,20 @@ func (s *Scorer) run() {
 		if score > s.stats.MaxScore {
 			s.stats.MaxScore = score
 		}
-		crossed := score >= threshold && now.Sub(s.lastCross) >= s.refract
+		// At the barge-in bar a single frame is not enough: that bar sits ~10x
+		// below the wake threshold and scores the assistant's own voice, and
+		// one frame there cut long answers off mid-sentence. Two consecutive
+		// frames, the same rule as the controller's em_barge.decide.
+		if lowBar {
+			s.bargeFrames++
+			s.bargeBar = threshold
+			if score > s.bargePeak {
+				s.bargePeak = score
+			}
+		}
+		above := score >= threshold
+		crossed := above && (!lowBar || s.prevAbove) && now.Sub(s.lastCross) >= s.refract
+		s.prevAbove = above
 		if crossed {
 			s.stats.Crossings++
 			s.lastCross = now
@@ -375,7 +427,7 @@ func (s *Scorer) run() {
 		s.mu.Unlock()
 
 		if crossed && s.onCross != nil {
-			s.onCross(score, threshold, now)
+			s.onCross(score, threshold, q.at)
 		}
 	}
 }

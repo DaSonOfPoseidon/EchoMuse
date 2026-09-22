@@ -241,7 +241,7 @@ class PendingWake:
 
 
 def effective_mode(configured, trigger_capable: bool,
-                   model_ready: bool = True) -> str:
+                   model_ready: bool = True, local_capable: bool = False) -> str:
     """
     The mode actually in force, given what the device can do.
 
@@ -275,9 +275,18 @@ def effective_mode(configured, trigger_capable: bool,
     callers that do not know what is installed must keep today's behaviour
     rather than stand every device down. Pass False only when the model is
     known to be missing.
+
+    **None of that applies to firmware that listens privately**
+    (`local_capable`, docs/listening.md). Degrading such a device to "off"
+    would have the controller score a stream the operator chose not to send —
+    the one fallback private listening forbids. Its mode stays "on"; the
+    device reports itself `degraded` (button only) until its model arrives,
+    and the dashboard says so.
     """
     mode = normalise_mode(configured)
     if mode == MODE_OFF:
+        return mode
+    if mode == MODE_ON and local_capable:
         return mode
     if not model_ready:
         return MODE_OFF

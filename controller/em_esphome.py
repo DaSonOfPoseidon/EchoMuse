@@ -2809,7 +2809,10 @@ async def _persist_turn(device, turn_record: dict) -> None:
         # device actually drove the turn — on a controller-triggered turn the
         # column does not apply, and writing our own score into it would make
         # every row agree with itself.
-        if str(turn_record.get("trigger", "")).startswith("wakeword-dev"):
+        # A privately listening Echo sends this controller nothing to score,
+        # so there is no comparison to make and no miss to record.
+        if (str(turn_record.get("trigger", "")).startswith("wakeword-dev")
+                and not getattr(device, "private_listening", False)):
             ctrl_score, ctrl_delta = device.ctrl_shadow.match(wake_mono)
             turn_record["ctrl_wake_score"]    = ctrl_score
             turn_record["ctrl_wake_delta_ms"] = ctrl_delta

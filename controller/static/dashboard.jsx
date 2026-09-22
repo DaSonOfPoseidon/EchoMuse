@@ -2146,6 +2146,8 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                 sections={sections}
                 shadowCapable={!device.connected || !!device.owwShadowCapable}
                 triggerCapable={!device.connected || !!device.owwTriggerCapable}
+                localCapable={!device.connected || !!device.owwLocalCapable}
+                listen={device.connected ? device.listen : null}
                 mixCapable={!device.connected || !!device.audioMixCapable}
                 holdCapable={!device.connected || !!device.buttonHoldCapable}
                 hwEchoRef={device.connected && device.aecRef === 'hw'}
@@ -8539,9 +8541,38 @@ function onDeviceMode(config) {
   return ['off', 'shadow', 'on'].includes(v) ? v : 'off';
 }
 
+// What an Echo is actually doing with its microphone, from its own report
+// (em_listen.resolve via /api/devices `listen`). One line, and it never says
+// private unless the Echo said so: `streams === null` is "not known yet".
+function listenStatusText(listen) {
+  switch (listen.state) {
+    case 'local':      return 'Now: listening privately — nothing leaves this Echo until it hears the wake word';
+    case 'degraded':   return `Now: button only — ${listen.reason}`;
+    case 'controller': return 'Now: streaming continuously to the controller';
+    case 'diagnostic': return 'Now: streaming continuously (diagnostic)';
+    case 'legacy':     return `Now: streaming continuously — ${listen.reason}`;
+    default:           return listen.streams ? `Now: streaming — ${listen.reason}` : `Now: ${listen.reason || 'not reported yet'}`;
+  }
+}
+
+// The fleet line: how many connected Echoes send audio all the time. Counts
+// only what Echoes have reported, and says so when some have not.
+function listenFleetText(devices) {
+  const live = devices.filter(d => d.connected && d.listen);
+  if (!live.length) return null;
+  const streaming = live.filter(d => d.listen.streams === true).length;
+  const unknown = live.filter(d => d.listen.streams === null).length;
+  const n = live.length;
+  const head = streaming === 0
+    ? `No Echo streams audio continuously (${n} connected)`
+    : `${streaming} of ${n} connected Echo${n === 1 ? '' : 'es'} stream${streaming === 1 ? 's' : ''} audio continuously`;
+  return unknown ? `${head} · ${unknown} not reported yet` : head;
+}
+
 function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
                             shadowCapable = true, mixCapable = true,
                             holdCapable = true, triggerCapable = true,
+                            localCapable = true, listen = null,
                             hwEchoRef = false, hwRefCapable = true,
                             emosFleet = true }) {
   // emosFleet defaults TRUE for the same reason the capability props above do,
@@ -8900,37 +8931,44 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
                 <span style={{ fontFamily: mono, fontSize: 9, color: 'var(--muted)' }}>Eager</span>
               </div>
               <Slider label="Arbitration window" sub="ms that the first Echo to hear you silences the others — no added delay; 0 disables" value={config.wakeArbitrationMs ?? 700} min={0} max={2000} step={50} unit="ms" onChange={v => set('wakeArbitrationMs', v)}/>
-              {/* Three modes, so a select rather than a toggle. Each option is
-                  offered only when the device says it can do it — capability,
-                  not firmware version, because a control that silently does
-                  nothing reads as a broken feature rather than an unsupported
-                  one. "Trigger" needs oww_trigger on top of oww_shadow: shadow
-                  shipped first and there is firmware in the field that scores
-                  and reports without being able to act on it. */}
+              {/* Where the wake word is detected (docs/listening.md). Two
+                  choices; "shadow" is a developer diagnostic, set through the
+                  API and shown here only on an Echo already in it, labelled as
+                  the streaming mode it is. "On this Echo" needs oww_trigger —
+                  shadow shipped first and there is firmware in the field that
+                  scores and reports without being able to act on it. */}
               <Select
                 label="Wake word detection"
                 sub={!shadowCapable
                   ? 'needs newer firmware on this Echo — the controller listens for now'
-                  : (config.owwOnDevice ?? 'off') === 'on'
-                    ? 'the Echo decides — no network hop before it hears you, and it keeps working through a controller restart. The controller still scores alongside it, so Activity shows whether they agreed'
-                    : (config.owwOnDevice ?? 'off') === 'shadow'
-                      ? 'the Echo scores alongside the controller and reports what it would have heard, without acting on it — compare in Activity before trusting it'
-                      : 'the controller listens; the Echo just streams audio'}
+                  : onDeviceMode(config) === 'on'
+                    ? (localCapable
+                        ? 'the Echo listens for the wake word itself and sends nothing until it hears it — then only what you say, until you stop'
+                        : "this Echo's firmware still streams all the time in this mode — update it for private listening")
+                    : onDeviceMode(config) === 'shadow'
+                      ? 'diagnostic: streams all the time, and both the Echo and the controller score it so Activity can compare them'
+                      : 'streams the microphone to the controller all the time, on your network, and the controller listens for the wake word'}
                 value={onDeviceMode(config)}
                 options={[
-                  { value: 'off',    label: 'Controller' },
-                  { value: 'shadow', label: 'Both (compare)', disabled: !shadowCapable },
                   // Needs the runtime + models installed as well as the
-                  // capability, which the Updates tab does — hence the hint
-                  // rather than a hard block we cannot verify from here.
-                  { value: 'on',     label: 'On device',      disabled: !triggerCapable },
+                  // capability, which the Updates tab does — an Echo without
+                  // them reports itself degraded (button only) below.
+                  { value: 'on',  label: 'On this Echo',      disabled: !triggerCapable },
+                  { value: 'off', label: 'On the controller' },
+                  ...(onDeviceMode(config) === 'shadow'
+                    ? [{ value: 'shadow', label: 'Diagnostic (streams)' }] : []),
                 ]}
                 onChange={v => set('owwOnDevice', v)}/>
-              {(config.owwOnDevice ?? 'off') !== 'off' && shadowCapable && (
-                <div className="em-label" style={{ marginTop: 6, color: 'var(--muted)' }}>
-                  Needs the wake word runtime installed on this Echo (Updates tab) — costs ~0.4 of a core while it runs.
+              {listen && (
+                <div className="em-label" style={{ marginTop: 6,
+                  color: listen.state === 'degraded' ? 'var(--warn)' : 'var(--muted)' }}>
+                  {listenStatusText(listen)}
                 </div>
               )}
+              {onDeviceMode(config) !== 'off' && shadowCapable && (
+                <div className="em-label" style={{ marginTop: 6, color: 'var(--muted)' }}>
+                  Needs the wake word runtime installed on this Echo (Updates tab) — costs ~0.4 of a core while it runs.
+                </div>              )}
             </div>
           </div>
         </div>
@@ -10025,6 +10063,14 @@ function App() {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Privacy, in one line (docs/listening.md) — from what each Echo
+          reports, never from configuration alone. */}
+      {listenFleetText(devices) && (
+        <div className="em-label" style={{ marginBottom: 10, color: 'var(--muted)' }}>
+          {listenFleetText(devices)}
         </div>
       )}
 
