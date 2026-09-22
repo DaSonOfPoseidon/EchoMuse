@@ -3,11 +3,14 @@ package aec
 import (
 	"encoding/binary"
 	"math"
+	"os"
 	"testing"
+	"time"
 )
 
 // hwCanceller is a canceller on the hardware-reference path, as the device
-// runs it.
+// runs it. tailMs is the configured (software tap) length, which the
+// hardware path does not use.
 func hwCanceller(tailMs int) *Canceller {
 	c := New()
 	c.SetParams(true, 0, tailMs)
@@ -64,10 +67,32 @@ func TestLoadedStateCancelsFromTheFirstFrame(t *testing.T) {
 }
 
 func TestImportRefusesAMismatchedFilter(t *testing.T) {
-	src := hwCanceller(64)
-	saved, _ := src.ExportState()
-	if err := hwCanceller(128).ImportState(saved); err == nil {
-		t.Fatal("a state saved at 64ms must not load into a 128ms filter")
+	saved, _ := hwCanceller(300).ExportState()
+	sw := New()
+	sw.SetParams(true, 0, 300) // software tap: a 300ms filter
+	if err := sw.ImportState(saved); err == nil {
+		t.Fatal("a hardware-path state must not load into a software-tap filter")
+	}
+}
+
+// The hardware path runs at hwTailMs whatever aecTailMs says, and a tail
+// change pushed while it runs must not discard the converged filter.
+func TestHardwarePathUsesItsOwnTail(t *testing.T) {
+	c := hwCanceller(300)
+	if c.stTailMs != hwTailMs {
+		t.Fatalf("hardware path built at %dms, want %d", c.stTailMs, hwTailMs)
+	}
+	st := c.st
+	c.SetParams(true, 0, 200)
+	if c.st != st {
+		t.Fatal("a tail change on the hardware path rebuilt the filter")
+	}
+	if c.tailMs != 200 {
+		t.Fatal("the new tail must still be stored for the software tap")
+	}
+	c.SetHardwareRef(false)
+	if c.stTailMs != 200 {
+		t.Fatalf("falling back to the software tap built at %dms, want 200", c.stTailMs)
 	}
 }
 
@@ -92,5 +117,67 @@ func TestImportRefusesGarbage(t *testing.T) {
 func TestExportNeedsARunningCanceller(t *testing.T) {
 	if _, err := New().ExportState(); err == nil {
 		t.Fatal("export from a disabled canceller must fail")
+	}
+}
+
+// A converged hardware-path filter saves itself, and a fresh canceller given
+// the same path loads it the moment the hardware reference is confirmed.
+func TestEchoPathIsSavedAndLoadedAcrossARestart(t *testing.T) {
+	path := t.TempDir() + "/aec_echo_path.bin"
+	signal := synth(200 * FrameSize)
+
+	first := New()
+	first.SetStatePath(path)
+	first.SetParams(true, 0, 300)
+	first.SetHardwareRef(true)
+	firstFramesAttenuation(first, signal, 200)
+	var saved []byte
+	for i := 0; i < 200 && saved == nil; i++ { // the write runs on its own goroutine
+		saved, _ = os.ReadFile(path)
+		time.Sleep(5 * time.Millisecond)
+	}
+	if saved == nil {
+		t.Fatal("a converged filter was not saved")
+	}
+
+	restarted := New()
+	restarted.SetStatePath(path)
+	restarted.SetParams(true, 0, 300)
+	restarted.SetHardwareRef(true)
+	other := synth(20*FrameSize + 7)[7:]
+	if att := firstFramesAttenuation(restarted, other, 10); att < 30 {
+		t.Fatalf("restart did not start from the saved echo path: %.1fdB over the first frames", att)
+	}
+}
+
+// Saving is rate-limited: a second converged window inside a day writes
+// nothing, which is what keeps this off the flash on every reply.
+func TestEchoPathIsNotRewrittenWithinADay(t *testing.T) {
+	path := t.TempDir() + "/aec_echo_path.bin"
+	if err := os.WriteFile(path, []byte("recent"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := New()
+	c.SetStatePath(path)
+	c.SetParams(true, 0, 300)
+	c.SetHardwareRef(true)
+	firstFramesAttenuation(c, synth(200*FrameSize), 200)
+	time.Sleep(50 * time.Millisecond)
+	if b, _ := os.ReadFile(path); string(b) != "recent" {
+		t.Fatal("a file younger than a day was rewritten")
+	}
+}
+
+// A software-tap filter's alignment depends on runtime delay and would not
+// transfer, so it is never saved.
+func TestSoftwareTapNeverSaves(t *testing.T) {
+	path := t.TempDir() + "/aec_echo_path.bin"
+	c := New()
+	c.SetStatePath(path)
+	c.SetParams(true, 0, 300)
+	c.maybeSaveLocked(30, true)
+	time.Sleep(20 * time.Millisecond)
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("the software tap saved its filter")
 	}
 }

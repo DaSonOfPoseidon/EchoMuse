@@ -123,6 +123,7 @@ func main() {
 	ctx := context.Background()
 
 	dataClient := client.NewDataClient(deviceID, microphone, pcmSpeaker, canceller)
+	canceller.SetStatePath(aec.DefaultStatePath) // saved echo path: loaded on the hardware reference
 	applyAecConfig(canceller, dataClient) // arm from env defaults before any config push
 
 	// Direction callback — update LED ring to show estimated source angle

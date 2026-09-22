@@ -9019,7 +9019,12 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
                 : 'playback write-to-ear latency compensation'}
               disabled={hwEchoRef}
               value={config.aecDelayMs ?? 250} min={0} max={1000} step={10} unit="ms" onChange={v => set('aecDelayMs', v)}/>
-            <Slider label="AEC tail" sub="filter length — residual delay error + room reverb" value={config.aecTailMs ?? 300} min={50} max={500} step={10} unit="ms" onChange={v => set('aecTailMs', v)}/>
+            <Slider label="AEC tail"
+              sub={hwEchoRef
+                ? 'fixed at 64ms — this device has a hardware echo reference'
+                : 'filter length — residual delay error + room reverb'}
+              disabled={hwEchoRef}
+              value={config.aecTailMs ?? 300} min={50} max={500} step={10} unit="ms" onChange={v => set('aecTailMs', v)}/>
             {/* Three values, so a select. "Auto" is right almost always —
                 these exist so the two reference paths can be compared on one
                 device without editing an init script on it and restarting
