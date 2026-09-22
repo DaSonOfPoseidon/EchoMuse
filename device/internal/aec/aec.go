@@ -35,6 +35,8 @@ import "C"
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"log"
 	"math"
 	"sync"
@@ -608,4 +610,71 @@ func frameRMS(s []int16) float64 {
 		sum += f * f
 	}
 	return math.Sqrt(sum / float64(len(s)))
+}
+
+// A saved echo path: what the canceller learned, so a restart need not learn
+// it again from nothing while the first reply plays. The header ties it to
+// the filter shape it came from; speex's own blob is only meaningful to a
+// state of the same frame size, filter length and rate.
+const stateMagic = "EMAEC1"
+
+const stateHeader = len(stateMagic) + 2 + 2 + 4 + 4 // magic, frame, tailMs, rate, payload
+
+// ExportState returns the learned echo path, or an error when cancellation
+// is off.
+func (c *Canceller) ExportState() ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.st == nil {
+		return nil, errors.New("aec: not enabled")
+	}
+	n := int(C.em_echo_state_size(c.st))
+	out := make([]byte, stateHeader+n)
+	copy(out, stateMagic)
+	h := out[len(stateMagic):]
+	binary.LittleEndian.PutUint16(h[0:], uint16(FrameSize))
+	binary.LittleEndian.PutUint16(h[2:], uint16(c.tailMs))
+	binary.LittleEndian.PutUint32(h[4:], uint32(sampleRate))
+	binary.LittleEndian.PutUint32(h[8:], uint32(n))
+	if C.em_echo_state_export(c.st, unsafe.Pointer(&out[stateHeader]), C.int(n)) != 0 {
+		return nil, errors.New("aec: export size mismatch")
+	}
+	return out, nil
+}
+
+// ImportState loads a saved echo path into the running canceller. Anything
+// that does not match the current filter exactly, or holds a non-finite
+// value, is refused and the canceller is left as it was: a wrong filter is
+// worse than an empty one, which merely has to learn.
+func (c *Canceller) ImportState(b []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.st == nil {
+		return errors.New("aec: not enabled")
+	}
+	if len(b) < stateHeader || string(b[:len(stateMagic)]) != stateMagic {
+		return errors.New("aec: not a saved echo path")
+	}
+	h := b[len(stateMagic):]
+	frame, tail := int(binary.LittleEndian.Uint16(h[0:])), int(binary.LittleEndian.Uint16(h[2:]))
+	rate, n := int(binary.LittleEndian.Uint32(h[4:])), int(binary.LittleEndian.Uint32(h[8:]))
+	if frame != FrameSize || tail != c.tailMs || rate != sampleRate {
+		return fmt.Errorf("aec: saved for frame %d tail %dms rate %d, running %d/%dms/%d",
+			frame, tail, rate, FrameSize, c.tailMs, sampleRate)
+	}
+	if n != int(C.em_echo_state_size(c.st)) || len(b) != stateHeader+n {
+		return errors.New("aec: saved echo path is the wrong size")
+	}
+	// Every field is 4 bytes and, in this FLOATING_POINT build, a float —
+	// bar one int flag, which reads as a tiny finite float either way.
+	for i := stateHeader; i+4 <= len(b); i += 4 {
+		v := math.Float32frombits(binary.LittleEndian.Uint32(b[i:]))
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			return errors.New("aec: saved echo path holds a non-finite value")
+		}
+	}
+	if C.em_echo_state_import(c.st, unsafe.Pointer(&b[stateHeader]), C.int(n)) != 0 {
+		return errors.New("aec: import size mismatch")
+	}
+	return nil
 }
