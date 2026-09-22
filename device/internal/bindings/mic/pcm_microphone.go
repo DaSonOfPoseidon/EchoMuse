@@ -19,6 +19,11 @@ import (
 const cardNr = 0
 const deviceNr = 24
 
+// rawTap receives every raw 9-channel batch, and is nil in release builds.
+// Only rawtap_bench.go sets it (build tag bench): it records the mics to
+// disk, which release firmware must be unable to do.
+var rawTap func([]byte)
+
 // PcmMicrophone opens the ALSA device once and fans out to multiple subscribers.
 // Callers register via Listen(); each gets their own buffered channel.
 type PcmMicrophone struct {
@@ -150,6 +155,9 @@ func (p *PcmMicrophone) readLoop() {
 		// library reused one buffer, and a batch still queued in stream was
 		// overwritten by the next read — repeated or torn audio (#607).
 		buf := audio
+		if rawTap != nil {
+			rawTap(buf)
+		}
 
 		p.mu.Lock()
 		for _, ch := range p.subs {
