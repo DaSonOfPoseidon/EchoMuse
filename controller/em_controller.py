@@ -1336,6 +1336,20 @@ def _forget_oww_models(device_id: str) -> None:
     _oww_barge_models.pop(device_id, None)
 
 
+def _reset_wake_model(model) -> "asyncio.Future":
+    """Reset an openwakeword model off the event loop; await the result before
+    the model scores again.
+
+    reset() re-seeds the feature window from embeddings of 4s of random noise:
+    58ms on a desktop against 1.6ms to score a frame, and ~400ms on the HA
+    host. Called on the loop it stalled every Echo's speaker audio, LED frames
+    and control messages on every controller-scored wake (measured
+    2026-09-22: `event loop stalled 360ms`, and a neighbour's wake read 368ms
+    late). Scoring already ran in the executor for less than a thirtieth of
+    that cost."""
+    return asyncio.get_event_loop().run_in_executor(None, model.reset)
+
+
 async def _acquire_wake_model(device: "Device", name: str, speex: bool):
     """Return the device's wake model, reusing the cached one when the wake word
     and speex setting are unchanged, else building a fresh one and replacing any
@@ -1349,7 +1363,7 @@ async def _acquire_wake_model(device: "Device", name: str, speex: bool):
     cached = _oww_models.get(device.device_id)
     if cached is not None and cached[0] == name and cached[1] == speex:
         model = cached[2]
-        model.reset()
+        await _reset_wake_model(model)
         return model
     model = await loop.run_in_executor(
         None,
@@ -1598,7 +1612,7 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
     # name is the raw owwModel value; scoring needs the openwakeword prediction
     # key (path → stem).
     barge_pred_key = em_oww_models.prediction_key(name)
-    model.reset()
+    await _reset_wake_model(model)
     # reset() seeds the classifier's window with embeddings of random noise,
     # so the first FEATURE_WINDOW chunks score that noise as much as the room.
     # This watcher is where that hurt most: it reset and scored immediately,
@@ -3443,7 +3457,15 @@ async def _stream_listen(device: Device):
                         # preroll discard in _stream_mic_audio.
                         # TTS mic_stop/mic_start remains untouched — that
                         # acoustic-feedback guard is load-bearing.
-                        model.reset()
+                        #
+                        # The reset runs in the executor and is NOT awaited
+                        # here: routing to the turn (oww_paused, below) must
+                        # happen on this tick, or frames arriving during the
+                        # reset land in mic_queue and the turn drains them as
+                        # stale — the start of the command. Nothing scores
+                        # with the model until listening resumes, which
+                        # awaits it first.
+                        model_reset = _reset_wake_model(model)
                         warmup.reset()
                         buf.clear()
                         device.cancel_event.clear()
@@ -3575,6 +3597,7 @@ async def _stream_listen(device: Device):
                                     device.device_id, "info", "controller",
                                     "Wake heard but no HA connection"
                                 )
+                                await model_reset
                                 continue
                             # The loser is lit: since #263 the device draws
                             # the listening ring at its own crossing, before
@@ -3596,6 +3619,7 @@ async def _stream_listen(device: Device):
                                 device.device_id, "info", "controller",
                                 f"Wake ceded to {won_by} (arbitration)"
                             )
+                            await model_reset
                             continue
 
                         # "wakeword-dev" rather than a separate field: every
@@ -3624,7 +3648,8 @@ async def _stream_listen(device: Device):
                                 f"[{device.device_id}] OWW: "
                                 f"drained {drained} stale frames post-turn"
                             )
-                        model.reset()
+                        await model_reset
+                        await _reset_wake_model(model)
                         warmup.reset()
                         buf.clear()
                         # mic_start without lock_mic — device stays on ch6 omni
@@ -3639,7 +3664,7 @@ async def _stream_listen(device: Device):
                             f"[{device.device_id}] Voice turn active — "
                             f"ignoring wake"
                         )
-                        model.reset()
+                        await _reset_wake_model(model)
                         warmup.reset()
 
     except asyncio.CancelledError:
