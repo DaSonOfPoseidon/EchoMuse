@@ -2870,15 +2870,22 @@ def _arbitration_slack() -> float:
     return em_listen.MAX_ARB_SLACK_S
 
 
-def _wake_heard_at(device: Device, ev: dict) -> float:
-    # The Echo's own capture instant, mapped through its clock, survives any
-    # time in flight; age plus half an RTT assumes the message was not
-    # delayed, which is exactly when it matters. The latter is for firmware
-    # that does not send it.
+def _wake_dating(device: Device, ev: dict) -> tuple[float, str]:
+    """When a device wake was heard, and how that was worked out.
+
+    The Echo's own capture instant, mapped through its clock, survives any
+    time in flight; age plus half an RTT assumes the message was not delayed,
+    which is exactly when it matters. The latter is for firmware that does
+    not send capturedMono, and until the first ping reply maps the clock.
+    """
     t = device.device_clock.to_local(ev.get("captured_mono"), ev["arrived"])
     if t is not None:
-        return t
-    return em_listen.heard_at(ev["arrived"], ev["age_ms"], device.rtt_est.srtt)
+        return t, "device clock"
+    return em_listen.heard_at(ev["arrived"], ev["age_ms"], device.rtt_est.srtt), "age + RTT"
+
+
+def _wake_heard_at(device: Device, ev: dict) -> float:
+    return _wake_dating(device, ev)[0]
 
 
 async def _private_wake_turn(device: Device, ev: dict) -> None:
@@ -4530,11 +4537,14 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                             else:
                                 try:
                                     device.listen_wakes.put_nowait(ev)
+                                    _heard, _how = _wake_dating(device, ev)
                                     log.info(
                                         f"[{device_id}] on-device wake: score="
                                         f"{ev['score']:.3f} age={ev['age_ms']}ms "
                                         f"session={ev['session']}"
                                         f"{' (over playback)' if ev['barge'] else ''}"
+                                        f", heard {(ev['arrived'] - _heard) * 1000:.0f}ms "
+                                        f"before arrival ({_how})"
                                     )
                                 except asyncio.QueueFull:
                                     await device.listen_close(ev["session"], "busy")
