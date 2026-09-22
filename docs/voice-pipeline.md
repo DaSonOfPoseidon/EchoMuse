@@ -181,6 +181,18 @@ Assistant's well-maintained detector rather than home-grown logic, and the
 false-wake backstop adapts to each room by itself — a quiet study and a
 loud lounge get equally sensible behaviour with zero tuning.
 
+**Nothing reaches Home Assistant until somebody is actually speaking.** The
+controller runs a small speech detector (Silero, which ships inside the wake
+word package) over the turn's audio and holds it back until it hears speech;
+then everything held is sent in order, so Home Assistant gets exactly what it
+would have got, a fraction of a second later. A false wake, or a wake followed
+by silence, sends nothing, and the turn ends quietly at the 5-second backstop.
+This exists because the speech-to-text model does not return nothing for
+non-speech: music under a duck used to come back as "Thank you." and get a
+polite reply to a question nobody asked. Button and follow-up turns get the
+same model on the Dot itself, once the controller has installed it with the
+wake word files.
+
 **There is a second backstop, for when that detector never starts at all.**
 Home Assistant needs to hear about a third of a second of speech it is
 confident about before it will decide you have started talking — and until it
@@ -218,12 +230,15 @@ cleaner audio help; they can't fully substitute for a good STT model.
 
 ## Stage 9 — The response
 
-The reply audio comes back through the controller, which shapes the sound
-and streams it to the Dot, which plays it while a copy is fed to the echo
-canceller (Stage 3) so the mics can subtract it. The audio arrives at the
-hardware's native rate: the satellite tells Home Assistant what format the
-speaker wants (48kHz mono), so recent HA versions transcode at source, and
-ffmpeg covers anything else during decode.
+The reply audio comes back through the controller and is streamed to the Dot,
+which shapes it and plays it while a copy is fed to the echo canceller
+(Stage 3) so the mics can subtract it. The satellite asks Home Assistant for
+the speaker's own format — 48kHz mono, as WAV — so the audio is passed
+straight through with nothing to decode. It used to be FLAC, and the decoder
+held up to 1.7 seconds of speech inside itself; when Home Assistant paused
+between sentences (it waits on the language model for the next one), that
+held audio arrived late and a long answer went silent mid-sentence. Anything
+Home Assistant sends in another format is still decoded with ffmpeg.
 
 While it plays, the ring throbs in time with the audio, and it clears when
 the Dot reports that it has *actually* finished rather than when the
@@ -239,14 +254,18 @@ that before the limiter means the limiter is not holding the whole response
 down to fit bass peaks nobody was going to hear. Measured, the midrange comes
 out slightly *louder* with the guard on than with it off.
 
-**Benefit:** centrally-applied processing means every device gets consistent,
-tuned sound, adjustable live from the dashboard — and none of it costs the Dot
-any CPU, which matters on hardware already running a mic pipeline and possibly
-a wake word model.
+The shaping runs **on the Dot**, at the moment the audio reaches the
+speaker, so a change on the dashboard is heard within a fraction of a second
+rather than after the few seconds already buffered. Firmware that cannot do
+it has the controller shape the audio instead, exactly as before; the two
+sides agree which one does it, so audio is never shaped twice.
+
+**Benefit:** consistent, tuned sound on every device, adjustable live from the
+dashboard. The cost is some of the Dot's CPU.
 
 The reply is **streamed while Home Assistant is still generating it**: the
-response is piped through ffmpeg and out to the Dot as it arrives, rather
-than being fetched and decoded in full first. A long answer starts speaking
+response goes out to the Dot as it arrives, rather than being fetched in full
+first. A long answer starts speaking
 at roughly the same moment a short one would, instead of making you wait for
 the last word to be synthesised before hearing the first. All three stages
 carry their state across chunks, so there's no click at the joins.
@@ -255,7 +274,10 @@ carry their state across chunks, so there's no click at the joins.
 enabled — say the wake word over the top and the response cuts off — but
 it's off by default and depends on AEC being on and tuned (Stage 3): the
 mics stay live during playback, and echo cancellation is what stops the
-device waking itself. Interrupting by *just talking* (without the wake
+device waking itself. It works from the first reply after a restart: the
+Dot saves what its echo canceller has learned about its own speaker and
+reloads it at boot, rather than spending the first 10–20 seconds of speech
+relearning it. Interrupting by *just talking* (without the wake
 word) is deliberately not attempted.
 
 ## Beyond voice — music
@@ -269,7 +291,9 @@ gap. Pause and stop are still instant — they don't wait for that buffer
 to drain, they throw it away.
 
 Saying the wake word over music **ducks** it: the music drops to a quiet
-bed under the answer and comes back up afterwards. It doesn't pause.
+bed under the answer and comes back up afterwards. It doesn't pause. The Dot
+ducks it itself the moment it hears its own wake word, as the ring lights,
+rather than waiting for the controller to answer.
 That matters because those few seconds of lead are already inside the
 Dot when you start speaking, so ducking has to happen on the device —
 and because a Music Assistant flow stream can't be seeked, so pausing
