@@ -207,6 +207,10 @@ type DataClient struct {
 	micWanted     bool
 	micWantedLock bool
 
+	// onTurnEnded is told when a bounded (lockMic) turn stream ENDS ITSELF —
+	// the no-speech timeout — rather than being stopped. See turnEndedItself.
+	onTurnEnded func()
+
 	// beamReq carries a pending beam lock/unlock request from the control
 	// plane to the mic streaming goroutine. Beamformer methods are not safe
 	// to call from other goroutines (same reason beam.Unlock is deferred
@@ -435,6 +439,31 @@ func (d *DataClient) SetListenState(state string) bool {
 func (d *DataClient) ListenState() string {
 	s, _ := d.listenState.Load().(string)
 	return s
+}
+
+// OnTurnEnded registers the callback for a turn stream that ended itself.
+// It runs on its own goroutine, after the stream is marked inactive.
+func (d *DataClient) OnTurnEnded(cb func()) { d.onTurnEnded = cb }
+
+// turnEndedItself retires a turn the DEVICE ended, and hands the mic back.
+//
+// The controller's instruction was "stream this turn", and the turn is over,
+// so the instruction is spent: left standing, the next reconnect's resumeMic
+// restores a turn stream nobody asked for, which times out in turn. And under
+// private listening nothing else hands back to the wake stream — the mic_stop
+// handler does so only while a turn stream is still running, which by the
+// time it arrives it is not. Both together left VVV deaf from a follow-up
+// turn nobody answered until the process restarted (2026-09-22 06:29:28).
+//
+// Called with the stream already inactive, so a StartMic from the callback
+// cannot be refused as "already active".
+func (d *DataClient) turnEndedItself() {
+	d.micMu.Lock()
+	d.micWanted, d.micWantedLock = false, false
+	d.micMu.Unlock()
+	if cb := d.onTurnEnded; cb != nil {
+		go cb()
+	}
 }
 
 // OnListenEnd registers the callback for sessions the device closes itself.
@@ -877,6 +906,7 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 	// the OWW chunk buffer, progressively killing wake detection until the
 	// process restarted. d.micStopCh is compared against our own stopCh as
 	// the identity token: they're equal only if no StartMic ran after us.
+	endedItself := false
 	defer func() {
 		d.micMu.Lock()
 		owner := d.micStopCh == stopCh
@@ -884,6 +914,9 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 			d.micActive = false
 		}
 		d.micMu.Unlock()
+		if owner && endedItself {
+			d.turnEndedItself()
+		}
 		// Unlock the beam only while still the current stream: if a
 		// replacement stream has already started (StopMic→StartMic pair),
 		// the beam belongs to it — this goroutine's late Unlock would
@@ -1037,6 +1070,7 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 			// nil in that case and a nil channel never becomes ready.
 			log.Println("[data] streamMic: no speech detected within timeout — ending turn")
 			sendFrame([]byte{frameTypeNoSpeechTimeout})
+			endedItself = true
 			return
 
 		case raw, ok := <-ch:

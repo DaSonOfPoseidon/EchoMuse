@@ -190,6 +190,16 @@ func main() {
 			}
 		}
 	})
+	// A turn the device ended itself (no speech) hands back to the wake
+	// stream here: nothing else will, under private listening. In stream
+	// mode the controller restarts the stream itself, as it always has.
+	dataClient.OnTurnEnded(func() {
+		if s.IsMuted() || dataClient.ListenState() == client.ListenStream {
+			return
+		}
+		log.Println("[data] turn ended on the device — back to the wake stream")
+		dataClient.StartMic(false)
+	})
 	dataClient.OnListenEnd(func(e listen.End) {
 		controlClient.SendListenEnd(e.Session, string(e.Reason))
 	})
