@@ -100,6 +100,7 @@ COPY em_shadow.py .
 COPY em_barge.py .
 COPY em_ns.py .
 COPY em_speechgate.py .
+COPY em_wav.py .
 COPY em_pki.py .
 COPY em_hostip.py .
 COPY em_ingressauth.py .
