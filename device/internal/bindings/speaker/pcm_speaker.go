@@ -371,12 +371,7 @@ func (p *PcmSpeaker) WatchJackRouting(ctx context.Context) {
 // rather than hanging.
 func (p *PcmSpeaker) silenceLoop() {
 	defer close(p.deadCh)
-	// Bench telemetry for sizing the hardware buffer: how late does this loop
-	// ever get? Reported once a minute; two time.Now per period.
-	var lastPump, workDone time.Time
-	windowStart := time.Now()
-	var maxGap, maxWork time.Duration
-	periods := 0
+	var meter writeLoopMeter // bench builds only; empty otherwise
 	for {
 		select {
 		case <-p.stopCh:
@@ -435,32 +430,12 @@ func (p *PcmSpeaker) silenceLoop() {
 		if p.levelTap != nil {
 			p.levelTap(level)
 		}
-		workDone = time.Now()
-		workStart := lastPump
+		meter.beforeWrite()
 		if err := p.pump(out); err != nil {
 			log.Printf("silenceLoop: pump error: %v", err)
 			return
 		}
-		now := time.Now()
-		if !lastPump.IsZero() {
-			// gap: Pump return to Pump return. Steady state is one period;
-			// anything longer is time the hardware buffer drained unrefilled.
-			// work: this loop's own time between writes, the part we control.
-			if g := now.Sub(lastPump); g > maxGap {
-				maxGap = g
-			}
-			if w := workDone.Sub(workStart); w > maxWork {
-				maxWork = w
-			}
-			periods++
-		}
-		lastPump = now
-		if now.Sub(windowStart) >= time.Minute {
-			log.Printf("[speaker] write loop: max gap %.1fms, max work %.1fms over %d periods (period %.1fms, hw buffer %.0fms)",
-				float64(maxGap.Microseconds())/1000, float64(maxWork.Microseconds())/1000, periods,
-				float64(periodSize)*1000/48000, float64(alsaBufferFrames)*1000/48000)
-			windowStart, maxGap, maxWork, periods = now, 0, 0, 0
-		}
+		meter.afterWrite()
 	}
 }
 

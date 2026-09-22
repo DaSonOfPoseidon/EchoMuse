@@ -1127,8 +1127,8 @@ func applyShadowConfig(dc *client.DataClient, cc *client.ControlClient,
 	if snap.BargeInEnabled != nil && *snap.BargeInEnabled && spk != nil {
 		sc.SetBargeThreshold(float32(snap.BargeInThreshold), speakerPlaying(spk))
 	}
-	if spk != nil {
-		sc.SetTraceLabel(playingLabel(spk))
+	if spk != nil && benchScorer != nil {
+		benchScorer(sc, spk)
 	}
 	dc.SetShadowScorer(sc)
 	shadowState.mode, shadowState.model, shadowState.lastErr = mode, model, ""
@@ -1155,18 +1155,9 @@ func speakerPlaying(spk *speaker.PcmSpeaker) func() bool {
 	}
 }
 
-// playingLabel names what the speaker is playing, for the bench score trace.
-func playingLabel(spk *speaker.PcmSpeaker) func() string {
-	return func() string {
-		switch {
-		case spk.VoiceAudible(wakeword.ScoreSpan):
-			return "voice"
-		case spk.MusicAudible(wakeword.ScoreSpan):
-			return "music"
-		}
-		return "quiet"
-	}
-}
+// benchScorer instruments a newly opened scorer; set only in bench builds
+// (trace_bench.go), nil in release.
+var benchScorer func(*shadow.Scorer, *speaker.PcmSpeaker)
 
 // actsOnCrossings describes what a crossing will DO, for the log line. The
 // distinction is the whole difference between the two live modes and is not
