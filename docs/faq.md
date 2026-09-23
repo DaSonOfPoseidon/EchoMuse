@@ -395,8 +395,11 @@ Both, as two separate entities for two unrelated things.
 
 **Wake word detection** (`switch`, on by default) stops the device waking —
 "stop listening while the TV is on", or only let a room's Dot answer when its
-motion sensor sees someone. Off, the device stops streaming its microphone to
-the controller and a wake word does nothing. It never touches the microphone
+motion sensor sees someone. Off, a wake word does nothing. With the wake word
+detected on the Echo (the default) the Echo still hears it and the controller
+declines the session straight away, so no turn starts; with it detected on
+the controller, the Echo also stops streaming its microphone (see
+[Listening](listening.md)). It never touches the microphone
 itself, so an HA-initiated `start_conversation` or `ask_question` still
 listens, exactly as it does under the mute button. It is not persisted across
 a controller restart, so an automation that turns it off should re-assert it.

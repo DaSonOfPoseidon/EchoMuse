@@ -193,4 +193,3 @@ def test_no_ha_cue_is_two_throbs_and_self_clearing():
     assert cue["ttlSec"] == 1, \
         "must retire on the device's own ticker with no follow-up message"
     assert cue["ttlSec"] * 1000 / cue["periodMs"] == 2
-

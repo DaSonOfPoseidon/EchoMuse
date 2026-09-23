@@ -188,10 +188,11 @@ def test_unmuting_with_the_wake_word_off_takes_the_stream_back_down():
 
 
 def test_the_wake_listener_honours_the_switch():
-    """Both the frame gate and the stall watchdog: a watchdog that only knows
-    the button mute would restart the stream the switch just stopped."""
+    """Both the frame gate and the stall watchdog of the stream path: a
+    watchdog that only knows the button mute would restart the stream the
+    switch just stopped. The private path is its own test, below."""
     src = CONTROLLER.read_text()
-    listener = _block(src, "async def wake_word_listener(", "\nasync def ")
+    listener = _block(src, "async def _stream_listen(", "\nasync def ")
     assert listener.count("em_wakeword.wake_allowed(") >= 2
 
 
@@ -249,3 +250,22 @@ def test_the_switch_paints_nothing_on_the_ring():
     assert "wake_word" not in scenes
     for fn in ("async def leds_off(", "async def _leds_turn_end("):
         assert "wake_word_enabled" not in _block(src, fn, "\n\n\n")
+
+
+def test_a_private_wake_is_declined_with_the_wake_word_off():
+    """
+    Under private listening (#602, the default) the Echo scores the wake
+    word itself and sends `oww_wake` with a session. The stream-path gates
+    never see that, and the switch's mic_stop ends neither the session nor
+    local listening — so without a check here, a wake with the switch off
+    still starts a turn. It is closed with its own reason, so neither log
+    blames the button.
+    """
+    src = CONTROLLER.read_text()
+    turn = _block(src, "async def _private_wake_turn(", "\n\n\n")
+    gate = turn.index("if not device.wake_word_enabled:")
+    close = turn.index('await device.listen_close(session, "wake_off")', gate)
+    assert close < turn.index("Wake word detected"), \
+        "the wake must be declined before a turn is set up"
+    assert turn.index('listen_close(session, "muted")') < gate, \
+        "the button mute keeps its own reason and is checked first"

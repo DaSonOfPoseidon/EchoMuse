@@ -195,7 +195,6 @@ State names used below: `IDLE`, `LISTENING`, `THINKING`, `PLAYING`, `MUTED`,
 Mute is the reference implementation of principle 5, and its behaviour is
 **not changing**.
 
-
 ### 4.3 Volume buttons — clickType 115 / 114 (device-local)
 
 | # | State | Device action | Ring outcome | Status |

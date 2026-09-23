@@ -10,7 +10,11 @@ Two things stop this device answering, and they are unrelated:
 - The WAKE WORD SWITCH stops the controller acting on a wake word, and
   takes the continuous wake stream down. Nothing more. It never touches the
   microphone path, so it cannot enable anything that is not already enabled
-  by default — which is what makes exposing it to HA safe.
+  by default — which is what makes exposing it to HA safe. Under private
+  listening (#602) there is no continuous stream, and `mic_stop` ends
+  neither a session nor the Echo's local listening, so the Echo keeps
+  scoring; `_private_wake_turn` declines each of its wakes instead, with
+  `listen_close(session, "wake_off")`.
 
 They are INDEPENDENT, in both directions: pressing mute does not turn the
 switch off, and pressing unmute does not turn it back on. The switch is HA's

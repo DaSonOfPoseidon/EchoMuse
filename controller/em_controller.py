@@ -3055,6 +3055,14 @@ async def _private_wake_turn(device: Device, ev: dict) -> None:
     if device.muted:
         await device.listen_close(session, "muted")
         return
+    if not device.wake_word_enabled:
+        # HA's wake word switch (#286). The stream path is gated by the wake
+        # listener, but here the Echo scores the wake word itself, and the
+        # mic_stop the switch sends ends neither a session nor local
+        # listening — so a private wake has to be declined one at a time.
+        # A reason of its own, not "muted": the button did not do this.
+        await device.listen_close(session, "wake_off")
+        return
     if ev["floor"] is not None:
         # The controller cannot measure the floor from a stream it does not
         # get; the Echo tracks it the same way and sends it with the wake.
