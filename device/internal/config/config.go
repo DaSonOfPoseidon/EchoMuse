@@ -48,6 +48,15 @@ type Device struct {
 	// reasoning as the LED meter response curve — not something to discover
 	// via a firmware OTA per attempt.
 	DuckDb float64
+
+	// WakeSound plays a short rising two-tone when the wake word is
+	// recognised (#120). Off by default: it interrupts "<wakeword>, do this".
+	// An accessibility option first — the ring is the only other sign the
+	// device is listening, and no use to someone who cannot see it.
+	WakeSound bool
+	// WakeSoundLevel is "quiet", "medium" or "loud" (internal/cue).
+	WakeSoundLevel string
+
 	// OwwOnDevice selects on-device wake word scoring: "off", "shadow" or
 	// "on".
 	//
@@ -171,6 +180,8 @@ func (d *Device) loadDefaults() {
 	d.OwwOnDevice = normaliseOnDevice(envStr("OWW_ON_DEVICE", OnDeviceOff))
 	d.BargeInThreshold = envFloat("BARGE_IN_THRESHOLD", 0.05)
 	d.DuckDb = envFloat("DUCK_DB", -18)
+	d.WakeSound = envBool("WAKE_SOUND", false)
+	d.WakeSoundLevel = envStr("WAKE_SOUND_LEVEL", "medium")
 	d.AdcDigitalGain = envInt("ADC_DIGITAL_GAIN", 88)
 	d.AdcMicpga = envInt("ADC_MICPGA", 40)
 	d.MicGainDb = clampMicGainDb(envInt("MIC_GAIN_DB", 24))
@@ -235,6 +246,12 @@ func (d *Device) Apply(msg ConfigMessage) {
 	if msg.DuckDb != nil {
 		d.DuckDb = *msg.DuckDb
 	}
+	if msg.WakeSound != nil {
+		d.WakeSound = *msg.WakeSound
+	}
+	if msg.WakeSoundLevel != "" {
+		d.WakeSoundLevel = msg.WakeSoundLevel
+	}
 	if msg.StartupVolume > 0 {
 		d.StartupVolume = msg.StartupVolume
 	}
@@ -275,6 +292,13 @@ func (d *Device) Apply(msg ConfigMessage) {
 		d.ListeningAnim = msg.ListeningAnim
 	}
 	applyOutput(&d.Output, msg)
+}
+
+// WakeSoundSetting reports whether the wake sound is on, and at what level.
+func (d *Device) WakeSoundSetting() (on bool, level string) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.WakeSound, d.WakeSoundLevel
 }
 
 // applyOutput merges the output-chain keys. Every one of them has a
@@ -425,6 +449,9 @@ type ConfigMessage struct {
 	AecTailMs          int      `json:"aecTailMs,omitempty"`
 	AecRefSource       string   `json:"aecRefSource,omitempty"`
 	BleProxyEnabled    *bool    `json:"bleProxyEnabled,omitempty"`
+	// WakeSound: a pointer so "off" is distinguishable from absent.
+	WakeSound      *bool  `json:"wakeSound,omitempty"`
+	WakeSoundLevel string `json:"wakeSoundLevel,omitempty"`
 
 	// Output chain (internal/outchain). Pointers because zero is a real
 	// setting for every one of them; see applyOutput.

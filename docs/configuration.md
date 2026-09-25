@@ -296,6 +296,23 @@ whichever device heard you *best*. That was dropped: it taxed every wake by
 signal-to-noise winner produced a *worse* transcript than the device that
 simply heard you first.
 
+### Wake sound
+Plays a short rising tone when the Echo hears the wake word. Off by
+default, because it adds a beat between the wake word and the request. It's
+there first as an accessibility option: without it the ring is the only sign
+the Echo is listening, which is no help from the next room or to someone who
+cannot see it.
+
+**Wake sound level** sets it to Quiet, Medium or Loud. The level is the
+same whatever the Echo's volume is set to, so a turned-down Echo still
+confirms it heard you.
+
+Only the Echo that answers plays it: one that stands down for another (see
+**Arbitration window**), or that has no Home Assistant behind it, stays
+silent. That means the Echo waits to hear back from the controller first,
+one network round trip. Needs firmware that announces `wake_cue`; on older
+firmware the toggle is disabled and says so.
+
 ### Sensitivity (Precise ↔ Eager)
 The confidence bar the recogniser must clear.
 
