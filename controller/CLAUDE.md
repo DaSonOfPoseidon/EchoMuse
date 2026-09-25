@@ -1699,6 +1699,39 @@ throughout — so the rules below are all one rule seen from different angles.
   An `_x` alias on a device claiming v2 therefore means the restore did not
   run or did not take, which is #598 — refuse it, because the bare name there
   really is the payload. `unlock_verdict.test.mjs`.
+- **Before the escrow reads anything for the build, the unlock, the recovery,
+  the system partitions the image depends on and every stock kernel must be
+  READ and must agree on one FireOS generation** (`donorVerdict`, #619).
+  amonet 2 = expdb holds its bootloader + TWRP 3.7.0 + the v2 partition layout
+  + FireOS 6 (7.1, system-as-root) in BOTH system slots + 32-bit stock
+  kernels; amonet 1 = expdb without it (`00000000` on C95) + TWRP 3.2.3 + the
+  v1 layout + FireOS 5 (5.1.1, root layout) in `system_a` at `mmcblk0p13` +
+  a 64-bit kernel. **Which system slots must pass is one question asked the
+  same way everywhere — does the image, or its way back, depend on it?** Both
+  do on amonet 2 (the plan builds from either slot, and the stock image kept
+  in B boots against `system_b`); only `system_a` does on amonet 1, whose image
+  carries no `emos.system=` and so mounts `SYSTEM_PART_DEFAULT` (13). Any other
+  slot is logged as a warning and cannot block: C95 had FireOS 6 in `system_b`
+  beside a working FireOS 5 `system_a`, and refusing it would have made the
+  outcome depend on a partition emOS never touches. Partitions are found by the
+  kernel's GPT name (`PARTNAME` in sysfs) before TWRP's by-name map, and
+  expdb's bytes are read in the browser, because amonet 1's TWRP 3.2.3 read
+  expdb as unreadable through by-name + `od`. Every file emOS runs from
+  `/system` must be non-empty (`_emosSystemFiles`, pinned against `init.c`).
+  #619 was amonet 2 with a FireOS 6 flash that never finished: expdb and TWRP
+  said amonet 2, `boot_b` and `system_b` said FireOS 5, and every check
+  passed because each looked at one thing — the builder correctly matched a
+  64-bit init to the FireOS 5 kernel it was given, and amonet 2's bootloader
+  boot-looped on it. **This inverts `_unlockVerdict`'s rule on purpose**:
+  there, an unreadable probe is not evidence, because step 0 only chooses a
+  flow and must not refuse a working device; here, before the first read that
+  feeds a write, anything unreadable REFUSES (Wil, 2026-09-25: "be really
+  strict about what we need, rather than assuming a certain state"). The
+  kernel check reads 64KB per stock slot and applies
+  `reference_kernel_arch`'s own rule, so the gate and the builder cannot
+  disagree — verified against real FireOS 5 and 6 images. It checks the image
+  KEPT in slot B too: a way back that cannot boot is not one.
+  `donor_gate.test.mjs`.
 - **`_STEP_MODE` is enforced at every step, not only on Reconnect.** It existed
   and was correct and was consulted in one place, where a mismatch logged a
   line and left Retry enabled. In Android `/dev/block/other-boot` is amonet's
