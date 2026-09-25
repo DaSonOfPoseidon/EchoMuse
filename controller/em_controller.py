@@ -81,6 +81,7 @@ import em_hostip
 import em_linkauth
 import em_pacing
 import em_platform
+import em_tcp
 import em_wsclose
 import em_rttlog
 import em_eq
@@ -269,6 +270,17 @@ WAKE_RESTART_MAX_BACKOFF_S = 60.0   # ceiling; never gives up entirely
 WAKE_RESTART_HEALTHY_S     = 60.0
 
 PING_INTERVAL_SEC = 5.0
+
+# WebSocket keepalive on every device plane. The timeout is how long a ping may
+# go unanswered before the link is declared dead, and 10s was shorter than the
+# loss bursts this link actually has: with the BLE scan running, a Dot loses
+# enough frames that TCP's retransmits alone can outlast it, and the overnight
+# `1011 keepalive ping timeout` closes were exactly that (2026-09-23) — a live
+# device torn down, its HA entities flapping, to rediscover it 5s later. 30s
+# rides those out and still finds a dead Echo within ~50s; the device waits 45s
+# for its own pongs (wsPongWait), so the two ends now disagree less.
+WS_PING_INTERVAL_S = 20
+WS_PING_TIMEOUT_S = 30
 # A sample at or above this counts as an excursion. 200ms is well clear of a
 # healthy hop (Office measures 264ms median for a whole audio round trip
 # including frame batching) while catching the ~1s tail under investigation.
@@ -721,6 +733,12 @@ class Device:
         self.rtt_samples_idle    = 0
         # Log-line coalescing only — the counters above are the measurement.
         self.rtt_log = em_rttlog.ExcursionLog(self.device_id)
+        # Downlink loss from the kernel's counters on our own sockets to this
+        # device (em_tcp); drained with the RTT window on each stats report.
+        self.tcp_loss = em_tcp.LossWindow()
+        # Loss per minute for the last 30, for the Status tab's link quality
+        # — the hourly rollup is too coarse to show a link recovering.
+        self.tcp_minutes = em_tcp.MinuteStrip()
 
     def is_busy(self) -> bool:
         """Whether this device was doing anything when a ping went out."""
@@ -802,6 +820,17 @@ class Device:
         self.rtt_excursions = self.rtt_excursions_idle = 0
         self.rtt_samples_idle = 0
         return out
+
+    def drain_tcp(self) -> dict:
+        """Downlink segments and retransmits since the last report, summed over
+        the control and data planes (em_tcp.LossWindow). Empty when neither
+        socket could be read, so it stores as NULL rather than a clean link."""
+        snaps = {}
+        for ws in (self.control_ws, self.data_ws):
+            transport = getattr(ws, "transport", None)
+            if transport is not None:
+                snaps[id(ws)] = em_tcp.read_info(transport.get_extra_info("socket"))
+        return self.tcp_loss.drain(snaps)
 
     async def send_control(self, msg: dict):
         try:
@@ -4321,6 +4350,12 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                             "txErrors":      msg.get("txErrors"),
                             "txDropped":     msg.get("txDropped"),
                             "rxCrcErrors":   msg.get("rxCrcErrors"),
+                            # Uplink loss: the device's own TCP retransmits since
+                            # its last report (tcpUpSegs only where the kernel
+                            # counts segments; FireOS 5's does not). Downlink is
+                            # measured here, in Device.drain_tcp.
+                            "tcpUpRetrans":  msg.get("tcpUpRetrans"),
+                            "tcpUpSegs":     msg.get("tcpUpSegs"),
                             "ble":           msg.get("ble"),
                             # Thermals + CPU topology. coresOnline is not optional
                             # context: cpuPct is a share of ONLINE capacity, so the
@@ -4385,7 +4420,10 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                         # coming through the allowlist above. drain_rtt() takes
                         # and resets the window accumulated since the last
                         # report, so no sample is counted twice.
-                        _metrics = {**device.stats, **device.drain_rtt()}
+                        _tcp = device.drain_tcp()
+                        device.tcp_minutes.add(time.time(), _tcp.get("tcpDownSegs"),
+                                               _tcp.get("tcpDownRetrans"))
+                        _metrics = {**device.stats, **device.drain_rtt(), **_tcp}
                         def _persist_stats(_id=device_id, _s=_metrics, _shadow=_sh):
                             db.record_device_stats(_id, _s)
                             db.touch_device_seen(_id)
@@ -5065,6 +5103,7 @@ async def handle_shell(ws: WebSocketServerProtocol, path: str, secure: bool = Fa
 
 async def _route(ws: WebSocketServerProtocol, secure: bool):
     path = ws.request.path if hasattr(ws, "request") else getattr(ws, "path", "/")
+    em_tcp.tune(ws.transport.get_extra_info("socket"))
 
     if path == "/control":
         await handle_control(ws, secure)
@@ -5203,8 +5242,8 @@ async def main():
                 router,
                 SERVER_HOST,
                 SERVER_PORT,
-                ping_interval=20,
-                ping_timeout=10,
+                ping_interval=WS_PING_INTERVAL_S,
+                ping_timeout=WS_PING_TIMEOUT_S,
                 max_size=10 * 1024 * 1024,
             ))
             if tls_ctx is not None:
@@ -5213,8 +5252,8 @@ async def main():
                     SERVER_HOST,
                     SERVER_TLS_PORT,
                     ssl=tls_ctx,
-                    ping_interval=20,
-                    ping_timeout=10,
+                    ping_interval=WS_PING_INTERVAL_S,
+                    ping_timeout=WS_PING_TIMEOUT_S,
                     max_size=10 * 1024 * 1024,
                 ))
                 log.info(f"Device-link TLS (wss) listening on {SERVER_HOST}:{SERVER_TLS_PORT}")

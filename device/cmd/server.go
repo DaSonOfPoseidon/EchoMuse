@@ -279,6 +279,23 @@ func main() {
 	})
 	applyBleConfig(bleScanner)
 
+	// The BLE scan costs this device's WiFi dearly (see Scanner.Yield), so it
+	// stops whenever the link carries something that cannot wait: the user's
+	// words going up (a button turn, or a private-listening session), a reply
+	// coming down, or a shell session (the console, OTA and asset pushes).
+	// Polled rather than signalled at each edge: the answer is recomputed from
+	// live state every tick, so no missed "done" can leave the proxy silent.
+	go func() {
+		t := time.NewTicker(100 * time.Millisecond)
+		defer t.Stop()
+		for range t.C {
+			bleScanner.Yield(dataClient.TurnStreamActive() ||
+				dataClient.ListenOpen() ||
+				pcmSpeaker.VoiceArriving() ||
+				controlClient.ShellActive())
+		}
+	}()
+
 	// Button events — forward to controller via control plane
 	_, err = buttonController.SubscribeToButton(func(event pkgbuttons.ButtonClickEvent) {
 		log.Printf("Button event: clickType=%d down=%v", event.ClickType, event.Down)
@@ -675,11 +692,22 @@ func main() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		tick := 0
+		// Drained only here, on this one goroutine, so LinkLoss needs no lock;
+		// the on-connect snapshot above simply leaves the fields unset.
+		var upLoss client.LinkLoss
 		for range ticker.C {
 			st := collectStats()
 			st.Ble = bleScanner.Stats()
 			st.OwwShadow = shadowStats(dataClient)
 			st.AecRef = canceller.RefSource()
+			var snaps []client.TCPSnap
+			if sn, ok := controlClient.TCPSnapshot(); ok {
+				snaps = append(snaps, sn)
+			}
+			if sn, ok := dataClient.TCPSnapshot(); ok {
+				snaps = append(snaps, sn)
+			}
+			st.TcpUpRetrans, st.TcpUpSegs = upLoss.Drain(snaps...)
 			controlClient.SendStats(st)
 			if tick%10 == 0 {
 				var ms runtime.MemStats
