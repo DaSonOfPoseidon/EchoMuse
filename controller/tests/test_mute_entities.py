@@ -1,27 +1,26 @@
 """
-The two entities Home Assistant sees for a device's ears (#438, #286).
+What Home Assistant sees of a device's ears (#438, #286).
 
 Read as source, not imported: em_esphome pulls in zeroconf and aiohttp, which
 this suite deliberately does without. What these pin:
 
 - The binary sensor for the button mute is READ-ONLY. A writable entity here
   would be a remote unmute, the one thing the mute button exists to make
-  impossible — so nothing in the controller may accept a command for it, and
-  the only writable entity is the wake word switch.
-- The button and the wake word switch are INDEPENDENT: `mute_state` must not
-  move the switch, in either direction.
-- The switch is NOT named "Wake word". HA's own ESPHome integration puts an
-  entity by that name on this same device (its satellite wake-word picker),
-  and two controls sharing a name on one device page is the trap this name
-  was chosen to avoid.
-- HA's picker cannot WRITE this switch — HA re-reads the satellite config
-  only at setup and right after it writes, so a picker wired to the switch
-  would drift the moment the switch moved. It still READS the truth.
-- Both entities are gated on `mic`, like every entity, so a device that
-  cannot listen does not grow a switch that does nothing.
-- Keys 4 and 5 are taken and stay taken: HA keys its registry on them.
-- Subscribing to states yields both, or HA shows "unknown" until the next
-  device event — which for the button mute could be never.
+  impossible — so nothing in the controller may accept a command for it.
+- Turning the wake word off is HA's OWN picker, not an entity of ours. HA
+  re-reads the satellite configuration only at setup and right after it
+  writes one, so as the only control it always reads back what it set.
+- The picker's write is applied BEFORE its handler yields, because HA reads
+  the configuration back immediately behind it — a change still waiting on a
+  task reads back as the old value and the picker snaps back.
+- The choice is STORED (em_db), because HA restores the picker's state on its
+  side but never sends it back; it shows whatever we report on reconnect.
+- The button and the picker are INDEPENDENT: `mute_state` must not move the
+  wake word, in either direction.
+- The sensor is gated on `mic`, like every entity.
+- Keys are append-only: HA keys its registry on them.
+- Subscribing to states yields the sensor, or HA shows "unknown" until the
+  next device event — which for the button mute could be never.
 """
 
 import re
@@ -30,6 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 ESPHOME = ROOT / "controller" / "em_esphome.py"
 CONTROLLER = ROOT / "controller" / "em_controller.py"
+DB = ROOT / "controller" / "em_db.py"
 
 
 def _block(src: str, start: str, end: str) -> str:
@@ -44,74 +44,41 @@ def test_entity_keys_are_appended_not_renumbered():
     assert re.search(r"^EVENT_KEY\s*=\s*2\b", src, re.M)
     assert re.search(r"^AMBIENT_LUX_KEY\s*=\s*3\b", src, re.M)
     assert re.search(r"^MIC_MUTED_KEY\s*=\s*4\b", src, re.M)
-    assert re.search(r"^WAKE_WORD_KEY\s*=\s*5\b", src, re.M)
 
 
-def test_both_entities_are_advertised_and_gated_on_mic():
+def test_the_mute_sensor_is_advertised_and_gated_on_mic():
     src = ESPHOME.read_text()
     entities = _block(src, "isinstance(msg, api_pb2.ListEntitiesRequest)",
                       "ListEntitiesDoneResponse()")
     sensor = _block(entities, "ListEntitiesBinarySensorResponse(", ")")
-    switch = _block(entities, "ListEntitiesSwitchResponse(", ")")
     assert "key=MIC_MUTED_KEY" in sensor
-    assert "key=WAKE_WORD_KEY" in switch
+    assert "self.label" not in sensor
     # Gated: the yield sits under the mic check, not at the top level.
     gate = entities.index("if self._mic_capable:")
     assert gate < entities.index("ListEntitiesBinarySensorResponse(")
-    assert gate < entities.index("ListEntitiesSwitchResponse(")
-
-
-def test_the_switch_is_named_for_what_it_does_and_not_after_has_entity():
-    """
-    "Soft Mute" was the first name and the wrong one: the microphone stays
-    on, and only the button turns it off. On means listening.
-
-    "Wake word" is the wrong one too, for a different reason — that is the
-    name HA's own ESPHome integration gives the satellite wake-word picker
-    (translation_key "wake_word"), which it creates for every device with
-    non-zero voice_assistant_feature_flags, i.e. ours. Two "Wake word"
-    controls on one device page is worse than the name it replaced.
-    """
-    src = ESPHOME.read_text()
-    entities = _block(src, "isinstance(msg, api_pb2.ListEntitiesRequest)",
-                      "ListEntitiesDoneResponse()")
-    switch = _block(entities, "ListEntitiesSwitchResponse(", ")")
-    assert 'name="Wake word detection"' in switch
-    assert 'object_id="wake_word_detection"' in switch
-    assert "mute" not in switch.lower()
-
-
-def test_entity_names_do_not_repeat_the_device_label():
-    src = ESPHOME.read_text()
-    entities = _block(src, "isinstance(msg, api_pb2.ListEntitiesRequest)",
-                      "ListEntitiesDoneResponse()")
-    for ctor in ("ListEntitiesBinarySensorResponse(", "ListEntitiesSwitchResponse("):
-        assert "self.label" not in _block(entities, ctor, ")")
 
 
 def test_the_button_mute_is_read_only():
     """
-    The mute button is worth having because software cannot undo it. The only
-    command the controller accepts is the wake word switch, and it must not
-    act on any other key.
+    The mute button is worth having because software cannot undo it. Nothing
+    that accepts a command from HA may name the sensor's key.
     """
     src = ESPHOME.read_text()
-    handler = _block(src, "isinstance(msg, api_pb2.SwitchCommandRequest)",
-                     "\n        if isinstance(msg, ")
-    assert "WAKE_WORD_KEY" in handler
-    assert "MIC_MUTED_KEY" not in handler
-    assert "_apply_wake_word" in handler, "the switch is the one writable control"
+    for handler in ("isinstance(msg, api_pb2.VoiceAssistantSetConfiguration)",
+                    "isinstance(msg, api_pb2.MediaPlayerCommandRequest)"):
+        block = _block(src, handler, "\n        if isinstance(msg, ")
+        assert "MIC_MUTED_KEY" not in block
+    assert src.count("MIC_MUTED_KEY") == 3, "defined, advertised, reported — nothing else"
 
 
-def test_subscribing_to_states_reports_both():
+def test_subscribing_to_states_reports_the_mute():
     src = ESPHOME.read_text()
     sub = _block(src, "isinstance(msg, (api_pb2.SubscribeStatesRequest,",
                  "SubscribeVoiceAssistantRequest")
     assert "_mute_state_msg()" in sub
-    assert "_wake_word_msg()" in sub
 
 
-def test_the_switch_defaults_to_listening():
+def test_the_wake_word_defaults_to_listening():
     """A device nobody has told otherwise listens, so absent state reads ON.
     The mute defaults the other way: absent state is not muted."""
     src = ESPHOME.read_text()
@@ -119,44 +86,97 @@ def test_the_switch_defaults_to_listening():
     assert re.search(r"^\s{8}self\.wake_word_enabled\s*:\s*bool\s*=\s*True", init, re.M)
     assert re.search(r"^\s{8}self\.muted\s*:\s*bool\s*=\s*False", init, re.M)
     assert "return False, True" in _block(src, "def get_mute_and_wake(", "\n\n\n")
+    db = DB.read_text()
+    getter = _block(db, "def get_wake_word_enabled(", "\n\n\n")
+    assert "not in _wake_word_off_ids" in getter, "stored as the OFF set, so absent is on"
 
 
-def test_the_switch_survives_a_device_reconnect():
+def test_the_picker_reads_back_the_truth():
     """
-    A Device is rebuilt per connection, so the switch must live on the server
-    object that outlives it — the same place volume lives — and so must the
-    hard state that `mute_state` is compared against, or every reconnect
-    reads as a button press.
-    """
-    src = CONTROLLER.read_text()
-    connect = _block(src, "device.wake_word_enabled = esphome.get_mute_and_wake(",
-                     "\n        #")
-    assert "get_mute_and_wake" in connect
-
-
-def test_the_picker_reports_the_switch_but_cannot_set_it():
-    """
-    HA re-reads the satellite configuration in exactly two places — when the
-    satellite entity is added, and straight after HA itself writes wake words
-    (assist_satellite.py `_update_satellite_config`). There is no unsolicited
-    push, so a picker wired to the switch would agree when HA drove it and
-    drift the moment the switch did. It declines instead, and the warning
-    names the switch.
-
-    The READ side still follows the switch: reporting the model
-    unconditionally would tell HA the device is listening when it is not, and
-    reporting the truth makes the refusal self-correcting, since HA re-reads
-    right after a rejected write.
+    HA's picker restores its own last state but never sends it back — on
+    every read it reconciles to what we report. So the read side IS the
+    display, and must never report the model while detection is off.
     """
     src = ESPHOME.read_text()
-    setcfg = _block(src, "isinstance(msg, api_pb2.VoiceAssistantSetConfiguration)",
-                    "\n        if isinstance(msg, ")
-    assert "_apply_wake_word" not in setcfg, "the picker must not write the switch"
-    assert "Wake word detection switch" in setcfg, "the refusal must name the switch"
     cfg = _block(src, "isinstance(msg, api_pb2.VoiceAssistantConfigurationRequest)",
                  "\n        if isinstance(msg, ")
     assert "active_wake_words=[self.oww_model_id] if enabled else []" in cfg
     assert "wake_word_enabled" in cfg
+
+
+def test_the_picker_turns_detection_on_and_off():
+    """
+    The write reads its meaning from em_wakeword.requested_on (membership,
+    because HA sends the union of two pickers), declines a list naming only
+    wake words we lack, and otherwise applies it.
+    """
+    src = ESPHOME.read_text()
+    setcfg = _block(src, "isinstance(msg, api_pb2.VoiceAssistantSetConfiguration)",
+                    "\n        if isinstance(msg, ")
+    assert "em_wakeword.requested_on(requested, self.oww_model_id)" in setcfg
+    assert "if want is None:" in setcfg
+    assert "self._apply_wake_word(want)" in setcfg
+
+
+def test_the_picker_write_is_applied_before_the_handler_yields():
+    """
+    HA sends VoiceAssistantConfigurationRequest straight behind its write
+    (`_update_satellite_config`). If the new state were only set inside a
+    task, the read-back would report the old one and the picker would snap
+    back to it — so neither the handler nor the controller's setter may put
+    the state change behind an await or a task.
+    """
+    src = ESPHOME.read_text()
+    setcfg = _block(src, "isinstance(msg, api_pb2.VoiceAssistantSetConfiguration)",
+                    "\n        if isinstance(msg, ")
+    assert "create_task" not in setcfg and "await " not in setcfg
+    apply = _block(src, "    def _apply_wake_word(self, on: bool) -> None:", "\n    def ")
+    assert "create_task" not in apply
+    assert re.search(r"^\s+set_fn\(on\)\s*$", apply, re.M), "called, not scheduled"
+
+    ctrl = CONTROLLER.read_text()
+    setter = _block(ctrl, "        def _set_wake_word(on: bool, _d=_device_ref) -> None:",
+                    "            async def _follow()")
+    for line in ("_d.wake_word_enabled = t.enabled",
+                 "esphome.update_wake_word(_d.device_id, t.enabled)",
+                 "db.set_wake_word_enabled(_d.device_id, t.enabled)"):
+        assert line in setter, f"{line!r} must run before the setter returns"
+    assert "await " not in setter
+
+
+def test_the_choice_survives_a_controller_restart():
+    """
+    HA does not re-send its restored choice, so held only in memory, the
+    wake word would come back on at every controller restart. The stored copy is read
+    at connect and handed to the ESPHome server BEFORE its port comes up —
+    HA can read the configuration the moment it does.
+    """
+    src = CONTROLLER.read_text()
+    assert "device.wake_word_enabled = await loop.run_in_executor(\n            None, db.get_wake_word_enabled, device_id" in src
+    connect = _block(src, "await esphome.device_connected(", "\n        )")
+    assert "wake_word_enabled=device.wake_word_enabled" in connect
+    esp = ESPHOME.read_text()
+    dc = _block(esp, "async def device_connected(", "\nasync def device_disconnected(")
+    assert dc.index("server.wake_word_enabled = bool(wake_word_enabled)") < dc.index("await server.start(host)")
+
+
+def test_the_choice_is_not_a_config_key():
+    """
+    Config POSTs replace the stored dict with what the dashboard last loaded,
+    so a key here would be written back stale by a dashboard left open, and a
+    fleet value would switch every device at once. Only the picker writes it.
+    """
+    db = DB.read_text()
+    defaults = _block(db, "DEFAULT_DEVICE_CONFIG", "\n}\n")
+    assert "akeWord" not in defaults
+    sections = (ROOT / "controller" / "em_config_sections.py").read_text()
+    assert "akeWordEnabled" not in sections
+
+
+def test_deleting_a_device_forgets_its_choice():
+    db = DB.read_text()
+    delete = _block(db, "def delete_device(", "\n\n\n")
+    assert "set_wake_word_enabled(device_id, True)" in delete
 
 
 def test_the_controller_reports_the_button_mute_to_ha():
@@ -165,10 +185,10 @@ def test_the_controller_reports_the_button_mute_to_ha():
     assert "esphome.update_mute_state(" in handler
 
 
-def test_the_button_does_not_move_the_wake_word_switch():
+def test_the_button_does_not_move_the_wake_word():
     """
-    The review's ask, pinned where it can regress: `mute_state` may READ the
-    switch — it has to, to know whether the stream the device just restarted
+    The review's ask, pinned where it can regress: `mute_state` may READ HA's
+    choice — it has to, to know whether the stream the device just restarted
     is wanted — but it must never assign it. The two are independent.
     """
     src = CONTROLLER.read_text()
@@ -176,6 +196,7 @@ def test_the_button_does_not_move_the_wake_word_switch():
     assert "em_wakeword.on_hard_mute(" in handler
     assert not re.search(r"\.wake_word_enabled\s*=", handler)
     assert "esphome.update_wake_word(" not in handler
+    assert "set_wake_word_enabled" not in handler
 
 
 def test_unmuting_with_the_wake_word_off_takes_the_stream_back_down():
@@ -187,16 +208,16 @@ def test_unmuting_with_the_wake_word_off_takes_the_stream_back_down():
     assert "mic_stop()" in branch
 
 
-def test_the_wake_listener_honours_the_switch():
+def test_the_wake_listener_honours_the_picker():
     """Both the frame gate and the stall watchdog of the stream path: a
-    watchdog that only knows the button mute would restart the stream the
-    switch just stopped. The private path is its own test, below."""
+    watchdog that only knows the button mute would restart the stream that
+    turning the wake word off just stopped. The private path is its own test, below."""
     src = CONTROLLER.read_text()
     listener = _block(src, "async def _stream_listen(", "\nasync def ")
     assert listener.count("em_wakeword.wake_allowed(") >= 2
 
 
-def test_the_wake_stream_does_not_come_up_with_the_switch_off():
+def test_the_wake_stream_does_not_come_up_with_the_wake_word_off():
     """
     Nine call sites restart the wake stream after something — a turn, an
     announcement, an alarm, a barge. Gating each one is nine places to
@@ -211,39 +232,30 @@ def test_the_wake_stream_does_not_come_up_with_the_switch_off():
     assert "wake_word_enabled" not in turn
 
 
-def test_the_api_readout_does_not_default_the_switch():
+def test_the_api_readout_is_the_stored_choice():
     """
-    `/api/devices` reports the switch for a device that is OFFLINE, because
-    the switch lives on the ESPHome server and the server outlives the
-    connection — so it must be read from there, not defaulted off `live`.
-
-    Its neighbours in that block (speaking/listening/thinking) default to
-    False for a disconnected device and that is correct: an offline device
-    genuinely is not doing any of them. The switch is not live activity, and
-    a default there would report "listening" for a device HA switched off —
-    a readout disagreeing with the decision it describes, which is the rule
-    written on em_esphome.get_status.
+    `/api/devices` reports the wake word for a device that is OFFLINE, so it
+    is read from the stored choice, not defaulted off `live` like its
+    neighbours (speaking/listening/thinking), which an offline device
+    genuinely is not doing. A default there would report "listening" for a
+    device HA turned off.
     """
     src = (ROOT / "controller" / "em_api.py").read_text()
     lines = [ln for ln in src.splitlines() if '"wake_word":' in ln]
     assert len(lines) == 1, lines
-    assert "em_esphome.get_wake_word(" in lines[0], lines[0].strip()
+    assert "db.get_wake_word_enabled(" in lines[0], lines[0].strip()
     assert "if live else" not in lines[0], lines[0].strip()
-    # And the accessor says "unknown" rather than picking a side.
-    esp = _block(ESPHOME.read_text(), "def get_wake_word(", "\n\n\n")
-    assert "Optional[bool]" in esp
-    assert "return None" in esp
 
 
-def test_the_switch_paints_nothing_on_the_ring():
+def test_turning_the_wake_word_off_paints_nothing_on_the_ring():
     """
     #286 asked for no ring indicator and #66 is where one belongs — HA
     driving the idle ring can then show whatever the user wants. So the
-    switch must not reach the LED paths at all, and `em_scenes` must not
+    picker must not reach the LED paths at all, and `em_scenes` must not
     grow a colour for it that would later have to become configurable.
     """
     src = CONTROLLER.read_text()
-    setter = _block(src, "async def _set_wake_word(", "        # Capabilities before")
+    setter = _block(src, "def _set_wake_word(", "        # Capabilities before")
     assert "await leds_" not in setter
     assert "send_led_anim" not in setter and "set_leds" not in setter
     scenes = (ROOT / "controller" / "em_scenes.py").read_text()
@@ -256,9 +268,9 @@ def test_a_private_wake_is_declined_with_the_wake_word_off():
     """
     Under private listening (#602, the default) the Echo scores the wake
     word itself and sends `oww_wake` with a session. The stream-path gates
-    never see that, and the switch's mic_stop ends neither the session nor
-    local listening — so without a check here, a wake with the switch off
-    still starts a turn. It is closed with its own reason, so neither log
+    never see that, and the mic_stop that turning it off sends ends neither
+    the session nor local listening — so without a check here, a wake with
+    the wake word off still starts a turn. It is closed with its own reason, so neither log
     blames the button.
     """
     src = CONTROLLER.read_text()
