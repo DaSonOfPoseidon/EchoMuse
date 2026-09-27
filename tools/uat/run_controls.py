@@ -143,6 +143,15 @@ class Page:
 
     def save(self):
         self.page.get_by_role("button", name="Save & push to fleet").click()
+        # Wait for the reply before the next edit. Switching the Bluetooth
+        # proxy on holds it ~1s per Echo, and an edit made meanwhile was
+        # marked saved without being sent (found this way; fixed in #676).
+        saving = self.page.get_by_role("button", name="Saving…")
+        try:
+            saving.wait_for(state="visible", timeout=1500)
+        except Exception:
+            pass    # already done: a fast save never shows it
+        saving.wait_for(state="detached", timeout=60000)
         self.page.wait_for_timeout(1500)
 
     def shot(self, path):
@@ -151,18 +160,35 @@ class Page:
 
 def run(only: set | None, out: str):
     state = rig._state()
-    serial = state.get("serial")
-    if not serial:
+    serials = state.get("serials") or []
+    if not serials:
         raise SystemExit("no Echo attached: rig.py attach SERIAL first")
     controls_all = [c for c in inventory.controls() if c["in"] == "DeviceConfigForm"]
     controls = [c for c in controls_all
                 if c["key"]
                 and (not only or c["key"] in only)]
-    echo = rig.Echo(serial)
+    echoes = {sn: rig.Echo(sn) for sn in serials}
 
-    def on_device(key, section="received"):
+    def on_device(echo, key, section="received"):
         rep = echo.config_report() or {}
         return (rep.get(section) or {}).get(key)
+
+    def check_echo(echo, key, after):
+        """One Echo's verdict on a saved value: applied, received or api."""
+        ok, got = wait_value(lambda: on_device(echo, key), after)
+        if not ok:
+            return "api", f"received {got!r}"
+        rep = echo.config_report() or {}
+        applied = dict(rep.get("applied") or {})
+        out_field = OUTPUT_FIELDS.get(key)
+        if out_field and out_field in (rep.get("output") or {}):
+            applied[key] = rep["output"][out_field]
+        if key in applied:
+            return ("applied" if _same(applied[key], after) else "FAIL",
+                    f"running {applied[key]!r}")
+        return "received", "received"
+
+    WORST = ["FAIL", "api", "received", "applied"]
 
     results = []
     with sync_playwright() as pw:
@@ -193,21 +219,13 @@ def run(only: set | None, out: str):
                 if _same(after, before):
                     row.update(result="FAIL", detail=f"API still {before!r} after Save")
                     continue
-                ok, got = wait_value(lambda: on_device(c["key"]), after)
-                if not ok:
-                    row.update(result="api", detail=f"API {before!r}->{after!r}; Echo received {got!r}")
-                else:
-                    rep = echo.config_report() or {}
-                    applied = dict(rep.get("applied") or {})
-                    out_field = OUTPUT_FIELDS.get(c["key"])
-                    if out_field and out_field in (rep.get("output") or {}):
-                        applied[c["key"]] = rep["output"][out_field]
-                    if c["key"] in applied:
-                        a_ok = _same(applied[c["key"]], after)
-                        row.update(result="applied" if a_ok else "FAIL",
-                                   detail=f"{before!r}->{after!r}; running {applied[c['key']]!r}")
-                    else:
-                        row.update(result="received", detail=f"{before!r}->{after!r} received")
+                row["devices"] = {}
+                for sn, echo in echoes.items():
+                    res, det = check_echo(echo, c["key"], after)
+                    row["devices"][sn] = {"result": res, "detail": det, "base": echo.base}
+                row["result"] = min((d["result"] for d in row["devices"].values()),
+                                    key=WORST.index)
+                row["detail"] = f"{before!r}->{after!r}"
                 # Put it back, the same way, and check the Echo followed.
                 el = ui.locate(c)
                 if c["kind"] == "Select":
@@ -223,13 +241,18 @@ def run(only: set | None, out: str):
                     ui.change(c, el, after, target=before)
                     ui.save()
                 back = fleet_value(c["key"])
-                ok, got = wait_value(lambda: on_device(c["key"]), back)
                 if not _same(back, before):
                     row["detail"] += f"; REVERT left API at {back!r}"
                     row["result"] = "FAIL"
-                elif not ok and row["result"] in ("applied", "received"):
-                    row["detail"] += f"; revert not received ({got!r})"
-                    row["result"] = "FAIL"
+                else:
+                    for sn, echo in echoes.items():
+                        d = row["devices"][sn]
+                        if d["result"] not in ("applied", "received"):
+                            continue
+                        ok, got = wait_value(lambda: on_device(echo, c["key"]), back)
+                        if not ok:
+                            d.update(result="FAIL", detail=d["detail"] + f"; revert not received ({got!r})")
+                            row["result"] = "FAIL"
             except Exception as e:
                 row.update(result="FAIL", detail=f"{type(e).__name__}: {e}"[:300])
             finally:
@@ -240,11 +263,14 @@ def run(only: set | None, out: str):
                         ui.save()
                     except Exception as e:
                         row["detail"] += f"; could not switch {pc['key']} back: {e}"
-                print(f"{row['result'] or '?':<9} {c['key']:<22} {row['detail']}", flush=True)
+                per = " ".join(f"{sn[-4:]}={d['result']}" for sn, d in (row.get("devices") or {}).items())
+                print(f"{row['result'] or '?':<9} {c['key']:<22} {row['detail']}  {per}", flush=True)
         ui.shot(out.replace(".json", ".png"))
-    echo.close()
+    for echo in echoes.values():
+        echo.close()
     json.dump({"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-               "image": state.get("image"), "serial": serial, "controls": results},
+               "image": state.get("image"),
+               "echoes": {sn: e.base for sn, e in echoes.items()}, "controls": results},
               open(out, "w"), indent=1)
     return results
 
