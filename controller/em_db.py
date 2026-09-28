@@ -546,7 +546,7 @@ MIGRATIONS: list[str] = [
     # token: shared secret the device presents in the X-EM-Token header on
     # all three WebSocket planes (/control, /data, /shell). Minted by
     # ensure_device_token() when credentials are first pushed (provisioning
-    # wizard or the dashboard "Secure link" action) and stored on the device
+    # wizard, or an approval: em_pairing) and stored on the device
     # at /data/local/etc/echomuse/token. NULL = no credentials issued yet —
     # such devices connect unauthenticated (legacy posture) until
     # REQUIRE_DEVICE_TLS=1 flips the controller to enforcing.
@@ -1025,6 +1025,17 @@ MIGRATIONS: list[str] = [
 
     UPDATE system_config SET value = '26' WHERE key = 'schema_version';
     """,
+    # v27 — when the device first presented its current link token. Set once,
+    # at a register whose X-EM-Token matched; from then a connection claiming
+    # this device without the token is refused (em_linkauth rule 2). NULL means
+    # never presented, which keeps the rollout rule: a row minted before the
+    # credential files reach the device must not lock it out. Cleared whenever
+    # the token changes, so it always describes the CURRENT token.
+    """
+    ALTER TABLE devices ADD COLUMN token_confirmed_at INTEGER;
+
+    UPDATE system_config SET value = '27' WHERE key = 'schema_version';
+    """,
 ]
 
 # Post-migration fixups that need Python rather than SQL. Keyed by the schema
@@ -1425,7 +1436,8 @@ def get_all_devices() -> list[sqlite3.Row]:
 def get_pending_devices() -> list[sqlite3.Row]:
     """Return devices that have connected but not yet been approved."""
     return _q(
-        "SELECT * FROM devices WHERE approved = 0 ORDER BY first_seen ASC"
+        "SELECT * FROM devices WHERE approved = 0 AND last_seen IS NOT NULL "
+        "ORDER BY first_seen ASC"
     )
 
 
@@ -1491,18 +1503,21 @@ def upsert_device_seen(
     """
     Update ip, firmware_ver, and last_seen for a known device on each connection.
 
-    Does not touch approval status, label, or config.
+    Does not touch approval status, label, or config. Sets first_seen on the
+    first connection of a row the provisioning wizard created (#453).
     """
+    now = _now()
     with _tx() as conn:
         conn.execute(
             """
             UPDATE devices
             SET ip           = ?,
                 firmware_ver = ?,
+                first_seen   = COALESCE(first_seen, ?),
                 last_seen    = ?
             WHERE device_id = ?
             """,
-            (ip, version, _now(), device_id),
+            (ip, version, now, now, device_id),
         )
 
 
@@ -1535,6 +1550,32 @@ def get_device_token(device_id: str) -> Optional[str]:
     return row["token"] if row and row["token"] else None
 
 
+def get_device_link_auth(device_id: str) -> tuple[Optional[str], bool]:
+    """(token or None, whether the device has presented that token)."""
+    row = _q1("SELECT token, token_confirmed_at FROM devices WHERE device_id = ?",
+              (device_id,))
+    if not row or not row["token"]:
+        return None, False
+    return row["token"], row["token_confirmed_at"] is not None
+
+
+def confirm_device_token(device_id: str, token: str) -> bool:
+    """
+    Record that the device presented `token`, if it is still the stored one
+    and nothing was recorded yet. True when this call recorded it.
+
+    Conditional on the token so a presentation checked against a token that
+    has since been replaced cannot confirm the replacement.
+    """
+    with _tx() as conn:
+        cur = conn.execute(
+            "UPDATE devices SET token_confirmed_at = ? "
+            "WHERE device_id = ? AND token = ? AND token_confirmed_at IS NULL",
+            (_now(), device_id, token),
+        )
+        return cur.rowcount == 1
+
+
 def ensure_device_token(device_id: str) -> str:
     """
     Return the device's link-auth token, minting one if absent.
@@ -1550,30 +1591,43 @@ def ensure_device_token(device_id: str) -> str:
         return existing
 
     token = secrets.token_urlsafe(32)
-    now = _now()
     with _tx() as conn:
+        # first_seen/last_seen stay NULL: this device has never connected,
+        # and NULL is what tells a row the wizard made from one awaiting
+        # approval (#453). upsert_device_seen fills them on first contact.
         conn.execute(
             """
             INSERT INTO devices
                 (device_id, label, approved, ip, firmware_ver, first_seen, last_seen, config)
-            VALUES (?, NULL, 0, NULL, NULL, ?, ?, ?)
+            VALUES (?, NULL, 0, NULL, NULL, NULL, NULL, ?)
             ON CONFLICT(device_id) DO NOTHING
             """,
-            (device_id, now, now, json.dumps(DEFAULT_DEVICE_CONFIG)),
+            (device_id, json.dumps(DEFAULT_DEVICE_CONFIG)),
         )
         conn.execute(
-            "UPDATE devices SET token = ? WHERE device_id = ?",
+            "UPDATE devices SET token = ?, token_confirmed_at = NULL WHERE device_id = ?",
             (token, device_id),
         )
     log.info(f"[db] Link token minted for {device_id}")
     return token
 
 
+def set_device_token(device_id: str, token: str) -> None:
+    """Store a token already delivered to the device; it starts unconfirmed."""
+    with _tx() as conn:
+        conn.execute(
+            "UPDATE devices SET token = ?, token_confirmed_at = NULL WHERE device_id = ?",
+            (token, device_id),
+        )
+    log.info(f"[db] Link token replaced for {device_id}")
+
+
 def clear_device_token(device_id: str) -> None:
     """Revoke a device's link token (next credential push mints a new one)."""
     with _tx() as conn:
         conn.execute(
-            "UPDATE devices SET token = NULL WHERE device_id = ?", (device_id,)
+            "UPDATE devices SET token = NULL, token_confirmed_at = NULL WHERE device_id = ?",
+            (device_id,)
         )
 
 
@@ -2848,9 +2902,15 @@ def set_user_role(user_id: int, role: str) -> None:
         conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
 
 
-def update_user_password(user_id: int, new_hash: str) -> None:
+def update_user_password(user_id: int, new_hash: str, *,
+                         keep_session: Optional[str]) -> int:
     """
-    Update the password hash for a user.
+    Update the password hash for a user and end their other sessions.
+
+    A password change is how someone locks out a session they did not start,
+    so every session but `keep_session` (the one making the change) is
+    deleted in the same transaction. Required rather than defaulted so a new
+    caller has to say which session survives. Returns the number revoked.
 
     new_hash must already be bcrypt-hashed — this function does not hash
     passwords itself. Raises ValueError if the user is not found.
@@ -2862,7 +2922,13 @@ def update_user_password(user_id: int, new_hash: str) -> None:
         )
         if cur.rowcount == 0:
             raise ValueError(f"User not found: {user_id}")
-    log.info(f"[db] Password updated for user id={user_id}")
+        revoked = conn.execute(
+            "DELETE FROM sessions WHERE user_id = ? AND token IS NOT ?",
+            (user_id, keep_session),
+        ).rowcount
+    log.info(f"[db] Password updated for user id={user_id}, "
+             f"{revoked} other session(s) ended")
+    return revoked
 
 
 def get_all_users() -> list[sqlite3.Row]:

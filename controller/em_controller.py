@@ -58,6 +58,7 @@ Device WebSocket protocol:
 import asyncio
 import collections
 import contextlib
+import hmac
 import json
 import logging
 import os
@@ -79,6 +80,10 @@ import em_api as api
 import em_pki
 import em_hostip
 import em_linkauth
+import em_pairing
+import em_config_types
+import em_dbwriter
+import em_tasks
 import em_pacing
 import em_platform
 import em_tcp
@@ -991,6 +996,15 @@ class Device:
         return "oww_shadow" in (self.capabilities or [])
 
     @property
+    def pairing_capable(self) -> bool:
+        """
+        Whether this firmware asks to pair itself (action button held, then a
+        pair_request or a plain dial with `pairing`). Without it an admin
+        starts pairing from the dashboard, since the device cannot ask.
+        """
+        return "pairing" in (self.capabilities or [])
+
+    @property
     def wake_cue_capable(self) -> bool:
         """
         Whether this firmware can play its own wake sound (#120). The
@@ -1790,7 +1804,7 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
                         f"[{device.device_id}] Barge-in: wake word during {phase} "
                         f"({fire_note}) — cancelling turn"
                     )
-                    db.log_device(
+                    em_dbwriter.submit(db.log_device,
                         device.device_id, "info", "device",
                         f"Barge-in during {phase} (score={score:.3f})"
                     )
@@ -1840,7 +1854,7 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
                             f"(score={score:.3f}) — stopping playback, not "
                             f"taking the turn"
                         )
-                        db.log_device(
+                        em_dbwriter.submit(db.log_device,
                             device.device_id, "info", "controller",
                             "Barge-in ceded to another device (arbitration)"
                             if serves else
@@ -1933,6 +1947,9 @@ async def _run_post_turn_playback(device: Device, voice_response: bytes) -> None
     # can overlap a turn's playback, and try/finally because a cancelled turn
     # that leaked it would block the ring for the life of the process.
     device.speaker_busy += 1
+    # Created inside the try, torn down in the finally; None until then, so an
+    # error in the EQ step does not turn the finally into a NameError.
+    playback_ev = cancel_task = done_task = stream_task = timeout_task = None
     try:
         _t_eq0 = asyncio.get_event_loop().time()
         speaker_pcm = await asyncio.get_event_loop().run_in_executor(None, _prepare_pcm)
@@ -1996,7 +2013,6 @@ async def _run_post_turn_playback(device: Device, voice_response: bytes) -> None
                     [done_task, cancel_task, timeout_task],
                     return_when=asyncio.FIRST_COMPLETED,
                 )
-                timeout_task.cancel()
                 if device.cancel_event.is_set():
                     log.info(f"[{device.device_id}] Cancelled during playback drain")
                 elif done_task.done():
@@ -2012,10 +2028,25 @@ async def _run_post_turn_playback(device: Device, voice_response: bytes) -> None
                         f"[{device.device_id}] Playback completion timed out after "
                         f"{timeout:.1f}s with no playback_stats — clearing ring anyway"
                     )
-
-        cancel_task.cancel()
-        done_task.cancel()
     finally:
+        # Every helper task ends here, on every exit. These cancels used to sit
+        # at the end of the try, so a playback that was itself cancelled (a
+        # barge-in, a dismissed timer chime) left two Event.wait() tasks
+        # pending: the one on playback_ev surfaced as "Task was destroyed but
+        # it is pending!" once the Event was dropped (dev add-on, 2026-09-25),
+        # and the one on cancel_event, which lives as long as the device, never
+        # surfaced at all. The stream task kept sending too. Same teardown as
+        # _run_streaming_post_turn_playback, minus the await: nothing here may
+        # stand between a cancellation and the speaker_busy release below.
+        # A cancelled task is scheduled to run its cancellation, so the loop
+        # holds it until it finishes; no reference is needed.
+        for t in (cancel_task, done_task, stream_task, timeout_task):
+            if t is None:
+                continue
+            if not t.done():
+                t.cancel()
+            elif not t.cancelled() and (exc := t.exception()) is not None:
+                log.warning(f"[{device.device_id}] playback helper failed: {exc!r}")
         device.speaker_busy -= 1
         # Retire the waiter whether or not the device ever reported. A
         # cancelled playback — barge-in, mute, a device that dropped — never
@@ -2897,7 +2928,7 @@ def _supervise_wake_listener(device: "Device", failures: int = 0) -> asyncio.Tas
                 f"[{device.device_id}] wake word listener has now failed "
                 f"{n} times in a row — retrying in {delay:.0f}s"
             )
-        asyncio.get_event_loop().create_task(_later())
+        em_tasks.spawn(_later())
 
     started = asyncio.get_event_loop().time()
     t = asyncio.create_task(wake_word_listener(device))
@@ -3003,7 +3034,7 @@ async def _claim_wake(device: "Device", heard_at: float | None,
                  f"{hold * 1000:.0f}ms): heard {ago:.0f}ms ago, won by {won_by}")
     if level is not None:
         heard_wall = time.time() - (now - (heard_at if heard_at is not None else now))
-        db.log_device(device.device_id, "info", "controller", em_wakelevel.log_line(
+        em_dbwriter.submit(db.log_device, device.device_id, "info", "controller", em_wakelevel.log_line(
             level[0], level[1], device.noise_floor, device.mic_gain_db,
             heard_wall, by))
     return won_by
@@ -3074,7 +3105,7 @@ async def _private_wake_turn(device: Device, ev: dict) -> None:
         f"session={session}, score={score:.3f}, threshold={threshold:.3f}, "
         f"floor={device.noise_floor:.4f})"
     )
-    db.log_device(device.device_id, "info", "device",
+    em_dbwriter.submit(db.log_device, device.device_id, "info", "device",
                   f"Wake word detected (score={score:.3f}, device)")
     if ringing:
         device.duck_timer_alarm()
@@ -3101,7 +3132,7 @@ async def _private_wake_turn(device: Device, ev: dict) -> None:
             await _leds_turn_end(device)
             log.info(f"[{device.device_id}] Wake heard but no HA connection — standing down "
                      f"(score={score:.3f})")
-            db.log_device(device.device_id, "info", "controller",
+            em_dbwriter.submit(db.log_device, device.device_id, "info", "controller",
                           "Wake heard but no HA connection")
         else:
             # The Echo lit its own listening ring at the crossing; nothing on
@@ -3109,7 +3140,7 @@ async def _private_wake_turn(device: Device, ev: dict) -> None:
             await leds_off(device)
             log.info(f"[{device.device_id}] Wake ceded to {won_by} "
                      f"(arbitration; score={score:.3f})")
-            db.log_device(device.device_id, "info", "controller",
+            em_dbwriter.submit(db.log_device, device.device_id, "info", "controller",
                           f"Wake ceded to {won_by} (arbitration)")
         return
 
@@ -3150,7 +3181,7 @@ async def _private_barge(device: Device, ev: dict) -> None:
     threshold = ev["threshold"] if ev["threshold"] is not None else device.barge_threshold
     log.info(f"[{device.device_id}] Barge-in: wake word during {phase} "
              f"(device, score={score:.3f}) — cancelling turn")
-    db.log_device(device.device_id, "info", "device",
+    em_dbwriter.submit(db.log_device, device.device_id, "info", "device",
                   f"Barge-in during {phase} (score={score:.3f})")
     device.barge_detected = True
     serves = esphome.can_serve_turn(device.device_id)
@@ -3578,7 +3609,7 @@ async def _stream_listen(device: Device):
                            f"in transit" if source == "controller" else "")
                         + ")"
                     )
-                    db.log_device(
+                    em_dbwriter.submit(db.log_device,
                         device.device_id, "info", "device",
                         f"Wake word detected (score={score:.3f}, {source})"
                     )
@@ -3735,7 +3766,7 @@ async def _stream_listen(device: Device):
                                     f"(score={score:.3f}, discarded {ceded} "
                                     f"frames)"
                                 )
-                                db.log_device(
+                                em_dbwriter.submit(db.log_device,
                                     device.device_id, "info", "controller",
                                     "Wake heard but no HA connection"
                                 )
@@ -3757,7 +3788,7 @@ async def _stream_listen(device: Device):
                                 f"{won_by} (arbitration; score={score:.3f}, "
                                 f"discarded {ceded} frames)"
                             )
-                            db.log_device(
+                            em_dbwriter.submit(db.log_device,
                                 device.device_id, "info", "controller",
                                 f"Wake ceded to {won_by} (arbitration)"
                             )
@@ -3910,7 +3941,7 @@ async def handle_button_event(device: Device, event: dict):
             # one to answer with silence. No arbitration to consider — a
             # press names its device — so this is only the cue and the row.
             log.info(f"[{device.device_id}] Dot button but no HA connection — standing down")
-            db.log_device(
+            em_dbwriter.submit(db.log_device,
                 device.device_id, "info", "controller",
                 "Button pressed but no HA connection"
             )
@@ -3942,12 +3973,9 @@ async def handle_button_event(device: Device, event: dict):
                 # stop/start pair can no longer leak a second stream).
                 await device.mic_stop()
                 await device.mic_start()
-            # M1 fix (2026-07-05 review): keep a reference and log exceptions
-            # instead of a bare fire-and-forget create_task() — previously
-            # any exception raised in this task vanished silently with no
-            # log line, standard asyncio fire-and-forget hygiene issue.
-            _btn_task = asyncio.create_task(_button_voice_turn())
-            _btn_task.add_done_callback(_log_task_exception)
+            # Held and logged by em_tasks. The M1 fix (2026-07-05) logged
+            # exceptions but kept its reference in a local that died on return.
+            em_tasks.spawn(_button_voice_turn())
 
 
 # ─── Control plane handler ────────────────────────────────────────────────────
@@ -3995,17 +4023,31 @@ async def _link_auth_ok(
         pass
 
     loop = asyncio.get_event_loop()
-    expected = await loop.run_in_executor(None, db.get_device_token, device_id)
+    expected, confirmed = await loop.run_in_executor(
+        None, db.get_device_link_auth, device_id)
 
     verdict = em_linkauth.decide(
         presented=presented,
         expected=expected,
+        confirmed=confirmed,
         secure=secure,
         require_tls=REQUIRE_DEVICE_TLS,
     )
     if not verdict.ok:
         log.warning(f"[{plane}] {device_id}: {verdict.reason} — rejecting")
+        # Only for a device with a row and a token, so ids nobody issued
+        # cannot grow the map. The dashboard shows it on the Link row.
+        if expected:
+            api.note_link_refused(device_id, verdict.reason)
         return False
+    if presented and expected and not confirmed:
+        # First sight of the device holding its token: from now on it must.
+        if await loop.run_in_executor(
+                None, db.confirm_device_token, device_id, presented):
+            log.info(f"[{plane}] {device_id}: link token confirmed — "
+                     f"a connection without it will be refused from now on")
+    if plane == "control":
+        api.clear_link_refused(device_id)
     if verdict.stale_token:
         # Allowed, but worth seeing in the log: almost always a device that was
         # deleted and has come back carrying the credential from its previous
@@ -4015,6 +4057,34 @@ async def _link_auth_ok(
             f"Treating as an unregistered device; it will need approval."
         )
     return True
+
+
+async def _presented_its_token(ws, device_id: str) -> bool:
+    """Whether this connection's X-EM-Token is the device's stored token."""
+    try:
+        presented = ws.request.headers.get("X-EM-Token")
+    except AttributeError:
+        return False
+    expected = await asyncio.get_event_loop().run_in_executor(
+        None, db.get_device_token, device_id)
+    return bool(presented and expected and hmac.compare_digest(presented, expected))
+
+
+def _peer_ip(ws) -> str | None:
+    try:
+        return ws.remote_address[0]
+    except (AttributeError, TypeError, IndexError):
+        return None
+
+
+def _not_from_control(device: "Device", ws, secure: bool) -> str | None:
+    """Why a /data or /shell connection is not the device's own, or None."""
+    return em_linkauth.follows_control(
+        control_peer=_peer_ip(device.control_ws),
+        control_secure=bool(getattr(device, "secure", False)),
+        peer=_peer_ip(ws),
+        secure=secure,
+    )
 
 
 async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
@@ -4036,8 +4106,29 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
             return
 
         device_id    = msg["device_id"]
+        # Sent by firmware whose owner held the action button (em_pairing).
+        pairing      = bool(msg.get("pairing"))
+        loop         = asyncio.get_event_loop()
+
+        if pairing and em_pairing.approved(device_id):
+            # An admin approved this pairing. Rotate first: with no token on
+            # record the device is admitted by em_linkauth's existing rules,
+            # and _issue_credentials mints its new one below.
+            await loop.run_in_executor(None, db.clear_device_token, device_id)
+            log.info(f"[control] {device_id}: pairing approved — admitting to issue credentials")
 
         if not await _link_auth_ok(ws, device_id, secure, "control"):
+            # Said before closing, so the device can show "hold the button to
+            # pair" rather than "no controller" (firmware with `pairing`;
+            # older firmware ignores it). A pairing device is told pending.
+            reply = {"type": "refused"}
+            if pairing:
+                await api.notify_pair_request(device_id, "plain")
+                reply = {"type": "pending", "pairing": True}
+            try:
+                await ws.send(json.dumps(reply))
+            except Exception:
+                pass
             await ws.close()
             return
         ip           = msg.get("ip", str(remote[0]))
@@ -4045,7 +4136,9 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
         capabilities = msg.get("capabilities", [])
 
         loop         = asyncio.get_event_loop()
-        approval_mode = db.get_config("device_approval", DEVICE_APPROVAL)
+        approval_mode = await loop.run_in_executor(
+            None, db.get_config, "device_approval", DEVICE_APPROVAL
+        )
         row          = await loop.run_in_executor(None, db.get_device, device_id)
 
         if row is None:
@@ -4072,7 +4165,7 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                     f"from {ip}"
                 )
                 await api.notify_device_pending(device_id, ip)
-                db.log_device(
+                em_dbwriter.submit(db.log_device,
                     device_id, "info", "controller",
                     f"Device seen for first time — pending approval ({ip})"
                 )
@@ -4113,14 +4206,14 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
         # devices that are mostly offline. Written on every register, because a
         # device reflashed between FireOS and emOS is the case it has to track.
         if device._base_os:
-            db.set_device_base_os(device_id, device._base_os)
+            em_dbwriter.submit(db.set_device_base_os, device_id, device._base_os)
         # The running kernel, so emOS on FireOS 5's 64-bit kernel and FireOS
         # 6's 32-bit one can be told apart (schema v23). Absent on older
         # firmware; stored only when reported so a known value is not erased.
         device.kernel_arch = msg.get("kernel_arch") or None
         device.kernel_release = msg.get("kernel_release") or None
         if device.kernel_arch:
-            db.set_device_kernel(device_id, device.kernel_arch, device.kernel_release or "")
+            em_dbwriter.submit(db.set_device_kernel, device_id, device.kernel_arch, device.kernel_release or "")
         # Link-security telemetry for the dashboard: True when this control
         # connection arrived over the TLS listener.
         device.secure = secure
@@ -4139,7 +4232,7 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
             f"[control] Device connected: {device_id} v={version} "
             f"at {ip} caps={capabilities}"
         )
-        db.log_device(
+        em_dbwriter.submit(db.log_device,
             device_id, "info", "controller",
             f"Connected from {ip} version={version}"
         )
@@ -4168,6 +4261,12 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
         config = await loop.run_in_executor(
             None, db.get_effective_device_config, device_id
         )
+        # A stored value of the wrong type fails the device's whole decode and
+        # the conversions below; dropped, it reads as absent at both ends.
+        config, bad_keys = em_config_types.drop_invalid(config)
+        if bad_keys:
+            log.warning(f"[control] {device_id}: stored config has values of "
+                        f"the wrong type, not sent: {', '.join(bad_keys)}")
         await device.send_control({"type": "config", **config})
         device.oww_threshold = float(config.get("owwThreshold", OWW_THRESHOLD))
         device.oww_model     = config.get("owwModel", f"{OWW_MODEL}_v0.1")
@@ -4205,9 +4304,17 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
         # the device actually has — see api.reconcile_on_connect for why the
         # arrival is the trigger. Background: shell round trips and possibly a
         # multi-megabyte push, none of which the handshake should wait on.
-        asyncio.create_task(
-            api.reconcile_on_connect(device_id, device)
-        ).add_done_callback(_log_task_exception)
+        em_tasks.spawn(api.reconcile_on_connect(device_id, device))
+        # An approval (a new device, or an approved pairing) issues link
+        # credentials unless this connection already has working ones.
+        if em_pairing.approved(device_id):
+            if secure and await _presented_its_token(ws, device_id):
+                em_pairing.done(device_id)
+            else:
+                em_tasks.spawn(api._issue_credentials(device_id))
+        elif pairing:
+            # Connected (no credentials yet, or plain) and asking: offer it.
+            await api.notify_pair_request(device_id, "link")
         device.eq_bands      = config.get("eqBands", [0.0] * 8)
         device.eq_loudness   = bool(config.get("eqLoudness", False))
         device.bass_guard_enabled = bool(config.get("bassGuardEnabled", True))
@@ -4295,7 +4402,7 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                     f"[{_d.device_id}] start_conversation while muted — "
                     f"the microphone stays closed"
                 )
-                db.log_device(
+                em_dbwriter.submit(db.log_device,
                     _d.device_id, "info", "controller",
                     "Home Assistant asked a question while the mic was muted"
                 )
@@ -4365,6 +4472,12 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
             set_wake_word=_set_wake_word,
             wake_word_enabled=device.wake_word_enabled,
         )
+        # A device boots at its stored startupVolume, which an output mute
+        # never overwrites — so a mute from before this connection has to be
+        # sent again, or HA shows muted over audible music.
+        _remute = esphome.output_mute_on_reconnect(device_id)
+        if _remute is not None:
+            await _send_volume_set(_remute)
         # The ESPHome server object caches the OWW model from server
         # creation — refresh it from the config we just loaded so HA's
         # wake-word dropdown tracks dashboard changes across controller
@@ -4491,20 +4604,31 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                         # Convert to HA float, update in-memory state, persist to
                         # config so the value survives controller and device restarts.
                         raw_level = int(msg.get("level", 85))
-                        device.volume = _device_level_to_ha(raw_level)
-                        log.debug(
-                            f"[{device_id}] volume_state: level={raw_level} "
-                            f"→ {device.volume:.3f}"
-                        )
-                        # Persist — read-modify-write to avoid stomping other fields
-                        stored_config = await loop.run_in_executor(
-                            None, db.get_device_config, device_id
-                        )
-                        stored_config["startupVolume"] = raw_level
-                        await loop.run_in_executor(
-                            None, db.set_device_config, device_id, stored_config
-                        )
-                        # Notify ESPHome satellite so HA's media player entity updates
+                        _keep, _send = esphome.output_mute_report(device_id, raw_level)
+                        if _send is not None:
+                            # Volume-up while muted: restore above the old
+                            # level; the device reports it back, and that
+                            # report is the one kept.
+                            await device.send_control({"type": "volume_set", "level": _send})
+                        if _keep:
+                            device.volume = _device_level_to_ha(raw_level)
+                            log.debug(
+                                f"[{device_id}] volume_state: level={raw_level} "
+                                f"→ {device.volume:.3f}"
+                            )
+                            # Persist — read-modify-write to avoid stomping other fields
+                            stored_config = await loop.run_in_executor(
+                                None, db.get_device_config, device_id
+                            )
+                            stored_config["startupVolume"] = raw_level
+                            await loop.run_in_executor(
+                                None, db.set_device_config, device_id, stored_config
+                            )
+                        # Otherwise it is our own output mute echoing back as
+                        # 0: not a volume anyone chose, so neither the startup
+                        # volume nor HA's slider takes it, and unmute restores
+                        # the level from before (#641). HA is told either way,
+                        # so the entity shows muted over the old level.
                         esphome.update_device_volume(device_id, device.volume)
 
                     elif msg_type == "stats":
@@ -4652,12 +4776,12 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                         if not duplicate:
                             if ok:
                                 log.info(f"[{device_id}] WiFi changed to \"{ssid}\" — committed")
-                                db.log_device(device_id, "info", "device",
+                                em_dbwriter.submit(db.log_device, device_id, "info", "device",
                                               f'WiFi changed to "{ssid}"')
                             else:
                                 log.warning(f"[{device_id}] WiFi change to \"{ssid}\" "
                                             f"failed: {error}")
-                                db.log_device(device_id, "warning", "device",
+                                em_dbwriter.submit(db.log_device, device_id, "warning", "device",
                                               f'WiFi change to "{ssid}" failed: {error}')
                             await api._push_event({
                                 "type":      "device_update",
@@ -4846,7 +4970,7 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                                 f"{f' — {after.reason}' if after.reason else ''}"
                             )
                             if after.state == em_listen.STATE_DEGRADED:
-                                db.log_device(device_id, "warning", "device",
+                                em_dbwriter.submit(db.log_device, device_id, "warning", "device",
                                               f"Wake word unavailable, button only: {after.reason}")
                         await _push_device_state(device)
 
@@ -4889,6 +5013,11 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                         # The removed call was a synchronous DB write on the event
                         # loop; _push_log_event does it in an executor.
                         await api._push_log_event(device_id, level, "device", message)
+
+                    elif msg_type == "pair_request":
+                        # The owner held the action button on a connected
+                        # device; an admin issues credentials with Approve.
+                        await api.notify_pair_request(device_id, "link")
 
                     elif msg_type == "pong":
                         # Solicited pong (carries our sequence id) -> an RTT
@@ -4972,21 +5101,19 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                 )
             else:
                 log.info(f"[control] Device disconnected: {device.device_id}")
-                db.log_device(
+                em_dbwriter.submit(db.log_device,
                     device.device_id, "info", "controller", "Disconnected"
                 )
                 # Stamp the moment it went away, so "last seen" is exact for
                 # an offline device rather than up to one stats report stale.
-                db.touch_device_seen(device.device_id)
+                em_dbwriter.submit(db.touch_device_seen, device.device_id)
                 _devices.pop(device.device_id, None)
                 # #315: the services stay up for a grace window instead of
                 # being torn down immediately — a four-second link blip used
                 # to deregister the HA entities, drop the BLE proxy and kill
                 # the media session, then rebuild all of it when the device
                 # returned on its own.
-                asyncio.create_task(
-                    _release_device_services(device)
-                ).add_done_callback(_log_task_exception)
+                em_tasks.spawn(_release_device_services(device))
 
 
 async def _release_device_services(device) -> None:
@@ -5053,6 +5180,13 @@ async def handle_data(ws: WebSocketServerProtocol, secure: bool = False):
 
         if device is None:
             log.warning(f"[data] Unknown device_id: {device_id} — closing")
+            await ws.close()
+            return
+
+        why = _not_from_control(device, ws, secure)
+        if why:
+            log.warning(f"[data] {device_id}: {why} — rejecting")
+            device = None   # the finally must not treat the live device as ours
             await ws.close()
             return
 
@@ -5210,6 +5344,13 @@ async def handle_shell(ws: WebSocketServerProtocol, path: str, secure: bool = Fa
         return
 
     if not await _link_auth_ok(ws, device_id, secure, "shell"):
+        await ws.close()
+        return
+
+    live = _devices.get(device_id)
+    why = "device is not connected" if live is None else _not_from_control(live, ws, secure)
+    if why:
+        log.warning(f"[shell] {device_id}: {why} — rejecting")
         await ws.close()
         return
 

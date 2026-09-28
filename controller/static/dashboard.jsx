@@ -63,16 +63,15 @@ function webUsbBlocked() {
   const origin = window.location.origin;
   return {
     origin,
-    why: `WebUSB needs a secure context, and this page is on ${origin}.`,
+    why: `USB is blocked: ${origin} is not a secure address.`,
     // Under the add-on there is no localhost route to offer:
     // _ingress_only_middleware rejects anything that is not the Supervisor
     // gateway, so suggesting a direct port would send the user to a 403.
     fix: isIngress()
-      ? `Serve Home Assistant over HTTPS, or add exactly ${origin} to `
+      ? `Serve Home Assistant over HTTPS, or allow ${origin} at `
         + `chrome://flags/#unsafely-treat-insecure-origin-as-secure and relaunch `
-        + `the browser. An allowlist entry for the controller's own address does `
-        + `not cover this one.`
-      : `Open the dashboard at http://localhost:8768, or add exactly ${origin} to `
+        + `the browser. The controller's own address does not cover this one.`
+      : `Use http://localhost:8768 on this computer, or allow ${origin} at `
         + `chrome://flags/#unsafely-treat-insecure-origin-as-secure and relaunch `
         + `the browser.`,
   };
@@ -407,6 +406,7 @@ function Slider({ label, sub, value, min, max, step = 1, unit = '', formatValue,
       {/* A control whose feature the device lacks is shown disabled WITH the
           reason (in sub), never as one that silently does nothing. */}
       <input type="range" min={min} max={max} step={step} value={value} disabled={disabled}
+        aria-label={typeof label === 'string' ? label : undefined}
         style={{ width: '100%', opacity: disabled ? 0.45 : 1 }}
         onChange={e => onChange(Number(e.target.value))} />
     </div>
@@ -473,6 +473,7 @@ function NumberField({ label, sub, value, min = 0, max = 100, unit = '',
             on. inputMode brings up the numeric keypad regardless. */}
         <input type="text" inputMode="numeric" autoComplete="off"
           value={text} disabled={disabled}
+          aria-label={typeof label === 'string' ? label : undefined}
           onFocus={() => setEditing(true)}
           onChange={e => { const d = digits(e.target.value); setText(d); commit(d); }}
           onBlur={e => {
@@ -515,7 +516,19 @@ function Toggle({ label, sub, value, onChange, disabled = false }) {
         <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: disabled ? 'var(--muted)' : 'var(--text2)' }}>{label}</span>
         {sub && <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--muted)', marginLeft: 8 }}>{sub}</span>}
       </div>
-      <div onClick={() => { if (!disabled) onChange(!value); }} style={{
+      {/* A switch to assistive tech and the keyboard, not only to a mouse:
+          role, state, focus and Space/Enter. Also what release UAT finds it
+          by (tools/uat). */}
+      <div role="switch" aria-checked={!!value} aria-disabled={disabled || undefined}
+        aria-label={typeof label === 'string' ? label : undefined}
+        tabIndex={disabled ? -1 : 0}
+        onClick={() => { if (!disabled) onChange(!value); }}
+        onKeyDown={e => {
+          if (disabled || (e.key !== ' ' && e.key !== 'Enter')) return;
+          e.preventDefault();
+          onChange(!value);
+        }}
+        style={{
         width: 36, height: 20, borderRadius: 10, cursor: disabled ? 'default' : 'pointer',
         position: 'relative', flexShrink: 0, opacity: disabled ? 0.45 : 1,
         background: value ? 'var(--accent)' : 'var(--muted)',
@@ -647,10 +660,12 @@ function Select({ label, sub, value, options, onChange }) {
       <div style={{ marginBottom: 7, minWidth: 0 }}>
         <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: 'var(--text2)' }}>{label}</span>
       </div>
-      <div style={{ display: 'flex', gap: 6, minWidth: 0 }}>
+      <div role="radiogroup" aria-label={typeof label === 'string' ? label : undefined}
+        style={{ display: 'flex', gap: 6, minWidth: 0 }}>
         {options.map(o => (
           <button
             key={o.value}
+            role="radio" aria-checked={o.value === value}
             className={'em-pill em-pill--small' + (o.value === value ? ' em-pill--accent' : '')}
             disabled={!!o.disabled}
             style={{ flex: 1, minWidth: 0 }}
@@ -838,10 +853,15 @@ function LinkStrip({ minutes }) {
   );
 }
 
-function StatTile({ label, value, unit, sev = 'ok', pct, glyph, note, sub }) {
+// Read by a screen reader, not drawn: for a meaning otherwise carried only by
+// colour (WCAG 1.4.1).
+const SR_ONLY = { position:'absolute', width:1, height:1, overflow:'hidden',
+                  clip:'rect(0 0 0 0)', whiteSpace:'nowrap' };
+
+function StatTile({ label, value, unit, sev = 'ok', pct, glyph, note, sub, grade }) {
   const dim = value == null;
   return (
-    <div style={{ flex:'1 1 0', minWidth:0 }}>
+    <div style={{ flex:'1 1 0', minWidth:0 }} title={grade ? `${label}: ${grade}` : undefined}>
       <div style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)',
                     textTransform:'uppercase', letterSpacing:'0.08em', whiteSpace:'nowrap' }}>{label}</div>
       {/* FIXED height, and the glyph is centre-aligned rather than
@@ -860,6 +880,7 @@ function StatTile({ label, value, unit, sev = 'ok', pct, glyph, note, sub }) {
           {dim ? '—' : value}
         </span>
         {!dim && unit && <span style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)' }}>{unit}</span>}
+        {grade && <span style={SR_ONLY}>, {grade}</span>}
         {glyph && <span style={{ marginLeft:'auto', display:'flex', alignItems:'center',
                                  alignSelf:'center', flexShrink:0 }}>{glyph}</span>}
       </div>
@@ -1471,7 +1492,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
   const [renameSaving, setRenameSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [securing, setSecuring] = useState(false);
+  const [pairing, setPairing] = useState(false);
   const [debloating, setDebloating] = useState(false);
   const [assets, setAssets] = useState(null);
   const [installing, setInstalling] = useState(false);
@@ -1484,7 +1505,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
   const fileInputRef = useRef(null);
   const [turns, setTurns] = useState([]);
   const state = deviceState(device);
-  const needsUpdate = device.firmware_ver && release?.version && device.firmware_ver !== release.version;
+  const needsUpdate = !!device.firmware_update;
 
   const TABS = device.approved
     ? (isAdmin ? ['status', 'activity', 'config', 'console', 'updates', 'logs'] : ['status', 'activity', 'config', 'logs'])
@@ -1584,16 +1605,15 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
     setSaving(false);
   }
 
-  async function doSecureLink() {
-    // Pushes CA + link token over the shell plane, then the controller
-    // bounces the connection; the device redials over wss. The "Link" row
-    // flips to wss (TLS) on the next device-list refresh after reconnect.
-    setSecuring(true);
+  async function doPair() {
+    // Answers the device's own request (its owner held the action button).
+    // The controller issues a fresh token and the CA, and the device
+    // reconnects over wss; the row clears on the next refresh.
+    setPairing(true);
     try {
-      await API.post(`/api/devices/${device.device_id}/secure_link`, {});
-    } catch(e) { alert(e.error || 'Secure link failed'); }
-    // Leave the button disabled briefly — transfer + reconnect takes ~10s.
-    setTimeout(() => setSecuring(false), 15000);
+      await API.post(`/api/devices/${device.device_id}/pair`, {});
+    } catch(e) { alert(e.error || 'Pairing failed'); }
+    setTimeout(() => setPairing(false), 15000);
   }
 
   async function doDebloat() {
@@ -1936,7 +1956,12 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
         </div>
 
         {/* Body */}
-        <div className="em-modal-body" style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
+        {/* Focusable so a keyboard can scroll it: on the Logs tab it holds
+            only text, and a scroll area with nothing focusable inside cannot
+            be scrolled without a mouse (axe scrollable-region-focusable,
+            UAT 2026-09-27 — a device with enough log lines to scroll). */}
+        <div className="em-modal-body" tabIndex={0} role="region" aria-label={`${device.label || device.device_id} ${tab}`}
+             style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
 
           {/* APPROVE */}
           {!device.approved && (
@@ -2058,17 +2083,32 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                     {row('Volume', device.volume != null
                          ? `${Math.round(device.volume * 100)}%`
                          : (s?.volumePct != null ? `${s.volumePct}%` : '—'))}
-                    {row('Link', device.connected ? (device.linkTls ? 'wss (TLS)' : 'plain ws') : '—',
-                         device.connected ? (device.linkTls ? 'var(--ok)' : 'var(--warn)') : undefined)}
+                    {/* An offline Echo the controller is turning away says why,
+                        in the row that describes its link rather than a new one. */}
+                    {row('Link', device.connected
+                           ? (device.linkTls ? 'wss (TLS)' : 'plain ws')
+                           : device.linkRefused
+                             ? <span title="Remove this Echo and approve it again to pair it.">
+                                 {`Refused: ${device.linkRefused.reason}`}
+                               </span>
+                             : '—',
+                         device.connected ? (device.linkTls ? 'var(--ok)' : 'var(--warn)')
+                           : device.linkRefused ? 'var(--error)' : undefined)}
                     {row('Config', (() => {
                       const n = (device.config_sections ?? []).length;
                       const total = Object.keys(CONFIG_SECTIONS).length;
                       return n === 0 ? 'Fleet' : `Local override (${n} of ${total})`;
                     })())}
-                    {isAdmin && device.connected && !device.linkTls && (
-                      <div style={{ marginTop: 8 }}>
-                        <Pill small accent disabled={securing} onClick={doSecureLink}>
-                          {securing ? 'Securing…' : 'Secure link'}
+                    {isAdmin && (device.pairRequest
+                        || (device.connected && !device.linkTls && !device.pairingCapable)) && (
+                      <div style={{ marginTop: 8, display: 'grid', gap: 6, justifyItems: 'start' }}>
+                        <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                          {device.pairRequest
+                            ? 'Wants to pair. Approve only if you just held its button.'
+                            : 'Not paired. Its firmware cannot ask, so pair it from here.'}
+                        </span>
+                        <Pill small accent disabled={pairing} onClick={doPair}>
+                          {pairing ? 'Pairing…' : device.pairRequest ? 'Approve pairing' : 'Pair'}
                         </Pill>
                       </div>
                     )}
@@ -2094,19 +2134,21 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                           on screen to say so. Shown as a note rather than its
                           own tile — it qualifies the link reading, it is not
                           a separate health metric. */}
-                      {/* The verdict is graded on packet loss, not signal: VVV
-                          showed full bars at -43dBm while the AP resent 66% of
-                          its frames (2026-09-23). The bars stay — they are what
-                          people read at a glance — and beside the verdict they
-                          separate the causes: Poor with full bars is
-                          interference or the device, not distance. */}
+                      {/* Headline is the signal, but the GRADE (colour and
+                          meter) is packet loss, not signal: VVV showed full
+                          bars at -43dBm while the AP resent 66% of its frames
+                          (2026-09-23). So a lossy link still goes amber or red
+                          at full signal — interference or the device, not
+                          distance. The dBm headlines rather than the verdict
+                          word, with band and loss below, because the three
+                          did not fit one line (Wil, 2026-09-27). */}
                       <StatTile
-                        label="Link" value={LINK_VERDICT[lq?.verdict] ?? null}
+                        label="Link" value={s?.wifiRssi ?? null} unit="dBm"
+                        grade={LINK_VERDICT[lq?.verdict]}
                         sev={lq?.verdict === 'poor' ? 'bad' : lq?.verdict === 'fair' ? 'warn' : 'ok'}
                         pct={lq?.lossPct == null ? null : Math.max(0, 100 - lq.lossPct * 10)}
                         glyph={<SignalBars rssi={s?.wifiRssi ?? null}/>}
-                        sub={[s?.wifiRssi != null ? `${s.wifiRssi} dBm` : null,
-                              wifiBand(s?.wifiFreqMhz),
+                        sub={[wifiBand(s?.wifiFreqMhz),
                               lq?.lossPct != null ? `${lq.lossPct}% loss` : null]
                              .filter(Boolean).join(' · ') || null}
                       />
@@ -2147,7 +2189,10 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                       <div className="em-grid2" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'0 24px' }}>
                         <div>
                           {row('Scanner', b ? (b.scanning ? 'Scanning' : 'Stopped') : '—', b?.scanning ? 'var(--ok)' : undefined)}
-                          {row('Adverts seen', b ? String(b.advertsSeen ?? 0) : '—')}
+                          {/* The controller's count, from the same instant as
+                              Forwarded to HA; the device's own counts from
+                              its boot (#410). */}
+                          {row('Adverts seen', bp.advertsSeen != null ? String(bp.advertsSeen) : '—')}
                           {row('Nearby devices (5 min)', b ? String(b.uniqueAddrs ?? 0) : '—')}
                           {row('BT address', b?.bdAddr || '—')}
                         </div>
@@ -2654,14 +2699,14 @@ function Card({ device, onClick }) {
             </div>
           )}
         </div>
-        {isPending && (
+        {(isPending || device.pairRequest) && (
           // Chrome sized this box off the DM Mono line box rather than the
           // glyphs, so 1px symmetric padding rendered visibly bottom-heavy
           // next to the 14px label. inline-flex + lineHeight:1 makes the
           // height the text's own; the trimmed paddingRight cancels the
           // trailing letter-space Chrome leaves after the final N, which is
           // what made the word look shunted left inside its own badge.
-          <div className="em-on-dark" style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0, marginLeft: 8, background: 'linear-gradient(160deg,var(--lcd-face),var(--lcd-deep))', border: '1px solid var(--lcd-line)', borderRadius: 3, padding: '3px 6px', paddingRight: 'calc(6px - 0.1em)', fontFamily: "'DM Mono',monospace", fontSize: 9, lineHeight: 1, color: 'var(--accent-lit)', letterSpacing: '0.1em' }}>PENDING</div>
+          <div className="em-on-dark" style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0, marginLeft: 8, background: 'linear-gradient(160deg,var(--lcd-face),var(--lcd-deep))', border: '1px solid var(--lcd-line)', borderRadius: 3, padding: '3px 6px', paddingRight: 'calc(6px - 0.1em)', fontFamily: "'DM Mono',monospace", fontSize: 9, lineHeight: 1, color: 'var(--accent-lit)', letterSpacing: '0.1em' }}>{isPending ? 'PENDING' : 'PAIRING'}</div>
         )}
       </div>
       <div style={{ display: 'flex', justifyContent: 'center', padding: '20px 0 12px' }}>
@@ -6404,7 +6449,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     // serial (a pending device row is created if needed; approval flow is
     // unchanged). A 503 means this controller has no TLS listener
     // (cryptography package missing) — provision proceeds plain, and the
-    // dashboard "Secure link" action can retrofit credentials later.
+    // device can be paired later.
     addLog('Fetching device-link TLS credentials…');
     const serial = (await c.shell('getprop ro.serialno')).trim();
     if (!serial) {
@@ -8130,6 +8175,14 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
           {/* Content */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '18px 22px 14px' }}>
 
+            {/* The step's own content SCROLLS, and the transcript below keeps
+                a floor. Both used to sit in one clipped column of fixed
+                height, so a tall step pushed its own button off the bottom:
+                the WebUSB warning on step 0 and the first-boot guide on the
+                emOS console step each left the button barely clickable (UAT
+                2026-09-27). */}
+            <div style={{ flex: '0 1 auto', minHeight: 0, overflowY: 'auto' }}>
+
             {/* Step title + desc */}
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
@@ -8158,12 +8211,8 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
                 code. */}
             {step === 0 && usbBlocked && (
               <div className="em-panel" style={{ marginBottom: 12, borderColor: 'var(--warn)' }}>
-                <div className="em-label" style={{ marginBottom: 6 }}>USB is unavailable in this browser</div>
-                <p style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--text2)', lineHeight: 1.6, margin: '0 0 6px' }}>
-                  {usbBlocked.why}
-                </p>
                 <p style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--text2)', lineHeight: 1.6, margin: 0 }}>
-                  {usbBlocked.fix}
+                  <strong>{usbBlocked.why}</strong> {usbBlocked.fix}
                 </p>
               </div>
             )}
@@ -8400,46 +8449,37 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
             {isEmos && step === 7 && stepState[7] !== 'done' && !running && (
               <div className="em-panel" style={{ marginBottom: 12, borderColor: 'var(--warn)' }}>
                 <div className="em-label" style={{ marginBottom: 6 }}>What you do</div>
-                {/* The ring guide below is what this panel has always said, and
-                    it is the right content — but it describes what the DEVICE
-                    does and never said what the operator does, so the port
-                    picker arrived unannounced. That is the step people get
-                    stuck on. */}
-                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 14 }}>
-                  <div>1. Click the button below. The device reboots into emOS.</div>
-                  <div>2. The browser asks for a serial port. It appears as <strong>emOS</strong>,
-                       and only once the emOS boot starts — the ring beginning to fill. Leave the
-                       picker open and it turns up by itself; if the picker gives up first, click
-                       Connect Console again.</div>
-                  <div>3. Pick it. The wizard reads the console itself from there.</div>
-                  <div>Leave the cable in throughout — it is the device&apos;s only power.</div>
+                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 10 }}>
+                  <div>1. Click the button. The Echo reboots into emOS.</div>
+                  <div>2. Pick <strong>emOS</strong> when the browser asks for a serial port. It appears once the ring starts filling.</div>
+                  <div>Keep the cable in: it powers the Echo.</div>
                 </div>
-                <div className="em-label" style={{ marginBottom: 6 }}>Watch the light ring on this boot</div>
-                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--text2)', lineHeight: 1.7 }}>
-                  <div><strong>A blue arc growing behind a cyan head</strong> — booting. The head travels right round and finishes back at the bottom.</div>
-                  <div><strong>Two segments either side of the bottom, throbbing blue</strong> — every boot stage done, waiting for WiFi. This is where it sits for the whole of the next step, and it will sit there indefinitely until you configure a network. Normal.</div>
-                  <div><strong style={{ color: 'var(--ok)' }}>Both sides filling to the top, then white, then fading</strong> — on the network, ring handed over to EchoMuse. Done.</div>
-                  <div><strong style={{ color: 'var(--warn)' }}>Solid amber</strong> — the device is restoring its own last good image. Leave it alone; it reboots itself.</div>
-                  <div><strong style={{ color: 'var(--warn)' }}>Red and stopped</strong> — a boot stage failed at the point the head reached. Recoverable, see below.</div>
-                  <div><strong style={{ color: 'var(--error)' }}>A single segment orbiting a full blue ring, for more than a minute</strong> — emOS never started. This is the one that needs you.</div>
-                </div>
-                <p style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--text2)', lineHeight: 1.7, margin: '10px 0 0' }}>
-                  <strong>If it does not come up, do not keep power cycling it.</strong> To reach
-                  TWRP: unplug the power, hold <strong>mute</strong> or <strong>+</strong> (volume
-                  up), and apply power with it still held until the ring changes. Which button
-                  depends on your amonet version — <a href="https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-2nd-gen-2016-biscuit.4761416/" target="_blank"
-                  rel="noreferrer">R0rt1z2&apos;s XDA thread</a> has it. Reconnect here and use
-                  <strong> Restore escrowed boot image</strong> below: about ten seconds, and it
-                  leaves everything on /data alone. Repeatedly power cycling a device that will
-                  not boot is what turns a recoverable one into a case-opening job.
-                </p>
-                <div style={{ marginTop: 12 }}>
-                  {/* Once the reboot has been sent there is no ADB handle and
+                <div style={{ marginBottom: 14 }}>
+                  {/* After the reboot there is no ADB handle and
                       runRebootAndWatch skips it, so a second click only opens
-                      the port picker — say so. The picker times out if emOS
-                      takes longer to appear than the operator waits. */}
+                      the port picker, which times out if emOS is slow. */}
                   <Pill accent onClick={() => runStep(7)}>{adb ? 'Reboot and Connect Console' : 'Connect Console'}</Pill>
                 </div>
+                <div className="em-label" style={{ marginBottom: 6 }}>The ring</div>
+                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--text2)', lineHeight: 1.7 }}>
+                  <div><strong>Blue arc growing</strong> — booting.</div>
+                  <div><strong>Two blue segments throbbing at the bottom</strong> — booted, waiting for WiFi (next step).</div>
+                  <div><strong style={{ color: 'var(--ok)' }}>Filling to the top, then white</strong> — on the network. Done.</div>
+                  <div><strong style={{ color: 'var(--warn)' }}>Solid amber</strong> — restoring its last good image. Leave it.</div>
+                  <div><strong style={{ color: 'var(--warn)' }}>Red, stopped</strong> — a boot stage failed. Recoverable, below.</div>
+                  <div><strong style={{ color: 'var(--error)' }}>One segment orbiting a full blue ring for over a minute</strong> — emOS never started. Needs you, below.</div>
+                </div>
+                {/* Kept whatever it costs in length: it asks somebody to act
+                    on their own hardware, and the wrong reaction (power
+                    cycling) is what makes a recoverable Echo unrecoverable. */}
+                <p style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--text2)', lineHeight: 1.7, margin: '10px 0 0' }}>
+                  <strong>If it does not come up, do not keep power cycling it</strong> — that turns a
+                  recoverable Echo into a case-opening job. Instead: unplug it, hold <strong>mute</strong> or{' '}
+                  <strong>+</strong> (<a href="https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-2nd-gen-2016-biscuit.4761416/" target="_blank"
+                  rel="noreferrer">which one depends on your amonet version</a>) and plug it back in to
+                  reach TWRP, reconnect here and use <strong>Restore escrowed boot image</strong>. About
+                  ten seconds, and /data is untouched.
+                </p>
               </div>
             )}
             {isEmos && step === 8 && stepState[8] !== 'done' && !running && (
@@ -8561,6 +8601,8 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
               </div>
             )}
 
+            </div>
+
             {/* Log output — same console treatment as the Updates tab.
                 The copy action matters more than it looks: this transcript is
                 the entire record of a provision, and it is what gets pasted
@@ -8582,7 +8624,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
             <div
               ref={logRef}
               className="em-console"
-              style={{ flex: 1, minHeight: 0, marginTop: 10 }}
+              style={{ flex: '1 0 120px', minHeight: 120, marginTop: 10 }}
             >
               {log.length === 0
                 ? <span style={{ color: 'var(--lcd-dim)' }}>— no output yet —</span>
@@ -8785,6 +8827,7 @@ function EqSliders({ bands, onChange, disabled }) {
               stays in the untransformed axis, so only clicks land).
               orient="vertical" covers older Firefox. */}
           <input type="range" min={-12} max={12} step={1} value={g} orient="vertical"
+            aria-label={`EQ ${FREQ_LABELS[i]} Hz`}
             onChange={e => { const nb = [...bands]; nb[i] = Number(e.target.value); onChange(nb); }}
             style={{ writingMode: 'vertical-lr', direction: 'rtl', WebkitAppearance: 'slider-vertical', width: 20, height: 76, cursor: 'pointer' }}/>
           <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 8, color: 'var(--muted)', marginTop: 2 }}>{FREQ_LABELS[i]}</div>
@@ -8913,13 +8956,15 @@ function Stage({ n, title, chips, desc, children, scope, dim }) {
 function StageAdvanced({ open, onToggle, disabledStyle, children }) {
   return (
     <div style={{ marginTop: 14, borderTop: '1px solid var(--hairline)', paddingTop: 10 }}>
-      <div onClick={onToggle} style={{
+      {/* A button, so the keyboard and assistive tech can open it too. */}
+      <button type="button" onClick={onToggle} aria-expanded={!!open} style={{
         fontFamily: STAGE_MONO, fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase',
         letterSpacing: '0.15em', cursor: 'pointer', userSelect: 'none',
         display: 'flex', alignItems: 'center', gap: 6,
+        background: 'none', border: 'none', padding: 0,
       }}>
-        <span>{open ? '▾' : '▸'}</span> Advanced
-      </div>
+        <span aria-hidden="true">{open ? '▾' : '▸'}</span> Advanced
+      </button>
       {open && <div style={{ marginTop: 14, ...disabledStyle }}>{children}</div>}
     </div>
   );
@@ -8947,18 +8992,18 @@ function listenStatusText(listen) {
   }
 }
 
-// The fleet line: how many connected Echoes send audio all the time. Counts
-// only what Echoes have reported, and says so when some have not.
+// The fleet line: shown only when a connected Echo streams all the time, or
+// has not said whether it does — never a line announcing that none do (Wil,
+// 2026-09-27: too verbose). Counts only what Echoes have reported, so an
+// unknown is never folded into private.
 function listenFleetText(devices) {
   const live = devices.filter(d => d.connected && d.listen);
-  if (!live.length) return null;
   const streaming = live.filter(d => d.listen.streams === true).length;
   const unknown = live.filter(d => d.listen.streams === null).length;
-  const n = live.length;
-  const head = streaming === 0
-    ? `No Echo streams audio continuously (${n} connected)`
-    : `${streaming} of ${n} connected Echo${n === 1 ? '' : 'es'} stream${streaming === 1 ? 's' : ''} audio continuously`;
-  return unknown ? `${head} · ${unknown} not reported yet` : head;
+  const parts = [];
+  if (streaming) parts.push(`${streaming} of ${live.length} Echo${live.length === 1 ? '' : 'es'} stream${streaming === 1 ? 's' : ''} all the time`);
+  if (unknown) parts.push(`${unknown} not reported yet`);
+  return parts.length ? parts.join(' · ') : null;
 }
 
 function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
@@ -9647,7 +9692,7 @@ function DeployAllModal({ release, devices, deployState, onStarted, onDismiss, o
   const target = view?.version || release?.version;
   const byId = Object.fromEntries(devices.map(d => [d.device_id, d]));
   const eligible = devices.filter(d =>
-    d.approved && d.connected && d.firmware_ver !== release?.version);
+    d.approved && d.connected && d.firmware_update);
 
   const SKIP_REASONS = {
     not_approved:       'not approved',
@@ -9874,7 +9919,15 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
     setBundling(false);
   }
 
-  function setConf(k, v) { setConfig(c => ({ ...c, [k]: v })); setDirty(true); setSaveMsg(null); }
+  // Edits made while a save is in flight: the save's reply must not mark
+  // them saved. Switching the Bluetooth proxy on holds the reply for about a
+  // second per Echo while the proxies start, and a change made in that window
+  // was shown as saved and never sent (UAT 2026-09-27).
+  const editedDuringSave = useRef(false);
+  function setConf(k, v) {
+    setConfig(c => ({ ...c, [k]: v })); setDirty(true); setSaveMsg(null);
+    editedDuringSave.current = true;
+  }
 
   // Inline, non-blocking save feedback — was a browser alert(), which
   // demanded a click to dismiss for what is a routine success message.
@@ -9882,10 +9935,11 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
 
   async function saveGlobalConfig() {
     setSaving(true);
+    editedDuringSave.current = false;
     try {
       const res = await API.post('/api/global/config', config);
       onGlobalConfigChange(config);
-      setDirty(false);
+      setDirty(editedDuringSave.current);
       const n = res.pushed_to?.length ?? 0;
       setSaveMsg({ ok: true, text: n > 0
         ? `Saved — pushed live to ${n} device${n === 1 ? '' : 's'} on fleet config`
@@ -10034,6 +10088,7 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
                         you run a fork.
                       </div>
                       <input type="text" autoComplete="off" spellCheck="false"
+                        aria-label="GitHub repository"
                         value={sysVal('github_repo', 'wilbowes/EchoMuse')}
                         onChange={e => setSysVal('github_repo', e.target.value)}
                         className="em-inset"
@@ -10099,13 +10154,14 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
             <div style={{ maxWidth: 360 }}>
               <div style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)', textTransform:'uppercase', letterSpacing:'0.15em', marginBottom:20 }}>Change Password · {username}</div>
               {[
-                ['Current password', curPw, setCurPw],
-                ['New password',     newPw, setNewPw],
-                ['Confirm new',      confirmPw, setConfirmPw],
-              ].map(([label, val, setter]) => (
+                ['Current password', curPw, setCurPw, 'current-password'],
+                ['New password',     newPw, setNewPw, 'new-password'],
+                ['Confirm new',      confirmPw, setConfirmPw, 'new-password'],
+              ].map(([label, val, setter, purpose]) => (
                 <div key={label} style={{ marginBottom:16 }}>
                   <div style={{ fontFamily:"'DM Mono',monospace", fontSize:11, color:'var(--text2)', marginBottom:6 }}>{label}</div>
                   <input type="password" value={val} onChange={e => setter(e.target.value)}
+                    aria-label={label} autoComplete={purpose}
                     style={{ width:'100%', boxSizing:'border-box' }}/>
                 </div>
               ))}
@@ -10318,6 +10374,7 @@ function App() {
           setCtrlRelease(msg);
           break;
         case 'device_pending':
+        case 'device_pair_request':
           API.get('/api/devices').then(setDevices).catch(() => {});
           break;
         case 'device_deleted':
@@ -10378,8 +10435,10 @@ function App() {
 
   const online   = devices.filter(d => d.connected).length;
   const approved = devices.filter(d => d.approved);
-  const pending  = devices.filter(d => !d.approved);
-  const updates  = approved.filter(d => d.firmware_ver && release?.version && d.firmware_ver !== release.version).length;
+  // Connected at least once: a row the wizard made for a device that has not
+  // yet dialled in is not asking for anything (#453).
+  const pending  = devices.filter(d => !d.approved && d.last_seen != null);
+  const updates  = approved.filter(d => d.firmware_update).length;
   const active   = approved.filter(d => d.speaking || d.listening || d.thinking).length;
 
   const selectedDevice = selected ? devices.find(d => d.device_id === selected) : null;

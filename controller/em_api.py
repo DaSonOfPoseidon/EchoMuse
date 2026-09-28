@@ -35,6 +35,7 @@ import asyncio
 import hashlib
 import html as _html
 import json
+import secrets
 import logging
 import os
 import platform
@@ -56,7 +57,11 @@ import websockets
 import em_db as db
 import em_auth as auth
 import em_ble_proxy
+import em_broadcast
 import em_config_sections as sections_mod
+import em_config_types
+import em_dbwriter
+import em_tasks
 import em_console_pw
 import em_tcp
 import em_labels
@@ -66,6 +71,7 @@ import em_firmware
 import em_ingressauth
 import em_oww_assets
 import em_oww_models
+import em_pairing
 import em_pki
 import em_player
 import em_recordings
@@ -78,6 +84,9 @@ import em_support
 from version import VERSION as CONTROLLER_VERSION
 from version import compare as _compare_versions
 from version import parse as _parse_version
+from version import choose_firmware_release as _choose_firmware_release
+from version import firmware_update as _firmware_update
+from version import offers_ea_firmware as _offers_ea_firmware
 
 log = logging.getLogger("echomuse.api")
 
@@ -434,7 +443,7 @@ async def create_app() -> web.Application:
     app.router.add_post("/api/provision/diagnostics",     _post_provision_diagnostics)
     app.router.add_get("/api/provision/emos_init",     _get_provision_emos_init)
     app.router.add_post("/api/provision/emos_image",   _post_provision_emos_image)
-    app.router.add_post("/api/devices/{id}/secure_link",  _post_secure_link)
+    app.router.add_post("/api/devices/{id}/pair",         _post_pair)
     app.router.add_post("/api/devices/{id}/debloat",      _post_debloat)
 
     # Live events WebSocket
@@ -1061,6 +1070,9 @@ async def _delete_device(request: web.Request) -> web.Response:
     # right, so it must not inherit the deleted row's debounce and skip its
     # first reconcile — the bounce below has it redialling within seconds.
     forget_reconcile(device_id)
+    # A refusal belongs to the deleted row; the device comes back as pending.
+    clear_link_refused(device_id)
+    em_pairing.forget(device_id)
     # ...and the device is told to redial, or it never notices it was deleted.
     # Link auth is decided once, at register time, so a connected device keeps
     # running on the socket it already has: it vanishes from the dashboard and
@@ -1124,9 +1136,27 @@ async def _post_approve(request: web.Request) -> web.Response:
         return _error("already_approved", "Device is already approved", 409)
 
     await loop.run_in_executor(None, db.approve_device, device_id, label, config)
+    # Approval is the one human decision: it also issues link credentials when
+    # the device next connects without them (em_pairing).
+    em_pairing.approve(device_id)
     await _push_event({"type": "device_approved", "device_id": device_id,
                        "label": label})
     return _ok({"device_id": device_id, "label": label})
+
+
+def _well_typed(device_id: str, config: dict) -> dict:
+    """
+    `config` without stored values of the wrong type, for a push to a device.
+
+    One mistyped field fails the device's whole decode, and the conversions in
+    _apply_live_config raise on it; a dropped key reads as absent at both ends.
+    Every full-config push in this module goes through here.
+    """
+    config, bad = em_config_types.drop_invalid(config)
+    if bad:
+        log.warning(f"[api] {device_id}: stored config has values of the wrong "
+                    f"type, not sent: {', '.join(bad)}")
+    return config
 
 
 async def _apply_live_config(device_id: str, live, effective: dict) -> None:
@@ -1144,6 +1174,7 @@ async def _apply_live_config(device_id: str, live, effective: dict) -> None:
     One key is held back: a NEW `owwModel` is not sent to a device that scores
     locally until the classifier is actually on it — see _hold_back_oww_model.
     """
+    effective = _well_typed(device_id, effective)
     effective, pending_model = _hold_back_oww_model(live, effective)
     await live.send_control({"type": "config", **effective})
     if "owwThreshold" in effective:
@@ -1157,7 +1188,7 @@ async def _apply_live_config(device_id: str, live, effective: dict) -> None:
     if pending_model:
         # The device is still on its previous wake word, still scoring
         # locally, still answering. Install, then switch.
-        asyncio.create_task(_install_then_switch(device_id, pending_model))
+        em_tasks.spawn(_install_then_switch(device_id, pending_model))
     if "owwSpeexNs" in effective:
         live.oww_speex_ns = bool(effective["owwSpeexNs"])
     if "nsAsr" in effective:
@@ -1322,6 +1353,14 @@ async def _post_device_config(request: web.Request) -> web.Response:
     # config untouched, not half-applied with the bad key rejected later.
     if (err := _validate_console_timeout(body)):
         return _error("bad_console_timeout", err, 400)
+    # Judged against what the device has in force now, so re-sending a value
+    # it already has is never refused (em_config_types.problems).
+    before = await loop.run_in_executor(
+        None, db.get_effective_device_config, device_id
+    )
+    if (bad := em_config_types.problems(
+            {k: v for k, v in body.items() if k in in_scope}, before)):
+        return _error("bad_config_value", "; ".join(bad), 400)
 
     # Apply scoping first: set_device_config_sections prunes the values of
     # any section no longer overridden, so what follows writes into an
@@ -1412,7 +1451,8 @@ async def _post_device_wifi(request: web.Request) -> web.Response:
     if ssid_hex:
         change["ssid_hex"] = ssid_hex
     await live.send_control(change)
-    db.log_device(device_id, "info", "controller", f'WiFi change to "{ssid}" requested')
+    em_dbwriter.submit(db.log_device, device_id, "info", "controller",
+                       f'WiFi change to "{ssid}" requested')
     await _push_event({"type": "device_update", "device_id": device_id,
                        "state": {"wifi": st}})
     return _ok({"device_id": device_id, "ssid": ssid, "status": "switching"},
@@ -1573,7 +1613,7 @@ async def _post_device_update(request: web.Request) -> web.Response:
 
     if upload_token:
         _pending_uploads.pop(upload_token, None)
-    asyncio.create_task(_run_update(device_id, release, binary_override))
+    em_tasks.spawn(_run_update(device_id, release, binary_override))
     return _ok({"status": "started", "version": release["version"]}, status=202)
 
 
@@ -1603,7 +1643,7 @@ async def _post_device_rollback(request: web.Request) -> web.Response:
     if device_id in _updates_in_progress or device_id in _updates_queued:
         return _error("update_in_progress", "An update is already in progress", 409)
 
-    asyncio.create_task(_run_rollback(device_id, row["firmware_previous"]))
+    em_tasks.spawn(_run_rollback(device_id, row["firmware_previous"]))
     return _ok({"status": "started", "rolling_back_to": row["firmware_previous"]}, status=202)
 
 
@@ -1642,7 +1682,7 @@ async def _post_upload_binary(request: web.Request) -> web.Response:
         async def _expire():
             await asyncio.sleep(600)
             _pending_uploads.pop(token, None)
-        asyncio.create_task(_expire())
+        em_tasks.spawn(_expire())
 
         # The version rides back so the dashboard can say what was uploaded,
         # and warn against a device already running it BEFORE the operator
@@ -3090,7 +3130,7 @@ async def _post_deploy_all(request: web.Request) -> web.Response:
             skipped.append({"device_id": device_id, "reason": "update_in_progress"})
             continue
 
-        asyncio.create_task(_run_update(device_id, release, binary_override))
+        em_tasks.spawn(_run_update(device_id, release, binary_override))
         started.append(device_id)
 
     return _ok({
@@ -3308,26 +3348,35 @@ async def _get_provision_controller_endpoints(request: web.Request) -> web.Respo
 
 
 @auth.require_admin
-async def _post_secure_link(request: web.Request) -> web.Response:
+async def _post_pair(request: web.Request) -> web.Response:
     """
-    POST /api/devices/{id}/secure_link
+    POST /api/devices/{id}/pair — approve a pairing request. ADMIN ONLY.
 
-    Fleet path for already-provisioned devices: pushes ca.pem + token to
-    the device over the (still-plain) shell plane, then bounces the
-    control connection so the device redials — over wss, now that the CA
-    file exists. Requires the device to be connected.
+    Only answers a request the device made (its owner held the action button),
+    so a click cannot hand credentials to whatever happens to hold a device's
+    connection. A connected device is issued them now; one that could not
+    connect is issued them when it next dials within its window.
     """
     if _tls_dir is None:
         return _error("tls_unavailable",
                       "Device-link TLS is not active on this controller", 503)
     device_id = request.match_info["id"]
     live = _devices.get(device_id)
-    if live is None:
-        return _error("device_offline", f"Device not connected: {device_id}", 409)
-
-    task = asyncio.create_task(_run_secure_link(device_id))
-    task.add_done_callback(_log_task_exception_api)
-    return _ok({"started": True})
+    # Firmware without `pairing` cannot ask, so for a connected device whose
+    # link is plain the admin's click is the request. It goes away as devices
+    # update; firmware that CAN ask must, so the button on the device is
+    # always part of it there.
+    can_ask = live is None or getattr(live, "pairing_capable", False)
+    admin_started = (not can_ask) and not getattr(live, "secure", False)
+    if em_pairing.pending_request(device_id) is None and not admin_started:
+        return _error("no_pair_request",
+                      "This Echo has not asked to pair. Hold its action button "
+                      "for 5 seconds, then approve it here.", 409)
+    em_pairing.approve(device_id)
+    if live is not None:
+        em_tasks.spawn(_issue_credentials(device_id))
+    log.info(f"[api] {request['user']['username']} approved pairing for {device_id}")
+    return _ok({"approved": True, "connected": live is not None})
 
 
 @auth.require_admin
@@ -3368,29 +3417,32 @@ async def _post_debloat(request: web.Request) -> web.Response:
     # acquire and release the session in their own finally, which is why
     # _sync_start_script does not either. Releasing it from out here could close
     # a session a concurrent caller had opened.
-    task = asyncio.create_task(_sync_debloat(live, device_id))
-    task.add_done_callback(_log_task_exception_api)
+    em_tasks.spawn(_sync_debloat(live, device_id))
     return _ok({"started": True})
 
 
-def _log_task_exception_api(task: asyncio.Task) -> None:
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        log.error(f"[api] Unhandled exception in background task: {exc}", exc_info=exc)
+async def _issue_credentials(device_id: str) -> None:
+    """
+    Background task: give a live, approved device a fresh token and the CA.
 
-
-async def _run_secure_link(device_id: str) -> None:
-    """Background task: install TLS credentials on a live device."""
+    Called only behind an admin approval (em_pairing): this writes the token
+    to whatever holds the device's connection, so it must never run for a
+    connection nobody vouched for. The token is ROTATED, not reused, so a token
+    that may have leaked before is dead the moment this runs, and the new one
+    starts unconfirmed.
+    """
     loop = asyncio.get_event_loop()
     live = _devices.get(device_id)
-    if live is None:
+    if live is None or _tls_dir is None:
         return
     try:
         await _push_log_event(device_id, "info", "controller",
-                              "Secure link: pushing TLS credentials")
-        token = await loop.run_in_executor(None, db.ensure_device_token, device_id)
+                              "Pairing: installing link credentials")
+        # Minted here and stored only once the device has it. The push rides
+        # the shell plane, which the device dials with its CURRENT token, so
+        # storing the new one first refused the push on any device that was
+        # connected over wss (found on 15LE, 2026-09-26).
+        token = secrets.token_urlsafe(32)
         ca    = em_pki.ca_pem(_tls_dir)
 
         await _shell_run(live, f"mkdir -p {DEVICE_TLS_DIR}")
@@ -3404,12 +3456,14 @@ async def _run_secure_link(device_id: str) -> None:
                 live, token.encode("ascii"), f"{DEVICE_TLS_DIR}/token", mode="600")
         if not ok:
             await _push_log_event(device_id, "error", "controller",
-                                  f"Secure link: credential transfer failed: {ok}")
+                                  f"Pairing: credential transfer failed: {ok}")
             return
 
+        await loop.run_in_executor(None, db.set_device_token, device_id, token)
+        em_pairing.done(device_id)
         await _push_log_event(
             device_id, "info", "controller",
-            "Secure link: credentials installed — bouncing connection to switch to wss")
+            "Pairing: credentials installed — reconnecting over TLS")
         # The Go client reloads credentials on every dial, so a reconnect
         # is enough to move to the TLS listener.
         try:
@@ -3417,9 +3471,9 @@ async def _run_secure_link(device_id: str) -> None:
         except Exception:
             pass
     except Exception as e:
-        log.exception(f"[api] Secure link failed for {device_id}: {e}")
+        log.exception(f"[api] Issuing credentials failed for {device_id}: {e}")
         await _push_log_event(device_id, "error", "controller",
-                              f"Secure link failed: {e}")
+                              f"Pairing failed: {e}")
 
 
 # ─── System ───────────────────────────────────────────────────────────────────
@@ -3497,8 +3551,7 @@ async def _get_system_status(request: web.Request) -> web.Response:
             if _controller_cache.get("available") else None,
         "updates_available": sum(
             1 for r in all_rows
-            if r["firmware_ver"] and release
-            and r["firmware_ver"] != release["version"]
+            if release and _firmware_update(r["firmware_ver"], release["version"])
         ),
     })
 
@@ -3680,6 +3733,8 @@ async def _post_global_config(request: web.Request) -> web.Response:
     _resolve_console_pw(config, stored)
     if (err := _validate_console_timeout(config)):
         return _error("bad_console_timeout", err, 400)
+    if (bad := em_config_types.problems(config, stored)):
+        return _error("bad_config_value", "; ".join(bad), 400)
     endpoints_before = stored.get("controllerEndpoints") or []
     if "controllerEndpoints" in config:
         eps, err = em_endpoints.normalise(
@@ -3717,8 +3772,7 @@ async def _post_global_config(request: web.Request) -> web.Response:
         # which must not be skipped by a reconcile stamp from before the change.
         _last_reconcile.clear()
         for device_id, live in list(_devices.items()):
-            task = asyncio.create_task(_push_controller_endpoints(live, device_id))
-            task.add_done_callback(_log_task_exception_api)
+            em_tasks.spawn(_push_controller_endpoints(live, device_id))
 
     # Reconcile BT proxies for every approved device — offline ones included
     # (proxy mDNS/port lifecycle is independent of the device connection,
@@ -3761,9 +3815,11 @@ async def _post_change_password(request: web.Request) -> web.Response:
         return _error("invalid_credentials", "Current password is incorrect", 401)
 
     new_hash = await auth.hash_password_async(new_password)
-    await loop.run_in_executor(None, db.update_user_password, user["id"], new_hash)
+    revoked = await loop.run_in_executor(
+        None, lambda: db.update_user_password(
+            user["id"], new_hash, keep_session=user["token"]))
     log.info(f"[api] Password changed for user: {user['username']}")
-    return _ok({"ok": True})
+    return _ok({"ok": True, "sessions_ended": revoked})
 
 
 # ─── Live events WebSocket ────────────────────────────────────────────────────
@@ -3818,14 +3874,7 @@ async def _push_event(event: dict) -> None:
     """
     if not _event_clients:
         return
-    payload = json.dumps(event)
-    dead = set()
-    for ws in _event_clients:
-        try:
-            await ws.send_str(payload)
-        except Exception:
-            dead.add(ws)
-    _event_clients.difference_update(dead)
+    await em_broadcast.broadcast(_event_clients, json.dumps(event))
 
 
 async def _push_log_event(
@@ -3836,9 +3885,12 @@ async def _push_log_event(
 ) -> None:
     """
     Persist a controller-generated log entry and push it to event clients.
+
+    The write is queued (em_dbwriter), not awaited: this is called inline from
+    each device's control handler for every relayed log line, and awaiting the
+    write held that device's pongs and wake events behind it.
     """
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, db.log_device, device_id, level, source, message)
+    em_dbwriter.submit(db.log_device, device_id, level, source, message)
     await _push_event({
         "type":      "device_log",
         "device_id": device_id,
@@ -3974,35 +4026,16 @@ async def _fetch_latest_release(force: bool = False) -> Optional[dict]:
                     return None
                 releases = await resp.json()
 
-        # Newest device firmware release: plain v* tag (controller releases
-        # use controller-v* and ship no binary), published, with the compiled
-        # `server` asset attached. The list is newest-first.
-        tag = None
-        binary = None
-        # Initialised explicitly: it is only assigned inside the loop, and
-        # while the `binary is None` return below happens to cover that today,
-        # relying on one guard to protect another variable is how a later edit
-        # introduces a NameError on a path nobody runs in testing.
-        release: dict = {}
-        for data in releases:
-            if data.get("draft") or data.get("prerelease"):
-                continue
-            candidate_tag = data.get("tag_name", "")
-            if not candidate_tag.startswith("v"):
-                continue
-            candidate_binary = next(
-                (a for a in data.get("assets", []) if a.get("name") == "server"),
-                None,
-            )
-            if candidate_binary is None:
-                continue
-            tag, binary = candidate_tag, candidate_binary
-            release = data
-            break
-
-        if binary is None:
+        # Newest device firmware release this controller may offer: a GA
+        # controller only GA (vX.Y.Z), an EA or dev controller EA
+        # (vX.Y.Z-ea.N, published as a prerelease) too. Controller releases
+        # use controller-v* and ship no binary.
+        release = _choose_firmware_release(releases, _offers_ea_firmware())
+        if release is None:
             log.warning("[api] No device firmware release with a 'server' asset found")
             return None
+        tag = release["tag_name"]
+        binary = next(a for a in release["assets"] if a.get("name") == "server")
 
         download_url = binary["browser_download_url"]
 
@@ -4148,6 +4181,7 @@ async def _fetch_controller_release(force: bool = False) -> Optional[dict]:
         return _controller_cache or None
 
 
+@auth.require_auth
 async def _get_controller_release(request: web.Request) -> web.Response:
     """GET /api/releases/controller"""
     data = await _fetch_controller_release()
@@ -4327,7 +4361,7 @@ async def _install_then_switch(device_id: str, model: str) -> None:
                  f"— dropping the switch to {model}")
         return
 
-    await live.send_control({"type": "config", **effective})
+    await live.send_control({"type": "config", **_well_typed(device_id, effective)})
     live.oww_model = model
     import em_esphome
     await em_esphome.update_oww_model(device_id, model)
@@ -4597,7 +4631,7 @@ async def reconcile_oww_assets(device_id: str, live) -> None:
     if action == "deaf":
         # The device builds its scorer from the config push, so it needs telling
         # the model is now there — same mechanism _install_then_switch relies on.
-        await live.send_control({"type": "config", **effective})
+        await live.send_control({"type": "config", **_well_typed(device_id, effective)})
         await _push_log_event(
             device_id, "info", "controller",
             f"Wake word model {missing} installed — listening for its wake word again"
@@ -4723,6 +4757,7 @@ async def _sync_oww_assets_locked(live, device_id: str, progress=None) -> dict:
     return {"ok": True, "pushed": pushed, "pruned": plan.prune, "problems": problems}
 
 
+@auth.require_auth
 async def _get_oww_assets(request: web.Request) -> web.Response:
     """GET /api/devices/{id}/oww_assets — what is installed, and what is needed."""
     device_id = request.match_info["id"]
@@ -5754,12 +5789,21 @@ async def notify_device_connected(device_id: str, version: str | None = None) ->
             except Exception as e:
                 log.warning(f"[api] supervisor log fetch failed for {_id}: {e}")
 
-        asyncio.create_task(_collect_soon())
+        em_tasks.spawn(_collect_soon())
 
 
 async def notify_device_disconnected(device_id: str) -> None:
     """Called by em_controller when a device disconnects."""
     await _push_event({"type": "device_disconnected", "device_id": device_id})
+
+
+async def notify_pair_request(device_id: str, via: str) -> None:
+    """A device asked to pair; the dashboard offers Approve pairing."""
+    if em_pairing.request(device_id, via):
+        log.info(f"[api] {device_id} asked to pair ({via})")
+        await _push_log_event(device_id, "info", "controller",
+                              "Asked to pair — approve it in the dashboard")
+        await _push_event({"type": "device_pair_request", "device_id": device_id})
 
 
 async def notify_device_pending(device_id: str, ip: str) -> None:
@@ -5887,6 +5931,20 @@ def _row_sections(row) -> list:
         return []
 
 
+# device_id -> {"reason", "at"}: the last link refusal for a device on record,
+# until it next registers. In memory on purpose: a refused device retries every
+# few seconds, so a restarted controller has it back within one retry.
+_link_refusals: dict[str, dict] = {}
+
+
+def note_link_refused(device_id: str, reason: str) -> None:
+    _link_refusals[device_id] = {"reason": reason, "at": time.time()}
+
+
+def clear_link_refused(device_id: str) -> None:
+    _link_refusals.pop(device_id, None)
+
+
 def _merge_device(row) -> dict:
     """
     Merge a DB device row with live in-memory state.
@@ -5911,6 +5969,11 @@ def _merge_device(row) -> dict:
         "ip":                 row["ip"],
         "firmware_ver":       row["firmware_ver"],
         "firmware_previous":  row["firmware_previous"],
+        # Whether the offered release is newer than what this device runs,
+        # by version rather than string (EA firmware on a GA controller is
+        # ahead of the GA release, not behind it).
+        "firmware_update":    _firmware_update(row["firmware_ver"],
+                                               _release_cache.get("version")),
         "first_seen":         row["first_seen"],
         "last_seen":          row["last_seen"],
         "config":             json.loads(row["config"] or "{}"),
@@ -5959,6 +6022,10 @@ def _merge_device(row) -> dict:
         # current control connection came in over the TLS listener (live).
         "linkTokenIssued":  bool(row["token"]) if "token" in row.keys() else False,
         "linkTls":          getattr(live, "secure", False) if live else False,
+        # Why the controller is turning this device away, while it is.
+        "linkRefused":      _link_refusals.get(device_id),
+        # The device's owner held its button and it is waiting for Approve.
+        "pairRequest":      em_pairing.pending_request(device_id),
         # Q4 fix (2026-07-05 review): near-miss counter — same lifecycle as
         # the rest of this "Live" section (resets on reconnect, since it
         # lives on the per-connection Device object, not the DB row).
@@ -5975,6 +6042,9 @@ def _merge_device(row) -> dict:
         # without being able to act on it, and offering those "on" produces a
         # device that never answers.
         "owwTriggerCapable": getattr(live, "oww_trigger_capable", False) if live else False,
+        # Firmware that asks to pair itself (the owner holds the button); for
+        # older firmware on a plain link the dashboard offers Pair instead.
+        "pairingCapable":   getattr(live, "pairing_capable", False) if live else False,
         # What this Echo is actually doing with its microphone
         # (docs/listening.md, em_listen.resolve) — the one source for every
         # privacy statement the dashboard makes. `streams` is true, false, or

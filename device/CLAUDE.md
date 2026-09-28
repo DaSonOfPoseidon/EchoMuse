@@ -857,9 +857,20 @@ Why this shape: Bermuda (source, 2026-07) re-decides areas every 1.05s,
 refuses adverts older than 10s for an area contest and calls a device away
 after 30s, and even a continuous scan gave nearby devices a fresh advert in
 only 35-77% of its cycles. A voice turn's few seconds fit that; music does
-not (hours), so music does NOT yield, and a controller-scoring device's
-always-on stream does not count as a turn. Remaining idle loss (pings,
-keepalives) is for TCP tolerance to absorb, not the scanner.
+not (hours), so music gets BURSTS instead of a yield (`bluetooth.MusicDuty`,
+2026-09-27): 2s of scan every 7s, and none while less than 2.5s of music is
+buffered. The 7s cycle sits inside Bermuda's 10s area age for any device that
+advertises within the 2s burst. Scanning straight through music was the
+earlier rule and it failed: on VVV with Music Assistant, 23 RTT excursions
+over 250ms in 2.7 min (worst 2.1s) and 15+ audible dropouts, none with the
+proxy off. Music Assistant hands an HA media player a flow stream at 1.03x
+real time after a 3s burst, so the buffer never holds more than ~5s and cannot
+ride out a 2s stall. **Known gap:** the controller paces music from a clock
+estimate, not from the device's buffer, so after a real dropout the buffer
+stays low for the rest of that stream and the 2.5s floor keeps the scan off
+until it ends. The fix is a device-reported buffer level. A controller-scoring
+device's always-on stream does not count as a turn. Remaining idle loss
+(pings, keepalives) is for TCP tolerance to absorb, not the scanner.
 
 **The mechanism was our own traffic on the liveness channel.**
 `SendBleAdverts` wrote to the CONTROL WebSocket through `writeJSON`, which
@@ -1123,6 +1134,31 @@ Playback ring clearing waits for the device's `playback_stats` (`device.playback
   live**: the ADC mute is hardware and its button LED is a GPIO, so it is the
   one control that works with no controller at all — and making it inert would
   hand back a live mic on reconnect, since mute is persisted in `state.json`.
+  **One action-button gesture is handled BEFORE that gate: a 5 s hold asks
+  to pair** (`client.PairHold` → `StartPairing`, `internal/client/pairing.go`),
+  since the device that cannot connect is the one that needs it. The press is
+  forwarded as usual (the controller ignores presses); the release ending the
+  hold is swallowed so it does not also reach HA as a long press. The window
+  is two minutes and closes early when the credential files change — the
+  approval installs new ones and bounces the link, and a redial still
+  carrying `pairing` would raise a second request for a device already paired.
+  **Three link rings, and they must stay three.** Orange pulse: no controller
+  answered. Orange with odd and even LEDs alternating: a controller answered
+  and refused this device (`errRefused`: a certificate our CA did not sign, or
+  the controller's `refused` message), which the owner fixes by holding the
+  button. White pulse: pending approval. The first two looked identical until
+  2026-09-26, so a device that needed pairing looked like one waiting for its
+  network. Run keeps whichever held state it is in across redials (`held`).
+- **On a FireOS 6 kernel the mute button LED is Amazon's, not ours.** Its
+  `amz_privacy` driver (`amz_priv.c`) owns gpio444, toggles its own state on
+  every mute release, can be put INTO privacy from software
+  (`privacy_trigger`) but never out, and always boots unmuted. So after a
+  reboot while muted the two ran opposite for good, including a lit button
+  over a live mic (15LE, 2026-09-26). `internal/bindings/led/privacy.go`
+  finds it by name; `server/privacy.go` reconciles after every press and at
+  boot, and every disagreement resolves to muted. FireOS 5's kernel has no
+  such driver and we drive gpio444 ourselves. Never read its
+  `power_button_state`: it blocked the console.
 - **Mute ring** (solid red) is device-sovereign — enforced since v2.7.8: controller LED writes are recorded but not painted while muted. Needed because muting now terminates an active turn (controller cancels + `speaker_flush` on `mute_state`), so the cancelled turn's LED cleanup arrives after the red ring is up.
 - **Volume arc** owns the ring for its 2s display window against *animations* — they repaint ~every 100ms and would otherwise stomp the arc within one frame. It does **not** outrank a deliberate action-button press: a dot release calls `CancelVolumeDisplay()`, which drops the hold so the listening frame paints (it deliberately does not repaint — the controller's frame lands within an RTT, and clearing to black would put a dark gap between the two). The arc is protection from repaint churn, not from the user. On expiry the ring repaints the latest `baseLEDs` frame (`onDisplayExpire` → `paintBaseLEDs`), handing back mid-animation. The arc shows only for physical volume button presses (v2.9.5): remote sets and the boot-time volume seed apply silently (`volumeController.Set` showRing flag). The mute-button LED is sysfs gpio444, active-high — not the gpio445 in Amazon's `libled_hal.so`, whose constant is off by one and whose pad is muxed away (stock drives the pin via the `/dev/mtgpio` ioctl; see `mute_button.go`).
 
