@@ -1740,19 +1740,9 @@ def get_device_config(device_id: str) -> dict:
         return dict(DEFAULT_DEVICE_CONFIG)
 
 
-# Devices Home Assistant has turned the wake word off for, through its own
-# Wake word picker (#286). Stored because HA restores the picker's state on
-# its side but never sends it back: on reconnect it reads what the controller
-# reports and shows that. So the controller is the only copy, and held only
-# in memory, a controller restart would turn detection back on.
-#
-# NOT a device config key, although a per-device boolean looks like one.
-# Config POSTs replace the stored dict with whatever the dashboard last
-# loaded, so a dashboard left open across an HA change would write the stale
-# value back on its next save; and a fleet value would turn every device off
-# at once. Nothing but the picker may write this, so it lives where no config
-# path reaches. One row holding a list, rather than a row per device, keeps
-# it out of the /api/system/config listing's way.
+# Devices HA's wake word picker has turned off (#286). Stored because HA
+# never sends the picker's state back. Not a config key: a dashboard save
+# would overwrite it with whatever that page last loaded.
 _WAKE_WORD_OFF_KEY = "wake_word_off"
 
 
@@ -1986,8 +1976,7 @@ def delete_device(device_id: str) -> None:
     with _tx() as conn:
         conn.execute("DELETE FROM device_logs WHERE device_id = ?", (device_id,))
         conn.execute("DELETE FROM devices WHERE device_id = ?", (device_id,))
-    # A re-added device is a new one to HA and must start listening, not
-    # inherit a choice made for the identity that was deleted.
+    # A re-added device is new to HA, so it starts listening.
     set_wake_word_enabled(device_id, True)
     try:
         removed = em_recordings.delete_device(device_id)

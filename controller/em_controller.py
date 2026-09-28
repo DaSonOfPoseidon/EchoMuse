@@ -462,10 +462,7 @@ class Device:
         # Transient state — read by em_api._merge_device()
         self.speaking  = False
         self.muted     = False
-        # HA's wake word picker (#286), on meaning listening. The stored
-        # copy (db.get_wake_word_enabled) is the truth; this is seeded from
-        # it at connect and set by _set_wake_word. The default is ON — a
-        # device nobody has told otherwise listens.
+        # HA's wake word picker (#286); seeded from the DB at connect.
         self.wake_word_enabled = True
         self.listening = False
         self.thinking  = False
@@ -1125,13 +1122,8 @@ class Device:
         await self.send_control({"type": "ping"})
 
     async def mic_start(self):
-        # The wake stream stays down while HA has the wake word off (#286).
-        # This is the gate rather than each of the call sites that restart
-        # the stream after a turn, an announcement, an alarm or a barge —
-        # the same shape as the device refusing mic_start under the mute
-        # button. The turn stream (mic_start_turn) is deliberately not
-        # gated: an HA-initiated turn is HA's own decision, the same as it
-        # is under the button mute.
+        # One gate for every call site that restarts the wake stream (#286).
+        # mic_start_turn is not gated: an HA-initiated turn is HA's decision.
         if not self.wake_word_enabled:
             log.debug(f"[{self.device_id}] mic_start skipped — wake word off")
             return
@@ -3086,13 +3078,8 @@ async def _private_wake_turn(device: Device, ev: dict) -> None:
         await device.listen_close(session, "muted")
         return
     if not device.wake_word_enabled:
-        # HA's wake word picker is on "No wake word" (#286). The stream path
-        # is gated by the wake listener, but here the Echo scores the wake
-        # word itself, and the mic_stop that turning it off sends ends
-        # neither a session nor local listening — so a private wake has to
-        # be declined one at a time, until the device can be told to stop
-        # scoring.
-        # A reason of its own, not "muted": the button did not do this.
+        # The Echo scores its own wake word and mic_stop doesn't stop that,
+        # so each private wake is declined until the device can be told.
         await device.listen_close(session, "wake_off")
         return
     if ev["floor"] is not None:
@@ -3342,7 +3329,7 @@ async def _stream_listen(device: Device):
                         device.oww_paused.clear()
                         device.oww_paused_since = None
                     continue
-                if not em_wakeword.wake_allowed(hard=device.muted,
+                if not em_wakeword.wake_allowed(mic_muted=device.muted,
                                                 enabled=device.wake_word_enabled):
                     # Hardware mute is device-sovereign: the device rejects
                     # every mic_start while muted, so a silent stream is the
@@ -3350,9 +3337,7 @@ async def _stream_listen(device: Device):
                     # 10s. The device restarts its own wake stream on unmute
                     # (and device.muted clears with the mute_state message),
                     # so the watchdog resumes naturally if that ever fails.
-                    # The wake word being off is the same silence, stopped
-                    # by us: the watchdog restarting the stream would undo
-                    # HA's choice.
+                    # Same for the wake word being off (#286).
                     dead_streak = 0
                     continue
                 # #299: "no frames" has two causes, and the ladder below
@@ -3427,7 +3412,7 @@ async def _stream_listen(device: Device):
             if device.oww_paused.is_set():
                 continue
 
-            if not em_wakeword.wake_allowed(hard=device.muted,
+            if not em_wakeword.wake_allowed(mic_muted=device.muted,
                                             enabled=device.wake_word_enabled):
                 buf.clear()
                 device.wake_levels.clear()
@@ -4275,11 +4260,7 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
         device.oww_speex_ns  = bool(config.get("owwSpeexNs", False))
         device.ns_asr        = bool(config.get("nsAsr", False))
         device.save_utterances = bool(config.get("saveUtterances", False))
-        # HA's wake word picker (#286). Stored, not config: see
-        # em_db.get_wake_word_enabled. Seeded before the wake listener starts
-        # so its mic_start is skipped, and handed to the ESPHome server before
-        # its port comes up; the device does not start a wake stream on its
-        # own at connect, so nothing needs stopping here.
+        # Seeded before the wake listener starts, so its mic_start is skipped.
         device.wake_word_enabled = await loop.run_in_executor(
             None, db.get_wake_word_enabled, device_id
         )
@@ -4425,25 +4406,16 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                 await _d.mic_stop()
                 await _d.mic_start()
         def _set_wake_word(on: bool, _d=_device_ref) -> None:
-            # HA's wake word picker (#286). The decision is em_wakeword's;
-            # this applies it, SYNCHRONOUSLY up to the state: HA reads the
-            # configuration back straight behind its write, so the gate, the
-            # server's copy and the stored one must all hold the new value
-            # before the handler that called this yields. The stored write
-            # is inline rather than in an executor for ordering as much as
-            # timing — two quick picks each sent to a thread could land in
-            # either order and store the one HA moved away from. It is one
-            # small row, on a person's action. The stream commands and the
-            # dashboard push follow in a task.
-            # Nothing is painted — the ring deliberately says nothing about
-            # this, and HA driving the idle ring is #66.
-            hard, enabled = esphome.get_mute_and_wake(_d.device_id)
-            t = em_wakeword.on_request(want=on, enabled=enabled, hard=hard)
+            # HA's wake word picker (#286). State is set before returning,
+            # because HA reads the configuration back straight after writing
+            # it; the stored write is queued in order, the stream follows.
+            mic_muted, enabled = esphome.get_mic_muted_and_wake_word(_d.device_id)
+            t = em_wakeword.on_request(want=on, enabled=enabled, mic_muted=mic_muted)
             if not t.changed:
                 return
             _d.wake_word_enabled = t.enabled
             esphome.update_wake_word(_d.device_id, t.enabled)
-            db.set_wake_word_enabled(_d.device_id, t.enabled)
+            em_dbwriter.submit(db.set_wake_word_enabled, _d.device_id, t.enabled)
             log.info(f"[{_d.device_id}] Wake word {'on' if t.enabled else 'off'} (Home Assistant)")
 
             async def _follow() -> None:
@@ -4456,7 +4428,7 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                     "device_id": _d.device_id,
                     "state":     {"wake_word_enabled": t.enabled},
                 })
-            asyncio.create_task(_follow()).add_done_callback(_log_task_exception)
+            em_tasks.spawn(_follow())
         # Capabilities before the servers come up: they decide which HA
         # entities are advertised, and advertising is a one-shot at
         # ListEntities time.
@@ -4554,25 +4526,14 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
 
                     elif msg_type == "mute_state":
                         device.muted = msg.get("muted", False)
-                        # The button and HA's wake word picker are
-                        # INDEPENDENT (#286): a press in either direction
-                        # leaves the wake word exactly where HA put it, so
-                        # nothing here assigns wake_word_enabled.
-                        #
-                        # The STREAM is the button's, though. The device
-                        # stops its own wake stream on mute and restarts it
-                        # on unmute (cmd/server.go), so an unmute with the
-                        # wake word off brings up a stream whose frames the
-                        # listener only discards — take it back down. The
-                        # hard state is compared against the server's copy,
-                        # not this Device's default: the device re-sends
-                        # mute_state on every reconnect, and that is not a
-                        # press.
-                        hard_before, wake_on = esphome.get_mute_and_wake(device_id)
-                        esphome.update_mute_state(device_id, device.muted)
-                        if em_wakeword.on_hard_mute(hard_before=hard_before,
-                                                    hard_now=device.muted,
-                                                    enabled=wake_on):
+                        # The mic mute button never moves the wake word
+                        # (#286), but the device restarts its wake stream on
+                        # unmute, so take it back down if the wake word is off.
+                        was_muted, wake_on = esphome.get_mic_muted_and_wake_word(device_id)
+                        esphome.update_mic_muted(device_id, device.muted)
+                        if em_wakeword.on_mic_mute(was_muted=was_muted,
+                                                   now_muted=device.muted,
+                                                   enabled=wake_on):
                             log.info(f"[{device_id}] Unmuted with the wake word off "
                                      f"— stopping the stream the device restarted")
                             await device.mic_stop()
