@@ -49,6 +49,19 @@ def requested_on(requested: list[str], model_id: str) -> bool | None:
     return None
 
 
+def decline_off(*, want: bool, listening_locally: bool, device_can: bool) -> bool:
+    """
+    Whether to refuse HA's "No wake word" for this Echo.
+
+    A privately listening Echo detects its own wake word, opens a session and
+    starts sending before the controller can close it. Firmware announcing
+    `wake_word_off` stops at the crossing; older firmware cannot, so off is
+    declined there and HA's re-read snaps the picker back. Turning it on is
+    never refused, and an Echo streaming to the controller is stopped here.
+    """
+    return not want and listening_locally and not device_can
+
+
 def on_request(*, want: bool, enabled: bool, mic_muted: bool) -> Transition:
     """HA's picker asked for `want`, with the wake word `enabled` and the mic
     mute button `mic_muted`."""

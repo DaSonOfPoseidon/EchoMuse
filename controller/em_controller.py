@@ -1011,6 +1011,15 @@ class Device:
         return "wake_cue" in (self.capabilities or [])
 
     @property
+    def wake_word_off_capable(self) -> bool:
+        """
+        Whether this firmware honours wakeWordEnabled=false (#286): a
+        crossing opens no session, so a privately listening Echo sends
+        nothing while HA's picker says "No wake word".
+        """
+        return "wake_word_off" in (self.capabilities or [])
+
+    @property
     def oww_trigger_capable(self) -> bool:
         """
         Whether this firmware can ACT on its own wake detection.
@@ -4264,6 +4273,10 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
         device.wake_word_enabled = await loop.run_in_executor(
             None, db.get_wake_word_enabled, device_id
         )
+        # Not a config key (em_db keeps it apart from the dashboard's copy),
+        # so it is sent on its own. The device boots with it on.
+        if device.wake_word_off_capable:
+            await device.push_config(wakeWordEnabled=device.wake_word_enabled)
         device.stream_reply = bool(config.get("streamReply", False))
         device.barge_in_enabled = bool(config.get("bargeInEnabled", False))
         device.barge_threshold  = float(config.get("bargeInThreshold", 0.6))
@@ -4410,6 +4423,12 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
             # because HA reads the configuration back straight after writing
             # it; the stored write is queued in order, the stream follows.
             mic_muted, enabled = esphome.get_mic_muted_and_wake_word(_d.device_id)
+            if em_wakeword.decline_off(want=on,
+                                       listening_locally=_d.listen_reported == "local",
+                                       device_can=_d.wake_word_off_capable):
+                log.info(f"[{_d.device_id}] Wake word off declined — this "
+                         f"firmware would still send audio on each wake")
+                return
             t = em_wakeword.on_request(want=on, enabled=enabled, mic_muted=mic_muted)
             if not t.changed:
                 return
@@ -4419,6 +4438,8 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
             log.info(f"[{_d.device_id}] Wake word {'on' if t.enabled else 'off'} (Home Assistant)")
 
             async def _follow() -> None:
+                if _d.wake_word_off_capable:
+                    await _d.push_config(wakeWordEnabled=t.enabled)
                 if t.stop_stream:
                     await _d.mic_stop()
                 if t.start_stream:

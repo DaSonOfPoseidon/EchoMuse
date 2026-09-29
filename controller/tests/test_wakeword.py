@@ -153,3 +153,24 @@ def test_wake_is_allowed_only_when_listening_and_unmuted():
     assert em_wakeword.wake_allowed(mic_muted=True, enabled=True) is False
     assert em_wakeword.wake_allowed(mic_muted=False, enabled=False) is False
     assert em_wakeword.wake_allowed(mic_muted=True, enabled=False) is False
+
+
+# ── Off, for an Echo that listens privately ──────────────────────────────────
+
+def test_off_is_declined_on_firmware_that_would_still_send():
+    """An older privately listening Echo opens a session and streams before
+    the controller can close it, so "No wake word" would be a false claim."""
+    assert em_wakeword.decline_off(want=False, listening_locally=True, device_can=False)
+
+
+def test_off_is_accepted_where_the_device_stops_at_the_crossing():
+    assert not em_wakeword.decline_off(want=False, listening_locally=True, device_can=True)
+
+
+def test_off_is_accepted_for_an_echo_streaming_to_the_controller():
+    """mic_stop is enough when the controller does the listening."""
+    assert not em_wakeword.decline_off(want=False, listening_locally=False, device_can=False)
+
+
+def test_on_is_never_declined():
+    assert not em_wakeword.decline_off(want=True, listening_locally=True, device_can=False)
