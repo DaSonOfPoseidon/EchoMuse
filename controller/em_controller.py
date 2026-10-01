@@ -94,6 +94,7 @@ import em_limiter
 import em_mbc
 import em_scenes
 import em_shadow
+import em_health
 import em_oww_warmup
 import em_barge
 import em_arbiter
@@ -417,6 +418,11 @@ class Device:
         # existing fleet exactly as it was.
         self._base_os: str | None = None
         self.kernel_arch: str | None = None
+        # From the register message (schema v28): see em_health.
+        self.boot_reason: str | None = None
+        # The last eMMC wear row written, as (day, values), so a reading that
+        # has not changed since is not rewritten every stats tick.
+        self.wear_written: tuple | None = None
         self.kernel_release: str | None = None
 
         self.data_ws: WebSocketServerProtocol | None = None
@@ -4195,6 +4201,14 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
         device.kernel_release = msg.get("kernel_release") or None
         if device.kernel_arch:
             em_dbwriter.submit(db.set_device_kernel, device_id, device.kernel_arch, device.kernel_release or "")
+        # How this boot started and the eMMC's wear (schema v28), one row per
+        # boot_id: a device re-registers on every redial. Held live too, so
+        # the dashboard shows them without a query. Absent on older firmware.
+        device.boot_reason = msg.get("boot_reason") or None
+        if isinstance(msg.get("boot_id"), str) and msg["boot_id"]:
+            em_dbwriter.submit(db.record_boot, device_id, msg["boot_id"],
+                               msg.get("version"), device.boot_reason)
+        _note_wear(device, msg.get("emmc"))
         # Link-security telemetry for the dashboard: True when this control
         # connection arrived over the TLS listener.
         device.secure = secure
@@ -4555,6 +4569,9 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                     elif msg_type == "stats":
                         if "sendspin" in msg:
                             device.sendspin = msg.get("sendspin")
+                        # eMMC wear, re-read on the device every few hours;
+                        # one row per day (schema v28), written on change.
+                        _note_wear(device, msg.get("emmc"))
                         device.stats = {
                             "cpuPct":        msg.get("cpuPct"),
                             "memUsedMb":     msg.get("memUsedMb"),
@@ -5084,6 +5101,18 @@ async def _release_device_services(device) -> None:
         raise
     except Exception as e:
         log.error(f"[{device.device_id}] delayed service release failed: {e}")
+
+
+def _note_wear(device, emmc) -> None:
+    """Store the day's eMMC wear reading, only when the day or the reading changes."""
+    values = em_health.wear_values(emmc)
+    if values is None:
+        return
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    if device.wear_written == (day, values):
+        return
+    device.wear_written = (day, values)
+    em_dbwriter.submit(db.record_wear, device.device_id, day, values)
 
 
 # ─── Data plane handler ───────────────────────────────────────────────────────
