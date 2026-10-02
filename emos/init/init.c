@@ -1885,7 +1885,7 @@ static void net_main(void)
 
     char *dhcp_fos5[] = { "/system/bin/dhcpcd", "-ABK", "-f",
                           "/system/etc/dhcpcd/dhcpcd.conf", "wlan0", NULL };
-    char *dhcp_fos6[] = { "/sbin/udhcpc", "-f", "-i", "wlan0",
+    char *dhcp_fos6[] = { "/sbin/udhcpc", "-B", "-f", "-i", "wlan0",
                           "-s", (char *)UDHCPC_SCRIPT, NULL };
     char **dhcp = vendor ? dhcp_fos6 : dhcp_fos5;
     int st = 0;
