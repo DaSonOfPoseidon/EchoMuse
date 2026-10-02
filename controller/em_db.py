@@ -54,6 +54,9 @@ DEFAULT_DEVICE_CONFIG = {
     # first, because the ring is the only other sign the Echo is listening.
     "wakeSound":        False,
     "wakeSoundLevel":   "medium",   # quiet / medium / loud, played by the Echo
+    # Physical-button volume preview (#637). On by default, matching Alexa's
+    # familiar feedback and giving a useful level reference while idle.
+    "volumeButtonSound": True,
     # Wake training samples are opt-in; candidates and triggers are saved for admin review.
     "wakeClipCapture":  False,
     "wakeClipMinScore": 0.20,

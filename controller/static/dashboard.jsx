@@ -2392,6 +2392,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                 localCapable={!device.connected || !!device.owwLocalCapable}
                 listen={device.connected ? device.listen : null}
                 wakeCueCapable={!device.connected || !!device.wakeCueCapable}
+                volumeCueCapable={!device.connected || !!device.volumeCueCapable}
                 sendspinCapable={!device.connected || !!device.sendspinCapable}
                 sendspinPanel={device.connected && device.sendspinCapable
                   ? <SendspinPairing deviceId={device.device_id} status={device.sendspin} isAdmin={isAdmin}/>
@@ -9008,7 +9009,7 @@ const STAGE_MONO = "'DM Mono',monospace";
 // control sitting under a toggle that does not govern it would look fine and
 // be silently wrong.
 const CONFIG_SECTIONS = {
-  "playback": ["eqBands", "eqLoudness", "duckDb", "limiterEnabled", "limiterThreshold", "limiterRelease", "bassGuardEnabled", "bassGuardDb", "streamReply"],
+  "playback": ["eqBands", "eqLoudness", "duckDb", "limiterEnabled", "limiterThreshold", "limiterRelease", "bassGuardEnabled", "bassGuardDb", "streamReply", "volumeButtonSound"],
   "wakeword": ["owwModel", "owwThreshold", "owwSpeexNs", "bargeInEnabled", "bargeInThreshold", "wakeArbitrationMs", "owwOnDevice", "wakeSound", "wakeSoundLevel", "wakeClipCapture", "wakeClipMinScore"],
   "microphones": ["adcMicpga", "adcDigitalGain", "micGainDb", "beamformingEnabled", "beamAngle", "aecEnabled", "aecDelayMs", "aecTailMs", "aecRefSource", "nsAsr", "saveUtterances"],
   "ring": ["ledScene", "ledListenColor", "ledThinkColor", "meterAttack", "meterDecay", "meterFloor", "meterGamma", "meterRef", "meterCurve"],
@@ -9173,7 +9174,8 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
                             localCapable = true, listen = null,
                             hwEchoRef = false, hwRefCapable = true,
                             emosFleet = true, wakeCueCapable = true,
-                            sendspinCapable = true, sendspinPanel = null }) {
+                            volumeCueCapable = true, sendspinCapable = true,
+                            sendspinPanel = null }) {
   // emosFleet defaults TRUE for the same reason the capability props above do,
   // and for one more: it gates the console password, which is emOS-only, and
   // disabling a setting because we do not KNOW the fleet has an emOS device
@@ -9439,6 +9441,15 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
               Volume is remembered per device and restored after a reboot.
               Change it from Home Assistant or the device buttons; the current
               level is shown on the Status tab.
+            </div>
+            <div style={{ marginTop: 8, ...inputStyle }}>
+              <Toggle label="Volume button sound"
+                sub={volumeCueCapable
+                  ? 'plays a short, low beep with a quick decay when idle; repeats at maximum'
+                  : 'needs newer firmware on this Echo'}
+                disabled={!volumeCueCapable}
+                value={config.volumeButtonSound ?? true}
+                onChange={v => set('volumeButtonSound', v)}/>
             </div>
           </div>
         </div>

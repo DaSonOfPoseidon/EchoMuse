@@ -1033,6 +1033,11 @@ class Device:
         return "wake_cue" in (self.capabilities or [])
 
     @property
+    def volume_cue_capable(self) -> bool:
+        """Whether physical volume changes can play an idle preview tone."""
+        return "volume_cue" in (self.capabilities or [])
+
+    @property
     def oww_trigger_capable(self) -> bool:
         """
         Whether this firmware can ACT on its own wake detection.

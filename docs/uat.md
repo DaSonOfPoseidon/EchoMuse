@@ -202,10 +202,15 @@ set to **On this Echo** and the other to **On the controller**.
 ## D — Audio out
 
 ### D1 · Volume
-**Do:** Change volume from the dashboard, from HA, and with the device's own
-volume buttons.
-**Expect:** All three agree, and the level survives a reboot.
-**Flag:** Any of the three disagreeing with the others.
+**Do:** Enable Volume button sound. Change volume with the device's own
+buttons while idle, press Volume Up twice more after reaching maximum, then
+change it from HA; repeat both while music is playing.
+**Expect:** The level agrees and survives a reboot. An idle physical-button
+change plays a short, low beep with a quick decay at the new volume, and each
+extra Volume Up press at maximum replays it; HA and active playback stay
+silent.
+**Flag:** A tone from a remote change or over playback, or no tone from an
+idle physical-button change or an extra Volume Up press at maximum.
 
 ### D2 · Speech is intelligible at low volume
 **Do:** Set volume to ~20%, ask something with a long answer.

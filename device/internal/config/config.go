@@ -28,7 +28,8 @@ type Device struct {
 	VadSilenceMs int
 
 	// Speaker
-	StartupVolume int
+	StartupVolume     int
+	VolumeButtonSound bool
 
 	// Wake word
 	OwwThreshold float64
@@ -186,6 +187,7 @@ func (d *Device) loadDefaults() {
 	d.VadSpeechMs = envInt("VAD_SPEECH_MS", 80)
 	d.VadSilenceMs = envInt("VAD_SILENCE_MS", 600)
 	d.StartupVolume = envInt("STARTUP_VOLUME", 85)
+	d.VolumeButtonSound = envBool("VOLUME_BUTTON_SOUND", true)
 	d.OwwThreshold = envFloat("OWW_THRESHOLD", 0.5)
 	d.OwwModel = envStr("OWW_MODEL", "hey_jarvis_v0.1")
 	d.OwwOnDevice = normaliseOnDevice(envStr("OWW_ON_DEVICE", OnDeviceOff))
@@ -265,6 +267,9 @@ func (d *Device) Apply(msg ConfigMessage) {
 	if msg.WakeSoundLevel != "" {
 		d.WakeSoundLevel = msg.WakeSoundLevel
 	}
+	if msg.VolumeButtonSound != nil {
+		d.VolumeButtonSound = *msg.VolumeButtonSound
+	}
 	if msg.StartupVolume > 0 {
 		d.StartupVolume = msg.StartupVolume
 	}
@@ -321,6 +326,15 @@ func (d *Device) WakeSoundSetting() (on bool, level string) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.WakeSound, d.WakeSoundLevel
+}
+
+// VolumeButtonSoundEnabled reports whether physical volume changes should
+// play their audible preview. The caller still decides whether playback is
+// idle; config owns only the preference.
+func (d *Device) VolumeButtonSoundEnabled() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.VolumeButtonSound
 }
 
 // applyOutput merges the output-chain keys. Every one of them has a
@@ -390,6 +404,7 @@ func (d *Device) Snapshot() ConfigMessage {
 	if d.BleProxyEnabled != nil {
 		bleProxyEnabled = *d.BleProxyEnabled
 	}
+	volumeButtonSound := d.VolumeButtonSound
 	sendspinEnabled := d.SendspinEnabled != nil && *d.SendspinEnabled
 	sendspinUnpaired := d.SendspinUnpaired != nil && *d.SendspinUnpaired
 	return ConfigMessage{
@@ -402,6 +417,7 @@ func (d *Device) Snapshot() ConfigMessage {
 		BargeInEnabled:     &bargeInEnabled,
 		BargeInThreshold:   d.BargeInThreshold,
 		StartupVolume:      d.StartupVolume,
+		VolumeButtonSound:  &volumeButtonSound,
 		AdcDigitalGain:     &adcDigitalGain,
 		AdcMicpga:          &adcMicpga,
 		MicGainDb:          &micGainDb,
@@ -423,23 +439,23 @@ func (d *Device) Snapshot() ConfigMessage {
 // ConfigMessage mirrors the JSON shape of the config control message
 // sent by the controller. JSON tags must match em_controller.py exactly.
 type ConfigMessage struct {
-	Type               string   `json:"type,omitempty"`
+	Type string `json:"type,omitempty"`
 	// Pointer typed so 0 is expressible. Both are raw tinymix control
 	// values and 0 is the bottom of each control's own range — a legitimate
 	// setting, and the one somebody reaches for in a loud room. Under the
 	// "non-zero means set" rule they were silently ignored: the dashboard
 	// slider offers 0, the config stored 0, and the device carried on at
 	// whatever gain it already had.
-	AdcDigitalGain     *int     `json:"adcDigitalGain,omitempty"`
-	AdcMicpga          *int     `json:"adcMicpga,omitempty"`
-	MicGainDb          *int     `json:"micGainDb,omitempty"`
-	StartupVolume      int      `json:"startupVolume,omitempty"`
-	VadThreshold       float64  `json:"vadThreshold,omitempty"`
-	VadSpeechMs        int      `json:"vadSpeechMs,omitempty"`
-	VadSilenceMs       int      `json:"vadSilenceMs,omitempty"`
-	OwwThreshold       float64  `json:"owwThreshold,omitempty"`
-	OwwModel           string   `json:"owwModel,omitempty"`
-	OwwOnDevice        string   `json:"owwOnDevice,omitempty"`
+	AdcDigitalGain *int    `json:"adcDigitalGain,omitempty"`
+	AdcMicpga      *int    `json:"adcMicpga,omitempty"`
+	MicGainDb      *int    `json:"micGainDb,omitempty"`
+	StartupVolume  int     `json:"startupVolume,omitempty"`
+	VadThreshold   float64 `json:"vadThreshold,omitempty"`
+	VadSpeechMs    int     `json:"vadSpeechMs,omitempty"`
+	VadSilenceMs   int     `json:"vadSilenceMs,omitempty"`
+	OwwThreshold   float64 `json:"owwThreshold,omitempty"`
+	OwwModel       string  `json:"owwModel,omitempty"`
+	OwwOnDevice    string  `json:"owwOnDevice,omitempty"`
 	// ConsolePassword is the hashed record emOS's init checks before handing
 	// over a shell on the USB serial console. A POINTER, and it has to be: an
 	// EMPTY record is the legitimate "no password" setting, so with a plain
@@ -450,7 +466,7 @@ type ConfigMessage struct {
 	// Consumed by the firmware only to write it to disk for init — the
 	// firmware never checks it, because the console must work when the
 	// firmware is not running. Ignored on FireOS, which uses adbd.
-	ConsolePassword    *string  `json:"consolePassword,omitempty"`
+	ConsolePassword *string `json:"consolePassword,omitempty"`
 	// ConsoleTimeoutMin is the emOS console idle timeout in MINUTES: 0 for no
 	// timeout, otherwise 1-90. A POINTER for ConsolePassword's reason — zero
 	// is the legitimate "no timeout" setting, so with omitempty it would be
@@ -482,6 +498,8 @@ type ConfigMessage struct {
 	// WakeSound: a pointer so "off" is distinguishable from absent.
 	WakeSound      *bool  `json:"wakeSound,omitempty"`
 	WakeSoundLevel string `json:"wakeSoundLevel,omitempty"`
+	// VolumeButtonSound: a pointer so "off" is distinguishable from absent.
+	VolumeButtonSound *bool `json:"volumeButtonSound,omitempty"`
 
 	// Output chain (internal/outchain). Pointers because zero is a real
 	// setting for every one of them; see applyOutput.
