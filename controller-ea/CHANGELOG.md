@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+**Collect labelled wake-word examples.** Config → Wake word can now save score candidates above a tunable floor and every detector hit. Activity plays the clips and lets an admin label them as wake word, not wake word or unsure. Capture is opt-in, clips stay on the controller, and each Echo retains at most 50 — except a labelled clip, which also copies into a permanent, uncapped archive on disk, organised by label. Schema v29 adds the clip review records.
+
 ## 2.25.0
 
 Private listening, pairing from the Echo, and mute that works. Pair with firmware v2.17.0, which this controller offers.
