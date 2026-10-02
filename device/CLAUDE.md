@@ -12,11 +12,15 @@ The Echo Dot runs FireOS 5 (API 22). Standard Go cross-compilation won't work �
 **One-time setup:**
 ```bash
 # GoTinyAlsa is a git submodule at the repo root — the wilbowes/GoTinyAlsa
-# fork, NOT upstream Binozo, pinned to the fork's master. It carries two
-# GetAudioStream fixes: the defer-in-loop leak (v2.9.2) and a fresh slice per
-# read (fork PR #1, #607 — one reused buffer meant queued batches were
-# overwritten by the next read). Don't repoint it upstream until both are
-# merged there (Binozo/GoTinyAlsa#2 is the second).
+# fork, NOT upstream Binozo. It carries two GetAudioStream fixes: the
+# defer-in-loop leak (v2.9.2) and a fresh slice per read (fork PR #1, #607 —
+# one reused buffer meant queued batches were overwritten by the next read),
+# both now upstream (Binozo/GoTinyAlsa#2). It also carries a PLAYBACK fix
+# upstream does not have: WriteFrames blocks signals around pcm_write (fork
+# PR #2, #707). tinyalsa's pcm_write ignores the partial count a
+# signal-interrupted WRITEI returns, so the rest of the buffer was silently
+# dropped — ~15 audible clicks an hour per device, on every playback path,
+# before; 0 after. Don't repoint it upstream until that one is there too.
 git submodule update --init
 
 # Build the compiler Docker image (from device/)
