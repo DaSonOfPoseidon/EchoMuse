@@ -2083,6 +2083,18 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
               <CircleButton onClick={onClose} title="Close">×</CircleButton>
             </div>
           </div>
+          {/* What deleting leaves behind in Home Assistant (#375). Full width
+              and under the header row, not beside Confirm: a sentence that
+              fits next to a button is not read, and the port it names is the
+              whole value of it. Same amber notice surface as the controller
+              update banner — `em-on-dark` for the dark-theme text tokens it
+              implies, `--notice-bg` for the panel. */}
+          {isAdmin && confirmDelete && (
+            <div className="em-on-dark" style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12, padding: '10px 14px', background: 'var(--notice-bg)', border: '1px solid var(--notice-line)', borderRadius: 8, fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: 'var(--text)', lineHeight: 1.5 }}>
+              <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--warn)', fontWeight: 600, flexShrink: 0 }}>Home Assistant</span>
+              <span>{_deleteHaWarning(device)}</span>
+            </div>
+          )}
           {device.approved ? (
             <div className="em-tabs" style={{ display: 'flex', gap: 2 }}>
               {TABS.map(t => (
@@ -3325,6 +3337,24 @@ function _kernelLabel(d) {
 function _kernelTitle(d) {
   return d.kernelArch ? `kernel ${d.kernelArch} ${d.kernelRelease || ''}`.trim() : null;
 }
+
+// What deleting a device leaves behind in Home Assistant (#375). The identity
+// is derived from the serial — so a re-approved device keeps the name and MAC
+// HA has already made an entry for — but the port is not, and the re-added one
+// is allocated fresh. HA is left pointing at a port nobody listens on, and
+// discovery will not offer it again. Naming that port is what the operator has
+// to go and match in HA.
+//
+// A NULL port is a device that never had a satellite, so there is no number to
+// name — the sentence still has to say it. `!= null` rather than a truthiness
+// test, so a 0 is reported as 0 instead of swallowed: absence stores as NULL,
+// never 0.
+const _deleteHaWarning = (d) => {
+  const who  = (d && (d.label || d.device_id)) || 'this device';
+  const port = d && d.esphome_port != null ? ` on port ${d.esphome_port}` : '';
+  return `Home Assistant keeps its entry for ${who}${port}. Delete it there `
+       + `before adding this Echo back.`;
+};
 
 const _INIT_RC_APPEND = `
 service mixer /system/bin/sh
@@ -8832,6 +8862,18 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
               <div className="em-panel em-wizard-recovery">
                 <div className="em-label">This step failed</div>
                 <p className="em-wizard-recovery__hint">{recoveryHint()}</p>
+                {/* The same warning the Detail modal's delete gives (#375).
+                    The matched device is resolved out of knownDevices rather
+                    than carried across, so the port is named here too — only
+                    its id survives on the error. */}
+                {step === 0 && duplicateDeviceId && (() => {
+                  const dup = (knownDevices || []).find(d => d && d.device_id === duplicateDeviceId);
+                  return (
+                    <p className="em-wizard-recovery__hint" style={{ color: 'var(--warn)' }}>
+                      {_deleteHaWarning(dup || { device_id: duplicateDeviceId })}
+                    </p>
+                  );
+                })()}
                 <div className="em-wizard-recovery__actions">
                   <Pill accent onClick={() => runStep(step)}>Retry</Pill>
                    {!CONNECT.has(step) && (
