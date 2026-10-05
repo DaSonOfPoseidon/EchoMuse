@@ -29,11 +29,13 @@ UNLISTED = {
     "meterGamma", "meterRef", "meterCurve",
 }
 
-# ConfigMessage fields that are not config values.
+# ConfigMessage fields that are not config values. sendspinName is the
+# device's label, pushed beside the config rather than stored in it.
 # wakeWordEnabled is HA's picker state (em_wakeword), stored and sent apart
 # from device config.
 NOT_CONFIG = {"type", "hasBeamforming", "listeningAnim",
-              "consolePassword", "consoleTimeoutMin", "wakeWordEnabled"}
+              "consolePassword", "consoleTimeoutMin", "sendspinName",
+              "wakeWordEnabled"}
 
 GO_KIND = {"int": T.INT, "float64": T.FLOAT, "bool": T.BOOL,
            "string": T.STR, "[]float64": T.FLOAT_LIST}

@@ -196,6 +196,12 @@ function uptime(s) {
   return `${m}m`;
 }
 
+// A health level from the controller (ok / warn / error) as a row colour.
+function _levelColor(level) {
+  return level === 'error' ? 'var(--error)' : level === 'warn' ? 'var(--warn)'
+       : level === 'ok' ? 'var(--ok)' : undefined;
+}
+
 function relTime(ts) {
   if (!ts) return '—';
   const d = Date.now() - ts * 1000;
@@ -1109,6 +1115,89 @@ function turnSegments(t) {
   return { listen, transcribe, respond, shown: listen + transcribe + respond };
 }
 
+function WakeSampleReview({ deviceId, isAdmin }) {
+  const [samples, setSamples] = useState([]);
+  const [playing, setPlaying] = useState(null);
+  const audioRef = useRef(null);
+  const urlsRef = useRef({});
+  const mono = "'DM Mono',monospace";
+
+  const load = async () => {
+    if (!isAdmin) return;
+    try { setSamples(await API.get(`/api/devices/${deviceId}/wake-samples?limit=50`) || []); }
+    catch {}
+  };
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 5000);
+    return () => {
+      clearInterval(timer);
+      if (audioRef.current) audioRef.current.pause();
+      Object.values(urlsRef.current).forEach(URL.revokeObjectURL);
+      urlsRef.current = {};
+    };
+  }, [deviceId, isAdmin]);
+
+  const sampleUrl = async sample => {
+    if (urlsRef.current[sample.id]) return urlsRef.current[sample.id];
+    try {
+      const url = URL.createObjectURL(await API.blob(
+        `/api/devices/${deviceId}/wake-samples/${sample.id}/audio`));
+      urlsRef.current[sample.id] = url;
+      return url;
+    } catch { return null; }
+  };
+  const play = async sample => {
+    if (audioRef.current) audioRef.current.pause();
+    if (playing === sample.id) { audioRef.current = null; setPlaying(null); return; }
+    const url = await sampleUrl(sample);
+    if (!url) return;
+    const audio = new Audio(url);
+    audioRef.current = audio;
+    audio.onended = audio.onerror = () => setPlaying(p => p === sample.id ? null : p);
+    setPlaying(sample.id);
+    audio.play().catch(() => setPlaying(null));
+  };
+  const label = async (sample, value) => {
+    try {
+      await API.patch(`/api/devices/${deviceId}/wake-samples/${sample.id}`, { label: value });
+      setSamples(rows => rows.map(row => row.id === sample.id ? { ...row, label: value } : row));
+    } catch {}
+  };
+  const remove = async sample => {
+    if (!window.confirm('Delete this saved wake sample?')) return;
+    try {
+      await API.del(`/api/devices/${deviceId}/wake-samples/${sample.id}`);
+      setSamples(rows => rows.filter(row => row.id !== sample.id));
+      if (urlsRef.current[sample.id]) URL.revokeObjectURL(urlsRef.current[sample.id]);
+      delete urlsRef.current[sample.id];
+    } catch {}
+  };
+  const download = async sample => {
+    const url = await sampleUrl(sample);
+    if (!url) return;
+    const a = document.createElement('a'); a.href = url;
+    a.download = `wake-sample-${sample.id}.wav`; a.click();
+  };
+
+  if (!isAdmin || !samples.length) return null;
+  return <div style={{ marginTop: 16, borderTop: '1px solid var(--track)', paddingTop: 12 }}>
+    <div className="em-label" style={{ marginBottom: 8 }}>Wake-word samples · newest 50</div>
+    <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+      {samples.map(sample => <div key={sample.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 2px', borderBottom: '1px solid var(--hairline)', fontFamily: mono, fontSize: 10 }}>
+        <span style={{ color: 'var(--muted)', width: 72, flexShrink: 0 }}>{new Date(sample.ts * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+        <button onClick={() => play(sample)} title="Play wake sample" style={{ background: 'none', border: 0, color: 'var(--text2)', cursor: 'pointer' }}>{playing === sample.id ? '▮' : '▶'}</button>
+        <span style={{ flex: 1, color: 'var(--text2)' }}>{sample.kind}{sample.score != null ? ` · controller ${sample.score.toFixed(3)}` : ''}{sample.threshold != null ? ` / ${sample.threshold.toFixed(2)}` : ''}{sample.device_score != null ? ` · Echo ${sample.device_score.toFixed(3)}` : ''}{sample.trigger_source ? ` · ${sample.trigger_source}` : ''}</span>
+        <select value={sample.label} onChange={e => label(sample, e.target.value)} aria-label="Wake sample label" style={{ fontSize: 10, maxWidth: 105 }}>
+          <option value="unreviewed">Review…</option><option value="wake">Wake word</option><option value="not_wake">Not wake word</option><option value="uncertain">Unsure</option>
+        </select>
+        <button onClick={() => download(sample)} title="Download WAV" style={{ background: 'none', border: 0, color: 'var(--muted)', cursor: 'pointer' }}>⤓</button>
+        <button onClick={() => remove(sample)} title="Delete sample" style={{ background: 'none', border: 0, color: 'var(--muted)', cursor: 'pointer' }}>×</button>
+      </div>)}
+    </div>
+  </div>;
+}
+
 function TurnObservability({ turns, deviceId, deviceLabel, recordingsOn, nearMisses, stateLabel, stateColor, isAdmin }) {
   const [hover, setHover] = useState(null); // index into `recent`
   const mono = "'DM Mono',monospace";
@@ -1283,6 +1372,7 @@ function TurnObservability({ turns, deviceId, deviceLabel, recordingsOn, nearMis
           })()}
         </div>
       )}
+      <WakeSampleReview deviceId={deviceId} isAdmin={isAdmin}/>
     </div>
   );
 }
@@ -1475,6 +1565,9 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
   const [logsLoading, setLogsLoading] = useState(false);
   const [pushLog, setPushLog] = useState([]);
   const [pushing, setPushing] = useState(false);
+  const [emosBusy, setEmosBusy] = useState(false);
+  const [emosFile, setEmosFile] = useState(null);
+  const emosFileRef = useRef(null);
   const [release, setRelease] = useState(null);
   const [checkingRelease, setCheckingRelease] = useState(false);
   // Whether the background release poll runs (#159). Defaults TRUE so a
@@ -1810,6 +1903,57 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
     }, 3000);
   }
 
+  // emOS update (#573). The controller owns every step and reports the one it
+  // is on, so this only starts it and relays: there is no client-side guess
+  // at the outcome to get wrong, and no attempt cap — a rollback takes ten
+  // minutes and the server bounds the wait itself.
+  async function doEmosUpdate(file) {
+    const name = device.label || device.device_id;
+    if (!confirm(`Update emOS on ${name}?\n\nThe Echo restarts and is offline for about a minute. `
+        + `Keep it powered while the update runs: a power cut while the boot partition `
+        + `is being written (about a second) leaves it needing TWRP and a USB cable.`)) return;
+    setEmosBusy(true);
+    setPushLog([file ? `Uploading ${file.name}…` : 'Starting emOS update…']);
+    try {
+      let body = {};
+      if (file) {
+        const up = await API.upload('/api/emos/upload', file, 'payload');
+        setPushLog(l => [...l, `✓ Payload ${up.version} uploaded`]);
+        body = { upload_token: up.upload_token };
+      }
+      const res = await API.post(`/api/devices/${device.device_id}/emos_update`, body);
+      setEmosFile(null);
+      if (emosFileRef.current) emosFileRef.current.value = '';
+      _pollEmosUpdate(res.version);
+    } catch(e) {
+      setPushLog(l => [...l, `Error: ${e.error || 'emOS update failed'}`]);
+      setEmosBusy(false);
+    }
+  }
+
+  function _pollEmosUpdate(version) {
+    let last = '';
+    let failures = 0;
+    const poll = setInterval(async () => {
+      try {
+        const devices = await API.get('/api/devices');
+        const d = devices.find(x => x.device_id === device.device_id);
+        failures = 0;
+        const stage = d?.emos_update_queued ? 'Queued behind another update' : d?.emos_update_stage;
+        if (stage && stage !== last) { last = stage; setPushLog(l => [...l, stage]); }
+        if (d && !d.emos_update_in_progress && !d.emos_update_queued) {
+          setPushLog(l => [...l, d.emos_update_error
+            ? `Error: ${d.emos_update_error}`
+            : `✓ emOS ${_emosLabel(version)} running and confirmed`]);
+          clearInterval(poll); setEmosBusy(false);
+        }
+      } catch(e) {
+        // The controller being briefly unreachable is not the update failing.
+        if (++failures > 20) { clearInterval(poll); setEmosBusy(false); }
+      }
+    }, 3000);
+  }
+
   async function doRollback() {
     setPushing(true); setPushLog([`Rolling back to ${device.firmware_previous}…`]);
     try {
@@ -1939,6 +2083,18 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
               <CircleButton onClick={onClose} title="Close">×</CircleButton>
             </div>
           </div>
+          {/* What deleting leaves behind in Home Assistant (#375). Full width
+              and under the header row, not beside Confirm: a sentence that
+              fits next to a button is not read, and the port it names is the
+              whole value of it. Same amber notice surface as the controller
+              update banner — `em-on-dark` for the dark-theme text tokens it
+              implies, `--notice-bg` for the panel. */}
+          {isAdmin && confirmDelete && (
+            <div className="em-on-dark" style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12, padding: '10px 14px', background: 'var(--notice-bg)', border: '1px solid var(--notice-line)', borderRadius: 8, fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: 'var(--text)', lineHeight: 1.5 }}>
+              <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--warn)', fontWeight: 600, flexShrink: 0 }}>Home Assistant</span>
+              <span>{_deleteHaWarning(device)}</span>
+            </div>
+          )}
           {device.approved ? (
             <div className="em-tabs" style={{ display: 'flex', gap: 2 }}>
               {TABS.map(t => (
@@ -2013,6 +2169,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
               ? `${s.cpuPct.toFixed(0)}%` + (s.coresOnline ? ` · ${s.coresOnline}/${s.coresTotal ?? '?'} cores` : '')
               : null;
             const lq = device.linkQuality;   // loss verdict + per-minute strip (em_tcp)
+            const linkRow = _linkRow(device); // TLS + token, not TLS alone (#590)
             // Thermals: mtktscpu is the CPU zone, maxTempC the hottest of all
             // 11 zones (the PMIC and board sensors can run warmer). Amber past
             // 70C, red past 85C — well below this SoC's limits, because the
@@ -2085,15 +2242,23 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                          : (s?.volumePct != null ? `${s.volumePct}%` : '—'))}
                     {/* An offline Echo the controller is turning away says why,
                         in the row that describes its link rather than a new one. */}
-                    {row('Link', device.connected
-                           ? (device.linkTls ? 'wss (TLS)' : 'plain ws')
-                           : device.linkRefused
-                             ? <span title="Remove this Echo and approve it again to pair it.">
-                                 {`Refused: ${device.linkRefused.reason}`}
-                               </span>
-                             : '—',
-                         device.connected ? (device.linkTls ? 'var(--ok)' : 'var(--warn)')
-                           : device.linkRefused ? 'var(--error)' : undefined)}
+                    {row('Link',
+                         linkRow.refused
+                           ? <span title="Remove this Echo and approve it again to pair it.">{linkRow.label}</span>
+                           : linkRow.label,
+                         linkRow.color)}
+                    {/* The eMMC's own wear report and how the current boot
+                        started (schema v28). A watchdog or panic boot is the
+                        sign of a hang nobody saw. Both are absent on firmware
+                        that does not report them, and say so. */}
+                    {row('Flash wear', device.health?.emmc
+                           ? <span title={device.health.emmcPart || undefined}>{device.health.emmc.text}</span>
+                           : '—',
+                         _levelColor(device.health?.emmc?.level))}
+                    {row('Last boot', device.health?.bootAt
+                           ? [device.health.bootReason?.text, relTime(device.health.bootAt)].filter(Boolean).join(' · ')
+                           : '—',
+                         _levelColor(device.health?.bootReason?.level))}
                     {row('Config', (() => {
                       const n = (device.config_sections ?? []).length;
                       const total = Object.keys(CONFIG_SECTIONS).length;
@@ -2290,6 +2455,15 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                 localCapable={!device.connected || !!device.owwLocalCapable}
                 listen={device.connected ? device.listen : null}
                 wakeCueCapable={!device.connected || !!device.wakeCueCapable}
+                volumeCueCapable={!device.connected || !!device.volumeCueCapable}
+                sendspinCapable={!device.connected || !!device.sendspinCapable}
+                sendspinPanel={device.connected && device.sendspinCapable
+                  ? <SendspinPairing deviceId={device.device_id} status={device.sendspin} isAdmin={isAdmin}/>
+                  : null}
+                bleConnectCapable={!device.connected || !!device.bleConnectCapable}
+                blePanel={device.connected && device.bleConnectCapable
+                  ? <BleProxyKey deviceId={device.device_id} status={device.bleProxy} isAdmin={isAdmin}/>
+                  : null}
                 mixCapable={!device.connected || !!device.audioMixCapable}
                 holdCapable={!device.connected || !!device.buttonHoldCapable}
                 hwEchoRef={device.connected && device.aecRef === 'hw'}
@@ -2372,7 +2546,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                     state, then act, then detail. */}
                 <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginTop:16 }}>
                   <Pill accent={device.connected && !pushing && needsUpdate}
-                        disabled={!device.connected || pushing || !needsUpdate}
+                        disabled={!device.connected || pushing || emosBusy || !needsUpdate}
                         onClick={doUpdate}>
                     {pushing && !localFile ? 'Updating…'
                       : needsUpdate ? `Update to ${release?.version || 'latest'}` : 'Up to date'}
@@ -2431,6 +2605,67 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                   </div>
                 )}
               </Panel>
+
+              {/* emOS (#573). Its own panel because it updates
+                  independently of the firmware: different release, different
+                  thing written, different way back. Only on a device that has
+                  said it runs emOS. */}
+              {device.baseOs === 'emos' && (() => {
+                const busy = emosBusy || device.emos_update_in_progress || device.emos_update_queued;
+                const avail = !!device.emosUpdateAvailable;
+                return (
+                <Panel label="emOS">
+                  <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', gap:16, flexWrap:'wrap' }}>
+                    <div style={{ display:'flex', gap:16, alignItems:'flex-end', flexWrap:'wrap', minWidth:0 }}>
+                      <Lcd label="On device" value={_emosLabel(device.emosVersion) || '—'} maxChars={16} color={device.emosOffer === 'current' ? 'var(--lcd-green)' : 'var(--lcd-amber)'}/>
+                      <Lcd label="Available" value={_emosLabel(device.emosLatest) || '—'} maxChars={16} color="var(--lcd-dim)"/>
+                    </div>
+                    <span style={{ fontFamily:"'DM Mono',monospace", fontSize:11, color: avail ? 'var(--warn)' : device.emosOffer === 'current' ? 'var(--ok)' : 'var(--muted)' }}>
+                      {!device.emosVersion ? 'Version not read yet'
+                        : !device.emosLatest ? 'No release info'
+                        : avail ? `Update ${_emosLabel(device.emosLatest)} available`
+                        : device.emosOffer === 'wizard' ? `${_emosLabel(device.emosLatest)} installs with the wizard`
+                        : device.emosOffer === 'current' ? 'Up to date' : 'Version not recognised'}
+                    </span>
+                  </div>
+                  <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginTop:16 }}>
+                    <Pill accent={device.connected && !busy && !pushing && avail}
+                          disabled={!device.connected || busy || pushing || !avail}
+                          onClick={() => doEmosUpdate(null)}>
+                      {busy ? 'Updating…' : avail ? `Update to ${_emosLabel(device.emosLatest)}`
+                        : device.emosOffer === 'current' ? 'Up to date' : 'No update'}
+                    </Pill>
+                    <span style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)', lineHeight:1.5, flex:'1 1 220px', minWidth:0 }}>
+                      Restarts the Echo. It restores the previous image by itself
+                      if the new one fails. Keep it powered while it updates.
+                    </span>
+                  </div>
+                  {/* The developer path, as Local Build is for firmware. */}
+                  <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginTop:14, borderTop:'1px solid var(--hairline)', paddingTop:10 }}>
+                    <input ref={emosFileRef} type="file" accept=".zip" style={{ display:'none' }}
+                      onChange={e => setEmosFile(e.target.files[0] || null)}/>
+                    <Pill small onClick={() => emosFileRef.current?.click()} disabled={busy}>
+                      {emosFile ? '⇄ Change' : 'Local payload'}
+                    </Pill>
+                    {emosFile ? (
+                      <>
+                        <span style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--text2)', flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0 }}>
+                          {emosFile.name} · {(emosFile.size/1024).toFixed(0)} KB
+                        </span>
+                        <Pill small danger onClick={() => setEmosFile(null)} disabled={busy}>✕</Pill>
+                        <Pill small accent disabled={!device.connected || busy || pushing} onClick={() => doEmosUpdate(emosFile)}>
+                          Install
+                        </Pill>
+                      </>
+                    ) : (
+                      <span style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)' }}>
+                        An emos-payload.zip built from emos/.
+                      </span>
+                    )}
+                  </div>
+                </Panel>
+                );
+              })()}
 
               {/* The GitHub Release panel that used to sit here held one
                   button, which now lives beside the version state above.
@@ -2637,7 +2872,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                     textShadow: line.startsWith('✓') ? '0 0 8px rgba(140,200,100,0.4)' : 'none',
                   }}>{line}</div>
                 ))}
-                {pushing && <span style={{ color:'var(--lcd-dim)' }}>▌</span>}
+                {(pushing || emosBusy) && <span style={{ color:'var(--lcd-dim)' }}>▌</span>}
               </div>
             </div>
           )}
@@ -2713,12 +2948,19 @@ function Card({ device, onClick }) {
         <LedRing state={state} size={120}/>
       </div>
       <div style={{ padding: '0 16px 16px' }}>
-        <div className="em-inset" style={{ '--em-inset-radius':'6px', '--em-inset-pad':'7px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: state.lcd, letterSpacing: '0.12em', textShadow: `0 0 8px ${state.dot}88` }}>{state.label.toUpperCase()}</span>
-          <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--lcd-dim)', letterSpacing: '0.08em' }}>{(() => {
+        {/* At the 190px minimum card width a long state (OFFLINE, LISTENING)
+            and a full IP do not fit on one line, and wrapping only when they
+            collide left cards in one row with footers of different heights.
+            So the IP always has its own line. */}
+        <div className="em-inset" style={{ '--em-inset-radius':'6px', '--em-inset-pad':'7px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+          <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: state.lcd, letterSpacing: '0.12em', textShadow: `0 0 8px ${state.dot}88`, whiteSpace: 'nowrap' }}>{state.label.toUpperCase()}</span>
+          {(() => {
             const ip = device.ip && device.ip !== '127.0.0.1' ? device.ip : null;
-            return device.connected ? (ip || '—') : (ip ? `${ip} ↑` : '—');
-          })()}</span>
+            return (
+              <span title={!device.connected && ip ? 'Last known address' : undefined}
+                    style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--lcd-dim)', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}>{ip || '—'}</span>
+            );
+          })()}
         </div>
       </div>
     </div>
@@ -3025,8 +3267,43 @@ function _middleEllipsis(text, max, tail) {
   return text.slice(0, keepStart).trimEnd() + '…' + text.slice(text.length - keepEnd).trimStart();
 }
 
+// "emos-v0.9" as "0.9": the panel is already labelled emOS.
+function _emosLabel(v) {
+  return v ? String(v).replace(/^emos-v/, '') : '';
+}
+
 function _baseOsLabel(baseOs) {
   return baseOs === 'emos' ? 'emOS' : baseOs === 'fireos' ? 'FireOS 5' : null;
+}
+
+// What the Status tab's Link row reads, and in what colour.
+//
+// "wss (TLS)" in green is the check everybody runs before flipping
+// REQUIRE_DEVICE_TLS, so it must not be printed for a link the controller has
+// no token for. em_linkauth.decide rule 4 wants secure AND presented AND
+// expected: a device connected over TLS with nothing on record clears the
+// first two and is locked out by the flip, while its card looked perfect.
+// Seen on the EA controller 2026-09-20 — one device logging "token presented
+// but none on record" on every plane on every dial, reading green throughout.
+//
+// Encrypted is not authenticated, so a missing token is amber whatever the
+// transport is: the row is the answer to "is this link safe", and green
+// asserts more than the controller can support.
+//
+// An ABSENT linkTokenIssued is not a measurement. A dashboard served by an
+// older controller has never heard of the field, so it keeps today's reading
+// rather than claiming "no token" on every device at once — the same
+// NULL-not-zero rule the rest of this file lives by.
+function _linkRow(device) {
+  if (!device.connected) {
+    return device.linkRefused
+      ? { label: `Refused: ${device.linkRefused.reason}`, color: 'var(--error)', refused: true }
+      : { label: '—', color: undefined };
+  }
+  if (!device.linkTls) return { label: 'plain ws', color: 'var(--warn)' };
+  return device.linkTokenIssued === false
+    ? { label: 'wss (TLS) · no token', color: 'var(--warn)' }
+    : { label: 'wss (TLS)', color: 'var(--ok)' };
 }
 
 // The kernel's word size from `uname -m`: "64-bit" or "32-bit". On biscuit it
@@ -3065,6 +3342,24 @@ function _kernelTitle(d) {
   return d.kernelArch ? `kernel ${d.kernelArch} ${d.kernelRelease || ''}`.trim() : null;
 }
 
+// What deleting a device leaves behind in Home Assistant (#375). The identity
+// is derived from the serial — so a re-approved device keeps the name and MAC
+// HA has already made an entry for — but the port is not, and the re-added one
+// is allocated fresh. HA is left pointing at a port nobody listens on, and
+// discovery will not offer it again. Naming that port is what the operator has
+// to go and match in HA.
+//
+// A NULL port is a device that never had a satellite, so there is no number to
+// name — the sentence still has to say it. `!= null` rather than a truthiness
+// test, so a 0 is reported as 0 instead of swallowed: absence stores as NULL,
+// never 0.
+const _deleteHaWarning = (d) => {
+  const who  = (d && (d.label || d.device_id)) || 'this device';
+  const port = d && d.esphome_port != null ? ` on port ${d.esphome_port}` : '';
+  return `Home Assistant keeps its entry for ${who}${port}. Delete it there `
+       + `before adding this Echo back.`;
+};
+
 const _INIT_RC_APPEND = `
 service mixer /system/bin/sh
     oneshot
@@ -3101,6 +3396,9 @@ service echomuse /data/local/bin/start_server.sh
 //             v1 leaves expdb alone. Checked in recovery only: it needs root.
 //   twrp    — the TWRP version. v2 installs 3.7.0_9-0, v1 ships 3.2.3-0.
 //             Compared numerically, so 3.10 is not read as older than 3.7.
+//             3.7.0_9-bboeN is the exception: overdub's dot_firmware.py
+//             installs it on v1 in place of 3.2.3, and its 64-bit kernel
+//             boots only on v1's LK, so it is never evidence of v2.
 //   release — the Android release that MATTERS: getprop in Android, but
 //             /system's build.prop in recovery, because TWRP answers getprop
 //             with its own ramdisk. FireOS 6 is Android 7.1; v1 boots only
@@ -3109,7 +3407,9 @@ const _unlockVerdict = ({ release = '', expdb = '', twrp = '' }) => {
   const evidence = [];
   if (expdb.toLowerCase() === '88168858') evidence.push('a bootloader image in expdb');
   const tv = twrp.match(/(\d+)\.(\d+)/);
-  if (tv && (+tv[1] > 3 || (+tv[1] === 3 && +tv[2] >= 7))) evidence.push(`TWRP ${twrp}`);
+  if (tv && (+tv[1] > 3 || (+tv[1] === 3 && +tv[2] >= 7)) && !/^3\.7\.0_9-bboe\d+$/.test(twrp)) {
+    evidence.push(`TWRP ${twrp}`);
+  }
   const major = parseInt(release, 10);
   if (major >= 6) evidence.push(`Android ${release}, which is FireOS 6`);
   return { v2: evidence.length > 0, evidence };
@@ -4058,15 +4358,24 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     boot_target:   'readlink -f /dev/block/other-boot 2>&1',
   };
 
-  async function collectProvisionDiagnostics(c, stepIdx, err) {
+  // The emOS serial steps have no ADB, so they ask over the console instead.
+  // net.log is the only place the supplicant and the DHCP client write, and
+  // "associated, still no address" (#767) cannot be told apart from a wrong
+  // password without it. The ntpd line repeats every nine minutes for as long
+  // as the device has no time server and would fill the tail.
+  const _EMOS_PROBES = {
+    net_log:       "grep -v '^ntpd: timed out' /run/net.log | tail -n 200",
+  };
+
+  async function collectProvisionDiagnostics(run, probeList, stepIdx, err) {
     const probes = {};
-    for (const [name, cmd] of Object.entries(_PROVISION_PROBES)) {
+    for (const [name, cmd] of Object.entries(probeList)) {
       try {
         // Bounded per probe. The device has just failed something and may be
         // half gone; without this, one unanswered command hangs the whole
         // collection and the operator gets nothing at all.
         probes[name] = await Promise.race([
-          c.shell(cmd),
+          run(cmd),
           new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
         ]);
       } catch (e) {
@@ -4086,7 +4395,11 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     // adbRef, not adb: this runs from runStep's catch, in the same async
     // callback that connected.
     const c = adbRef.current;
-    if (!c) {
+    // On the emOS serial steps adbd is gone and the console is the only way
+    // in. Decided by the step, not by whether an ADB handle is still held: a
+    // stale one would spend 8s per probe timing out and never ask the console.
+    const con = (isEmos && _EMOS_SERIAL_STEPS.has(stepIdx)) ? emosConsole : null;
+    if (!con && !c) {
       // No connection means no probes, and a button that downloads a file
       // containing nothing but the error would be worse than no button.
       addLog('No ADB connection, so device state could not be captured.', 'warn');
@@ -4094,7 +4407,9 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     }
     addLog('Capturing device state for diagnostics…');
     try {
-      setDiagnostics(await collectProvisionDiagnostics(c, stepIdx, err));
+      setDiagnostics(con
+        ? await collectProvisionDiagnostics(cmd => con.run(cmd, 8000), _EMOS_PROBES, stepIdx, err)
+        : await collectProvisionDiagnostics(cmd => c.shell(cmd), _PROVISION_PROBES, stepIdx, err));
       addLog('Device state captured — "Download diagnostics" below.', 'ok');
     } catch (e) {
       // Never let the diagnostic path bury the real failure.
@@ -4926,14 +5241,14 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     } else if (!tw) {
       unreadable = true;
       why.push('the wizard could not read the TWRP version');
-    } else if (v2Boot && /^3\.7\.0(?![0-9])/.test(tw) && layout === 'v2') {
+    } else if (v2Boot && /^3\.7\.0(?![0-9])(?!_9-bboe)/.test(tw) && layout === 'v2') {
       gen = 6;
-    } else if (!v2Boot && /^3\.2\.3(?![0-9])/.test(tw) && layout === 'v1') {
+    } else if (!v2Boot && /^3\.2\.3(?![0-9])|^3\.7\.0_9-bboe\d+$/.test(tw) && layout === 'v1') {
       gen = 5;
     } else {
       why.push(`the unlock does not add up: expdb ${v2Boot ? 'holds' : 'does not hold'} `
         + `amonet 2's bootloader, TWRP is ${tw}, and the boot partitions are laid out `
-        + `for amonet ${layout === 'v2' ? 2 : 1} (amonet 1 means TWRP 3.2.3 and FireOS 5; `
+        + `for amonet ${layout === 'v2' ? 2 : 1} (amonet 1 means TWRP 3.2.3 or 3.7.0_9-bboe and FireOS 5; `
         + 'amonet 2 means TWRP 3.7.0 and FireOS 6)');
     }
     if (gen) {
@@ -6953,6 +7268,28 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
   // Returns 0 when the header does not parse or the arithmetic lands outside the
   // buffer, meaning "send the whole thing" — a size optimisation must never be
   // the reason a build cannot happen.
+  // fetch() with a deadline covering the whole exchange, body included. Rejects
+  // with name 'TimeoutError' when it passes.
+  async function fetchWithDeadline(url, options, ms) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), ms);
+    try {
+      const resp = await fetch(url, { ...options, signal: ctl.signal });
+      const body = await resp.arrayBuffer();
+      return new Response(body, { status: resp.status, statusText: resp.statusText,
+                                  headers: resp.headers });
+    } catch (e) {
+      if (ctl.signal.aborted) {
+        const err = new Error(`no answer within ${Math.round(ms / 1000)}s`);
+        err.name = 'TimeoutError';
+        throw err;
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   function _bootImageLength(bytes) {
     if (!bytes || bytes.length < 2048) return 0;
     if (new TextDecoder().decode(bytes.slice(0, 8)) !== 'ANDROID!') return 0;
@@ -6968,6 +7305,12 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
 
   // Step 5 — build. The controller does the packing; see em_emos_build.py for
   // why it is there and not here.
+
+  // The build POST had no deadline, so a request that never came back (#689)
+  // left the step spinning with nothing to say where it stopped. The
+  // controller's own worst case is ~130s (release lookup 10s, payload download
+  // 120s), plus the 9MB upload on a slow link.
+  const EMOS_BUILD_DEADLINE_MS = 5 * 60 * 1000;
   async function runBuildEmos(useLatest) {
     if (!emosRef) {
       throw new Error('No escrowed boot image — run the Escrow Boot Image step first.');
@@ -7057,11 +7400,27 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
     if (emosPlan && emosPlan.ok && emosPlan.systemPart) {
       fd.append('system_part', String(emosPlan.systemPart));
     }
-    const resp = await fetch(ingressPath('/api/provision/emos_image'), {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-      body: fd,
-    });
+    const started = Date.now();
+    const ticker = setInterval(() => {
+      addLog(`  still waiting for the controller (${Math.round((Date.now() - started) / 1000)}s)…`);
+    }, 30000);
+    let resp;
+    try {
+      resp = await fetchWithDeadline(ingressPath('/api/provision/emos_image'), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      }, EMOS_BUILD_DEADLINE_MS);
+    } catch (e) {
+      if (e.name === 'TimeoutError') {
+        throw new Error('The controller did not answer within 5 minutes. Nothing has '
+          + 'been written to the Echo. Its log shows whether the image arrived: look '
+          + 'for "emOS image" or "Fetching binary".');
+      }
+      throw e;
+    } finally {
+      clearInterval(ticker);
+    }
     if (!resp.ok) {
       // The build refuses rather than warns, and every refusal names something
       // the operator can act on — surface it rather than the status code.
@@ -8527,6 +8886,18 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
               <div className="em-panel em-wizard-recovery">
                 <div className="em-label">This step failed</div>
                 <p className="em-wizard-recovery__hint">{recoveryHint()}</p>
+                {/* The same warning the Detail modal's delete gives (#375).
+                    The matched device is resolved out of knownDevices rather
+                    than carried across, so the port is named here too — only
+                    its id survives on the error. */}
+                {step === 0 && duplicateDeviceId && (() => {
+                  const dup = (knownDevices || []).find(d => d && d.device_id === duplicateDeviceId);
+                  return (
+                    <p className="em-wizard-recovery__hint" style={{ color: 'var(--warn)' }}>
+                      {_deleteHaWarning(dup || { device_id: duplicateDeviceId })}
+                    </p>
+                  );
+                })()}
                 <div className="em-wizard-recovery__actions">
                   <Pill accent onClick={() => runStep(step)}>Retry</Pill>
                    {!CONNECT.has(step) && (
@@ -8851,19 +9222,20 @@ const STAGE_MONO = "'DM Mono',monospace";
 // control sitting under a toggle that does not govern it would look fine and
 // be silently wrong.
 const CONFIG_SECTIONS = {
-  "playback": ["eqBands", "eqLoudness", "duckDb", "limiterEnabled", "limiterThreshold", "limiterRelease", "bassGuardEnabled", "bassGuardDb", "streamReply"],
-  "wakeword": ["owwModel", "owwThreshold", "owwSpeexNs", "bargeInEnabled", "bargeInThreshold", "wakeArbitrationMs", "owwOnDevice", "wakeSound", "wakeSoundLevel"],
+  "playback": ["eqBands", "eqLoudness", "duckDb", "limiterEnabled", "limiterThreshold", "limiterRelease", "bassGuardEnabled", "bassGuardDb", "streamReply", "volumeButtonSound"],
+  "wakeword": ["owwModel", "owwThreshold", "owwSpeexNs", "bargeInEnabled", "bargeInThreshold", "wakeArbitrationMs", "owwOnDevice", "wakeSound", "wakeSoundLevel", "wakeClipCapture", "wakeClipMinScore"],
   "microphones": ["adcMicpga", "adcDigitalGain", "micGainDb", "beamformingEnabled", "beamAngle", "aecEnabled", "aecDelayMs", "aecTailMs", "aecRefSource", "nsAsr", "saveUtterances"],
   "ring": ["ledScene", "ledListenColor", "ledThinkColor", "meterAttack", "meterDecay", "meterFloor", "meterGamma", "meterRef", "meterCurve"],
   "advanced": ["agcEnabled", "vadThreshold", "vadSpeechMs", "vadSilenceMs", "buttonSingleTapEvent", "buttonMultiTapMs", "consolePassword", "consoleTimeoutMin", "controllerEndpoints"],
-  "bluetooth": ["bleProxyEnabled"]
+  "bluetooth": ["bleProxyEnabled", "bleProxyConnections"],
+  "sendspin": ["sendspinEnabled", "sendspinUnpaired"]
 };
 
 // Display labels for the section ids, and the reverse key -> section index
 // that lets a write be gated by the section owning the key it touches.
 const SECTION_LABELS = {
   playback: 'Playback', wakeword: 'Wake word', microphones: 'Microphones',
-  ring: 'Ring', advanced: 'Advanced', bluetooth: 'Bluetooth',
+  ring: 'Ring', advanced: 'Advanced', bluetooth: 'Bluetooth', sendspin: 'Sendspin',
 };
 const KEY_SECTION = {};
 Object.entries(CONFIG_SECTIONS).forEach(([sid, keys]) => {
@@ -8935,7 +9307,7 @@ function ScopeToggle({ local, onChange, disabled }) {
   );
 }
 
-function Stage({ n, title, chips, desc, children, scope, dim }) {
+function Stage({ n, title, chips, desc, children, scope, dim, after }) {
   return (
     <Panel>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
@@ -8949,6 +9321,9 @@ function Stage({ n, title, chips, desc, children, scope, dim }) {
       {/* dim: a section following the fleet is shown read-only rather than
           hidden, so you can still see what it is inheriting. */}
       <div style={dim}>{children}</div>
+      {/* after: per-device actions that are not config, so a fleet scope
+          that makes the section read-only must not lock them out. */}
+      {after}
     </Panel>
   );
 }
@@ -9011,7 +9386,10 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
                             holdCapable = true, triggerCapable = true,
                             localCapable = true, listen = null,
                             hwEchoRef = false, hwRefCapable = true,
-                            emosFleet = true, wakeCueCapable = true }) {
+                            emosFleet = true, wakeCueCapable = true,
+                            volumeCueCapable = true, sendspinCapable = true,
+                            sendspinPanel = null, bleConnectCapable = true,
+                            blePanel = null }) {
   // emosFleet defaults TRUE for the same reason the capability props above do,
   // and for one more: it gates the console password, which is emOS-only, and
   // disabling a setting because we do not KNOW the fleet has an emOS device
@@ -9278,6 +9656,15 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
               Change it from Home Assistant or the device buttons; the current
               level is shown on the Status tab.
             </div>
+            <div style={{ marginTop: 8, ...inputStyle }}>
+              <Toggle label="Volume button sound"
+                sub={volumeCueCapable
+                  ? 'plays a short, low beep with a quick decay when idle; repeats at maximum'
+                  : 'needs newer firmware on this Echo'}
+                disabled={!volumeCueCapable}
+                value={config.volumeButtonSound ?? true}
+                onChange={v => set('volumeButtonSound', v)}/>
+            </div>
           </div>
         </div>
         <StageAdvanced open={advPlay} onToggle={() => setAdvPlay(o => !o)} disabledStyle={inputStyle}>
@@ -9373,6 +9760,15 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
                 <span style={{ fontFamily: mono, fontSize: 9, color: 'var(--muted)' }}>Eager</span>
               </div>
               <Slider label="Arbitration window" sub="ms that the first Echo to hear you silences the others — no added delay; 0 disables" value={config.wakeArbitrationMs ?? 700} min={0} max={2000} step={50} unit="ms" onChange={v => set('wakeArbitrationMs', v)}/>
+              <Toggle label="Save wake-word samples"
+                sub={onDeviceMode(config) === 'off'
+                  ? 'saves clips for review in Activity'
+                  : "only works with wake word detection On the controller"}
+                disabled={onDeviceMode(config) !== 'off'}
+                value={config.wakeClipCapture ?? false} onChange={v => set('wakeClipCapture', v)}/>
+              <Slider label="Minimum sample score" sub="lower catches more near-misses, but more ordinary speech too"
+                disabled={onDeviceMode(config) !== 'off'}
+                value={config.wakeClipMinScore ?? 0.20} min={0.05} max={0.95} step={0.01} formatValue={v => v.toFixed(2)} onChange={v => set('wakeClipMinScore', v)}/>
               {/* Accessibility first: the ring is the only other sign the Echo
                   is listening. Disabled with the reason on firmware that cannot
                   play it, never a switch that saves and stays silent. */}
@@ -9659,11 +10055,150 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
       <Stage n="06" title="Bluetooth"
         chips={<><ScopeChip tone="device">Device</ScopeChip><ScopeChip tone="controller">Controller</ScopeChip></>}
         desc="Turns the device into a Home Assistant Bluetooth proxy: it passively listens for BLE advertisements (presence beacons, temperature sensors) and forwards them to HA as a separate ESPHome device — independent of the voice assistant. Enabling permanently switches the Dot's Bluetooth chip away from Android's stack (Bluetooth speaker pairing, never used by EchoMuse, stops being possible)."
-        scope={scopeEl('bluetooth')} dim={secStyle('bluetooth')}>
+        scope={scopeEl('bluetooth')} dim={secStyle('bluetooth')}
+        after={(config.bleProxyConnections ?? false) ? blePanel : null}>
         <div className="em-grid2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px', ...inputStyle }}>
           <Toggle label="Bluetooth proxy" sub="passive BLE scan → HA (Bermuda, BLE sensors)" value={config.bleProxyEnabled ?? false} onChange={v => set('bleProxyEnabled', v)}/>
+          <Toggle label="Allow connections"
+            sub={bleConnectCapable ? 'proxy goes offline in HA until you enter its key' : 'needs newer firmware on this Echo'}
+            disabled={!bleConnectCapable || !(config.bleProxyEnabled ?? false)}
+            value={config.bleProxyConnections ?? false}
+            onChange={v => set('bleProxyConnections', v)}/>
         </div>
       </Stage>
+
+      {/* 07 SENDSPIN */}
+      <Stage n="07" title="Sendspin"
+        chips={<ScopeChip tone="device">Device</ScopeChip>}
+        desc="Makes the Echo a Sendspin player, so Music Assistant can group it with other speakers and play to all of them in sync. Music Assistant connects to the Echo directly. Music from Home Assistant still takes priority and leaves the group. Early Access."
+        scope={scopeEl('sendspin')} dim={secStyle('sendspin')}
+        after={(config.sendspinEnabled ?? false) ? sendspinPanel : null}>
+        <div className="em-grid2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px', ...inputStyle }}>
+          <Toggle label="Sendspin player"
+            sub={sendspinCapable ? 'Music Assistant finds it on the network' : 'needs newer firmware on this Echo'}
+            disabled={!sendspinCapable}
+            value={config.sendspinEnabled ?? false}
+            onChange={v => set('sendspinEnabled', v)}/>
+          <Toggle label="Play without pairing"
+            sub="any server Music Assistant approves; less secure"
+            disabled={!sendspinCapable || !(config.sendspinEnabled ?? false)}
+            value={config.sendspinUnpaired ?? false}
+            onChange={v => set('sendspinUnpaired', v)}/>
+        </div>
+      </Stage>
+    </div>
+  );
+}
+
+// BleProxyKey: one Echo's Bluetooth connection slots, and the encryption key
+// Home Assistant asks for once connections are on (the proxy's port requires
+// it from then). Fetched on request and never kept, like the Sendspin token.
+function BleProxyKey({ deviceId, status, isAdmin }) {
+  const mono = "'DM Mono',monospace";
+  const [key, setKey] = useState(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const show = async () => {
+    setBusy(true); setError('');
+    try {
+      const r = await API.get(`/api/devices/${deviceId}/ble_proxy/key`);
+      setKey(r.key);
+    } catch (e) {
+      setError(e.error || e.message || 'Could not get the key');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const copy = () => {
+    navigator.clipboard.writeText(key).then(() => setCopied(true)).catch(() => {});
+  };
+
+  const on = !!(status && status.connections);
+  let line = 'Save to turn connections on';
+  if (on) {
+    line = status.slotsLimit
+      ? `${status.slotsFree} of ${status.slotsLimit} connections free`
+      : 'Waiting for the Echo';
+    if (!status.haConnected) line += ' · Home Assistant not connected';
+  }
+
+  return (
+    <div style={{ fontFamily: mono, fontSize: 11, color: 'var(--text2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div>{line}</div>
+      {on && isAdmin && !key && (
+        <div><Pill small disabled={busy} onClick={show}>{busy ? 'Fetching…' : 'Show encryption key'}</Pill></div>
+      )}
+      {key && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
+          <span style={{ wordBreak: 'break-all', userSelect: 'all' }}>{key}</span>
+          <Pill small onClick={copy}>{copied ? 'Copied' : 'Copy'}</Pill>
+          <Pill small onClick={() => { setKey(null); setCopied(false); }}>Hide</Pill>
+        </div>
+      )}
+      {key && <div style={{ color: 'var(--muted)', fontSize: 10 }}>Home Assistant asks for this on the BT Proxy device. Anyone with it can use this Echo's connections.</div>}
+      {error && <div style={{ color: 'var(--error)' }}>{error}</div>}
+    </div>
+  );
+}
+
+// SendspinPairing: one Echo's player status, and the pairing token to paste
+// into Music Assistant (Settings → Players → the Echo → Pair with token). The
+// token is fetched from the Echo on request and never kept: it carries the
+// Echo's pairing key.
+function SendspinPairing({ deviceId, status, isAdmin }) {
+  const mono = "'DM Mono',monospace";
+  const [token, setToken] = useState(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const show = async () => {
+    setBusy(true); setError('');
+    try {
+      const r = await API.get(`/api/devices/${deviceId}/sendspin/token`);
+      setToken(r.token);
+    } catch (e) {
+      setError(e.error || e.message || 'Could not get the token');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const copy = () => {
+    navigator.clipboard.writeText(token).then(() => setCopied(true)).catch(() => {});
+  };
+
+  let line = 'Starting';
+  if (status) {
+    switch (status.state) {
+      case 'listening': line = 'Waiting for Music Assistant'; break;
+      case 'connected': line = `Connected to ${status.server}`; break;
+      case 'playing':   line = status.group ? `Playing in ${status.group}` : 'Playing'; break;
+      case 'busy':      line = 'Home Assistant is playing, so it left its group'; break;
+      case 'error':     line = `Not running: ${status.error}`; break;
+      default:          line = status.state || 'Starting';
+    }
+    if ((status.state === 'connected' || status.state === 'playing') && !status.paired) line += ' · unpaired';
+  }
+  const paired = status && status.pairedWith > 0
+    ? `paired with ${status.pairedWith} server${status.pairedWith === 1 ? '' : 's'}` : 'not paired';
+
+  return (
+    <div style={{ fontFamily: mono, fontSize: 11, color: 'var(--text2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div>{line} <span style={{ color: 'var(--muted)' }}>· {paired}</span></div>
+      {isAdmin && !token && (
+        <div><Pill small disabled={busy} onClick={show}>{busy ? 'Asking the Echo…' : 'Show pairing token'}</Pill></div>
+      )}
+      {token && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
+          <span style={{ wordBreak: 'break-all', userSelect: 'all' }}>{token}</span>
+          <Pill small onClick={copy}>{copied ? 'Copied' : 'Copy'}</Pill>
+          <Pill small onClick={() => { setToken(null); setCopied(false); }}>Hide</Pill>
+        </div>
+      )}
+      {token && <div style={{ color: 'var(--muted)', fontSize: 10 }}>In Music Assistant, pair this player with the token. Anyone with it can pair with this Echo.</div>}
+      {error && <div style={{ color: 'var(--error)' }}>{error}</div>}
     </div>
   );
 }

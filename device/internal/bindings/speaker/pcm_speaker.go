@@ -4,6 +4,7 @@ package speaker
 
 import (
 	"context"
+	"errors"
 	"log"
 	"math"
 	"os"
@@ -15,14 +16,13 @@ import (
 	"github.com/wilbowes/EchoMuse/internal/bindings/codec"
 	"github.com/wilbowes/EchoMuse/internal/bindings/mixer"
 	"github.com/wilbowes/EchoMuse/internal/outchain"
+	"github.com/wilbowes/EchoMuse/pkg/board"
 
 	"github.com/Binozo/GoTinyAlsa/pkg/pcm"
 	"github.com/Binozo/GoTinyAlsa/pkg/tinyalsa"
 )
 
-// cardNr/deviceNr live in pcmstatus.go so the host test can pin them against
-// the status path — this file is ARM-only (build tag `server`).
-const periodSize  = 2048
+const periodSize = 2048
 
 // The hardware tier: what ALSA holds ahead of the DAC. It is sized ONLY for
 // this loop's scheduling lateness — WiFi is the deep queue's job — and every
@@ -64,7 +64,11 @@ const primePeriods = 24
 var silencePeriod = make([]byte, periodBytes)
 
 type PcmSpeaker struct {
-	session *tinyalsa.AudioSession
+	// pcm is the playback device, found by name (pkg/board) in Init, and
+	// statusFile its substream's status in procfs.
+	pcm        board.PCMAddr
+	statusFile string
+	session    *tinyalsa.AudioSession
 	stopCh  chan struct{}
 	// jackInserted is the plug position last applied by SetJackRouting, and
 	// jackKnown says whether one has been applied at all. The reconcile loop
@@ -140,6 +144,87 @@ type PcmSpeaker struct {
 	// level whatever the volume.
 	vol softVolume
 	cue cueState
+
+	// src is a second producer for the music plane (Sendspin, #89): a pull
+	// source, consulted only while the 0x04 plane has nothing, so Home
+	// Assistant's music always wins the plane (decided 2026-08-22). It is
+	// pulled rather than pushed because it must place audio in TIME, and
+	// only this loop knows when the period it is building reaches the DAC.
+	src       atomic.Pointer[sourceBox]
+	srcBuf    []byte
+	srcLastNs atomic.Int64 // last period the source played
+	dacStep   dacStepLog   // pullSource's alone
+}
+
+// MusicSource is a pull producer for the music plane. Fill writes one stereo
+// S16LE period whose first frame reaches the DAC at playAt (as measured;
+// the source smooths it), reporting false when it has nothing due. uncertain
+// is how far playAt may be off from the measurement itself — half the time
+// the status read took — so a source can decline to learn from a reading
+// the scheduler interrupted. Active says whether it has anything queued at
+// all, so an idle source costs no status read.
+type MusicSource interface {
+	Active() bool
+	Fill(out []byte, playAt time.Time, uncertain time.Duration) bool
+}
+
+type sourceBox struct{ s MusicSource }
+
+// SetMusicSource installs (or, with nil, removes) the music plane's pull
+// producer.
+func (p *PcmSpeaker) SetMusicSource(s MusicSource) {
+	if s == nil {
+		p.src.Store(nil)
+		return
+	}
+	p.src.Store(&sourceBox{s})
+}
+
+// pullSource asks the source for this period. The DAC time is measured
+// here: the frames ALSA holds ahead of the DAC, read the instant before the
+// period is built, since every one of them plays before its first frame.
+//
+// The clock is read on BOTH sides of the status read and the midpoint used,
+// as NTP brackets an exchange. Reading it only after, as this did, made any
+// pause between the two (scheduler, GC) a late measurement: +4–10ms
+// readings every minute on C95, 2026-10-01 (#707). The bracket's width says
+// how much to trust the reading, and the source is told.
+func (p *PcmSpeaker) pullSource() []byte {
+	box := p.src.Load()
+	if box == nil || !box.s.Active() {
+		return nil
+	}
+	before := time.Now()
+	b, err := os.ReadFile(p.statusFile)
+	read := time.Since(before)
+	if err != nil {
+		return nil
+	}
+	now := before.Add(read / 2)
+	d, ok := pcmDelay(string(b))
+	if !ok {
+		return nil
+	}
+	playAt := now.Add(time.Duration(d) * time.Second / 48000)
+	p.dacStep.note(playAt, read, string(b), time.Duration(len(p.srcBuf)/4)*time.Second/48000)
+	if !box.s.Fill(p.srcBuf, playAt, read/2) {
+		return nil
+	}
+	p.srcLastNs.Store(now.UnixNano())
+	return p.srcBuf
+}
+
+// SourceAudible is MusicAudible for the pull source alone.
+func (p *PcmSpeaker) SourceAudible(hold time.Duration) bool {
+	last := p.srcLastNs.Load()
+	return last > 0 && time.Now().UnixNano()-last < int64(hold)
+}
+
+// MusicPlaneBusy reports whether the 0x04 plane has music in it at all —
+// arriving, queued or playing. While it does, the pull source must stand
+// aside: Home Assistant wins.
+func (p *PcmSpeaker) MusicPlaneBusy() bool {
+	return p.music.isActive() || len(p.music.ch) > 0 || p.MusicArriving()
 }
 
 // OnStreamStats registers a per-stream stats callback, reported once when a
@@ -160,6 +245,7 @@ func NewPcmSpeaker(echoTap func([]byte), levelTap func(rms float64)) (*PcmSpeake
 		levelTap: levelTap,
 		chain:    outchain.New(48000),
 		chainBuf: make([]byte, periodBytes),
+		srcBuf:   make([]byte, periodBytes),
 	}
 	s.voice = newAudioStream(audioChanDepth, s.deadCh)
 	s.music = newAudioStream(audioChanDepth, s.deadCh)
@@ -172,6 +258,12 @@ func NewPcmSpeaker(echoTap func([]byte), levelTap func(rms float64)) (*PcmSpeake
 }
 
 func (p *PcmSpeaker) Init() error {
+	pb := board.CurrentLayout().Playback
+	if pb == nil {
+		return errors.New("speaker: playback PCM not found on this board")
+	}
+	p.pcm = *pb
+	p.statusFile = statusPath(pb.Card, pb.Device)
 	// Startup order matters for the audible click (2026-07-10): the amp
 	// must come up onto a DAC that is already clocking silence, and the
 	// unmute must come last. The old order (amp on → unmute → open PCM)
@@ -186,7 +278,7 @@ func (p *PcmSpeaker) Init() error {
 	// device where EchoMuse drives the codec directly, mediaserver has no
 	// work to do and is only ever in the way.
 	exec.Command("stop", "media").Run()
-	waitForFreePcm(cardNr, deviceNr, pcmFreeTimeout)
+	waitForFreePcm(p.pcm.Card, p.pcm.Device, pcmFreeTimeout)
 	// Connect the DAC to the output mixer before opening the stream: DAPM
 	// decides what to power at stream open, and an unrouted DAC is powered
 	// down, which presents as a clean "voice stream complete, underruns=0"
@@ -194,7 +286,7 @@ func (p *PcmSpeaker) Init() error {
 	codec.EnsureRoutes()
 	mixer.Set(mixer.PlaybackVolume, "0") // mute before touching amp or stream
 
-	device := tinyalsa.NewDevice(cardNr, deviceNr, pcm.Config{
+	device := tinyalsa.NewDevice(p.pcm.Card, p.pcm.Device, pcm.Config{
 		Channels:         2,
 		SampleRate:       48000,
 		PeriodSize:       alsaPeriodSize,
@@ -213,9 +305,9 @@ func (p *PcmSpeaker) Init() error {
 
 	go p.silenceLoop()
 
-	time.Sleep(100 * time.Millisecond)     // silence reaches the DAC (~2 periods)
-	mixer.Set(mixer.SpeakerAmp, "On")      // enable amp onto a clocked, silent DAC
-	time.Sleep(50 * time.Millisecond)      // let amp settle
+	time.Sleep(100 * time.Millisecond)        // silence reaches the DAC (~2 periods)
+	mixer.Set(mixer.SpeakerAmp, "On")         // enable amp onto a clocked, silent DAC
+	time.Sleep(50 * time.Millisecond)         // let amp settle
 	mixer.Set(mixer.PlaybackVolume, dacUnity) // unmute: volume is applied in software
 
 	log.Println("PcmSpeaker initialised — silence stream running")
@@ -396,6 +488,9 @@ func (p *PcmSpeaker) silenceLoop() {
 			music = p.music.take()
 		} else if p.music.playing {
 			p.report(p.music.drained(), "music")
+		}
+		if music == nil && !p.music.playing && !p.music.isActive() {
+			music = p.pullSource()
 		}
 
 		// The ring's level must be measured BEFORE mixing: Mix sums into the
@@ -605,9 +700,9 @@ func (p *PcmSpeaker) MusicLead() time.Duration {
 	return time.Duration(len(p.music.ch)) * periodSize * time.Second / 48000
 }
 
-// MusicAudible is VoiceAudible for the music plane.
+// MusicAudible is VoiceAudible for the music plane, from either producer.
 func (p *PcmSpeaker) MusicAudible(hold time.Duration) bool {
-	return p.music.playedWithin(time.Now(), hold)
+	return p.music.playedWithin(time.Now(), hold) || p.SourceAudible(max(hold, 100*time.Millisecond))
 }
 
 // EndStream marks the in-flight voice stream complete (0x03). Always arrives
@@ -620,15 +715,15 @@ func (p *PcmSpeaker) EndStream() { p.voice.endStream() }
 func (p *PcmSpeaker) EndMusicStream() { p.music.endStream() }
 
 // Flush cuts a playing VOICE stream immediately (barge-in). Two parts:
-//   1. Drain the buffer — kills up to ~5.5s already queued on-device.
-//   2. Arm discarding (if a stream is mid-flight) — subsequent periods of
-//      this stream are dropped until its EOS arrives. Necessary because the
-//      controller writes the whole response into the WebSocket ahead of
-//      playback: at barge time the rest of the stream is already in TCP
-//      buffers and would refill the channel right after the drain (the
-//      pre-2026-07-08 version drained only, and playback resumed after a
-//      ~1.3s skip). The controller sends the EOS on the cancel path too, so
-//      the discard always terminates.
+//  1. Drain the buffer — kills up to ~5.5s already queued on-device.
+//  2. Arm discarding (if a stream is mid-flight) — subsequent periods of
+//     this stream are dropped until its EOS arrives. Necessary because the
+//     controller writes the whole response into the WebSocket ahead of
+//     playback: at barge time the rest of the stream is already in TCP
+//     buffers and would refill the channel right after the drain (the
+//     pre-2026-07-08 version drained only, and playback resumed after a
+//     ~1.3s skip). The controller sends the EOS on the cancel path too, so
+//     the discard always terminates.
 //
 // Up to alsaBufferFrames (~85ms) already handed to the hardware
 // still play — cutting those needs a stream restart, which costs more in

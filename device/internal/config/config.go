@@ -28,7 +28,8 @@ type Device struct {
 	VadSilenceMs int
 
 	// Speaker
-	StartupVolume int
+	StartupVolume     int
+	VolumeButtonSound bool
 
 	// Wake word
 	OwwThreshold float64
@@ -140,6 +141,21 @@ type Device struct {
 	// BLE proxy (passive scan over /dev/stpbt, internal/bluetooth) —
 	// pointer typed so false is expressible over the wire. Default off.
 	BleProxyEnabled *bool
+	// Whether Home Assistant may open connections through the proxy (#656).
+	// Separate from the scan, and default off: a connection can operate the
+	// device at the other end.
+	BleProxyConnections *bool
+
+	// Sendspin player (internal/sendspin, #89). Both default off: the player
+	// opens a listening port and an mDNS record, so it runs only where
+	// someone asked for it. Unpaired lets an approved but unpaired server
+	// play; pairing needs only the device's token pasted into the server.
+	SendspinEnabled  *bool
+	SendspinUnpaired *bool
+	// SendspinName is what Music Assistant lists the player as: the
+	// device's label on the dashboard, which the firmware does not otherwise
+	// know. Empty falls back to one built from the serial.
+	SendspinName string
 
 	// ListeningAnim carries the controller's current listening-ring
 	// animation spec, raw JSON in the led_anim shape, so the device can
@@ -180,6 +196,7 @@ func (d *Device) loadDefaults() {
 	d.VadSpeechMs = envInt("VAD_SPEECH_MS", 80)
 	d.VadSilenceMs = envInt("VAD_SILENCE_MS", 600)
 	d.StartupVolume = envInt("STARTUP_VOLUME", 85)
+	d.VolumeButtonSound = envBool("VOLUME_BUTTON_SOUND", true)
 	d.OwwThreshold = envFloat("OWW_THRESHOLD", 0.5)
 	d.OwwModel = envStr("OWW_MODEL", "hey_jarvis_v0.1")
 	d.OwwOnDevice = normaliseOnDevice(envStr("OWW_ON_DEVICE", OnDeviceOff))
@@ -207,6 +224,8 @@ func (d *Device) loadDefaults() {
 	d.AecRefSource = normaliseAecRef(envStr("EM_AEC_HW_REF", AecRefAuto))
 	bleProxyEnabled := envBool("BLE_PROXY_ENABLED", false)
 	d.BleProxyEnabled = &bleProxyEnabled
+	sendspinEnabled, sendspinUnpaired := false, false
+	d.SendspinEnabled, d.SendspinUnpaired = &sendspinEnabled, &sendspinUnpaired
 	d.Output = outchain.DefaultParams()
 }
 
@@ -261,6 +280,9 @@ func (d *Device) Apply(msg ConfigMessage) {
 	if msg.WakeSoundLevel != "" {
 		d.WakeSoundLevel = msg.WakeSoundLevel
 	}
+	if msg.VolumeButtonSound != nil {
+		d.VolumeButtonSound = *msg.VolumeButtonSound
+	}
 	if msg.StartupVolume > 0 {
 		d.StartupVolume = msg.StartupVolume
 	}
@@ -297,6 +319,18 @@ func (d *Device) Apply(msg ConfigMessage) {
 	if msg.BleProxyEnabled != nil {
 		d.BleProxyEnabled = msg.BleProxyEnabled
 	}
+	if msg.BleProxyConnections != nil {
+		d.BleProxyConnections = msg.BleProxyConnections
+	}
+	if msg.SendspinEnabled != nil {
+		d.SendspinEnabled = msg.SendspinEnabled
+	}
+	if msg.SendspinUnpaired != nil {
+		d.SendspinUnpaired = msg.SendspinUnpaired
+	}
+	if msg.SendspinName != "" {
+		d.SendspinName = msg.SendspinName
+	}
 	if msg.ListeningAnim != nil {
 		d.ListeningAnim = msg.ListeningAnim
 	}
@@ -315,6 +349,15 @@ func (d *Device) WakeSoundSetting() (on bool, level string) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.WakeSound, d.WakeSoundLevel
+}
+
+// VolumeButtonSoundEnabled reports whether physical volume changes should
+// play their audible preview. The caller still decides whether playback is
+// idle; config owns only the preference.
+func (d *Device) VolumeButtonSoundEnabled() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.VolumeButtonSound
 }
 
 // applyOutput merges the output-chain keys. Every one of them has a
@@ -385,52 +428,61 @@ func (d *Device) Snapshot() ConfigMessage {
 	if d.BleProxyEnabled != nil {
 		bleProxyEnabled = *d.BleProxyEnabled
 	}
+	bleProxyConnections := d.BleProxyConnections != nil && *d.BleProxyConnections
+	volumeButtonSound := d.VolumeButtonSound
+	sendspinEnabled := d.SendspinEnabled != nil && *d.SendspinEnabled
+	sendspinUnpaired := d.SendspinUnpaired != nil && *d.SendspinUnpaired
 	return ConfigMessage{
-		VadThreshold:       d.VadThreshold,
-		VadSpeechMs:        d.VadSpeechMs,
-		VadSilenceMs:       d.VadSilenceMs,
-		OwwThreshold:       d.OwwThreshold,
-		OwwModel:           d.OwwModel,
-		OwwOnDevice:        d.OwwOnDevice,
-		BargeInEnabled:     &bargeInEnabled,
-		BargeInThreshold:   d.BargeInThreshold,
-		WakeWordEnabled:    &wakeWordEnabled,
-		StartupVolume:      d.StartupVolume,
-		AdcDigitalGain:     &adcDigitalGain,
-		AdcMicpga:          &adcMicpga,
-		MicGainDb:          &micGainDb,
-		BeamAngle:          &beamAngle,
-		BeamformingEnabled: &beamformingEnabled,
-		AgcEnabled:         &agcEnabled,
-		AecEnabled:         &aecEnabled,
-		AecDelayMs:         &aecDelayMs,
-		AecTailMs:          d.AecTailMs,
-		AecRefSource:       d.AecRefSource,
-		BleProxyEnabled:    &bleProxyEnabled,
-		ListeningAnim:      d.ListeningAnim,
+		VadThreshold:        d.VadThreshold,
+		VadSpeechMs:         d.VadSpeechMs,
+		VadSilenceMs:        d.VadSilenceMs,
+		OwwThreshold:        d.OwwThreshold,
+		OwwModel:            d.OwwModel,
+		OwwOnDevice:         d.OwwOnDevice,
+		BargeInEnabled:      &bargeInEnabled,
+		BargeInThreshold:    d.BargeInThreshold,
+		WakeWordEnabled:     &wakeWordEnabled,
+		StartupVolume:       d.StartupVolume,
+		VolumeButtonSound:   &volumeButtonSound,
+		AdcDigitalGain:      &adcDigitalGain,
+		AdcMicpga:           &adcMicpga,
+		MicGainDb:           &micGainDb,
+		BeamAngle:           &beamAngle,
+		BeamformingEnabled:  &beamformingEnabled,
+		AgcEnabled:          &agcEnabled,
+		AecEnabled:          &aecEnabled,
+		AecDelayMs:          &aecDelayMs,
+		AecTailMs:           d.AecTailMs,
+		AecRefSource:        d.AecRefSource,
+		BleProxyEnabled:     &bleProxyEnabled,
+		BleProxyConnections: &bleProxyConnections,
+		SendspinEnabled:     &sendspinEnabled,
+		SendspinUnpaired:    &sendspinUnpaired,
+		SendspinName:        d.SendspinName,
+		ListeningAnim:       d.ListeningAnim,
 	}
 }
 
 // ConfigMessage mirrors the JSON shape of the config control message
 // sent by the controller. JSON tags must match em_controller.py exactly.
 type ConfigMessage struct {
-	Type               string   `json:"type,omitempty"`
+	Type string `json:"type,omitempty"`
 	// Pointer typed so 0 is expressible. Both are raw tinymix control
 	// values and 0 is the bottom of each control's own range — a legitimate
 	// setting, and the one somebody reaches for in a loud room. Under the
 	// "non-zero means set" rule they were silently ignored: the dashboard
 	// slider offers 0, the config stored 0, and the device carried on at
 	// whatever gain it already had.
-	AdcDigitalGain     *int     `json:"adcDigitalGain,omitempty"`
-	AdcMicpga          *int     `json:"adcMicpga,omitempty"`
-	MicGainDb          *int     `json:"micGainDb,omitempty"`
-	StartupVolume      int      `json:"startupVolume,omitempty"`
-	VadThreshold       float64  `json:"vadThreshold,omitempty"`
-	VadSpeechMs        int      `json:"vadSpeechMs,omitempty"`
-	VadSilenceMs       int      `json:"vadSilenceMs,omitempty"`
-	OwwThreshold       float64  `json:"owwThreshold,omitempty"`
-	OwwModel           string   `json:"owwModel,omitempty"`
-	OwwOnDevice        string   `json:"owwOnDevice,omitempty"`
+	AdcDigitalGain *int    `json:"adcDigitalGain,omitempty"`
+	AdcMicpga      *int    `json:"adcMicpga,omitempty"`
+	MicGainDb      *int    `json:"micGainDb,omitempty"`
+	StartupVolume  int     `json:"startupVolume,omitempty"`
+	VadThreshold   float64 `json:"vadThreshold,omitempty"`
+	VadSpeechMs    int     `json:"vadSpeechMs,omitempty"`
+	VadSilenceMs   int     `json:"vadSilenceMs,omitempty"`
+	OwwThreshold   float64 `json:"owwThreshold,omitempty"`
+	OwwModel       string  `json:"owwModel,omitempty"`
+	OwwOnDevice    string  `json:"owwOnDevice,omitempty"`
 	// ConsolePassword is the hashed record emOS's init checks before handing
 	// over a shell on the USB serial console. A POINTER, and it has to be: an
 	// EMPTY record is the legitimate "no password" setting, so with a plain
@@ -441,7 +493,7 @@ type ConfigMessage struct {
 	// Consumed by the firmware only to write it to disk for init — the
 	// firmware never checks it, because the console must work when the
 	// firmware is not running. Ignored on FireOS, which uses adbd.
-	ConsolePassword    *string  `json:"consolePassword,omitempty"`
+	ConsolePassword *string `json:"consolePassword,omitempty"`
 	// ConsoleTimeoutMin is the emOS console idle timeout in MINUTES: 0 for no
 	// timeout, otherwise 1-90. A POINTER for ConsolePassword's reason — zero
 	// is the legitimate "no timeout" setting, so with omitempty it would be
@@ -454,24 +506,30 @@ type ConfigMessage struct {
 	//
 	// Written to disk for init like the password above, and ignored on
 	// FireOS, which uses adbd.
-	ConsoleTimeoutMin  *int     `json:"consoleTimeoutMin,omitempty"`
-	BargeInEnabled     *bool    `json:"bargeInEnabled,omitempty"`
+	ConsoleTimeoutMin *int  `json:"consoleTimeoutMin,omitempty"`
+	BargeInEnabled    *bool `json:"bargeInEnabled,omitempty"`
 	// A pointer because false ("No wake word") is the value that matters.
-	WakeWordEnabled    *bool    `json:"wakeWordEnabled,omitempty"`
-	BargeInThreshold   float64  `json:"bargeInThreshold,omitempty"`
-	DuckDb             *float64 `json:"duckDb,omitempty"`
-	BeamAngle          *float64 `json:"beamAngle,omitempty"`
-	BeamformingEnabled *bool    `json:"beamformingEnabled,omitempty"`
-	HasBeamforming     bool     `json:"hasBeamforming,omitempty"`
-	AgcEnabled         *bool    `json:"agcEnabled,omitempty"`
-	AecEnabled         *bool    `json:"aecEnabled,omitempty"`
-	AecDelayMs         *int     `json:"aecDelayMs,omitempty"`
-	AecTailMs          int      `json:"aecTailMs,omitempty"`
-	AecRefSource       string   `json:"aecRefSource,omitempty"`
-	BleProxyEnabled    *bool    `json:"bleProxyEnabled,omitempty"`
+	WakeWordEnabled     *bool    `json:"wakeWordEnabled,omitempty"`
+	BargeInThreshold    float64  `json:"bargeInThreshold,omitempty"`
+	DuckDb              *float64 `json:"duckDb,omitempty"`
+	BeamAngle           *float64 `json:"beamAngle,omitempty"`
+	BeamformingEnabled  *bool    `json:"beamformingEnabled,omitempty"`
+	HasBeamforming      bool     `json:"hasBeamforming,omitempty"`
+	AgcEnabled          *bool    `json:"agcEnabled,omitempty"`
+	AecEnabled          *bool    `json:"aecEnabled,omitempty"`
+	AecDelayMs          *int     `json:"aecDelayMs,omitempty"`
+	AecTailMs           int      `json:"aecTailMs,omitempty"`
+	AecRefSource        string   `json:"aecRefSource,omitempty"`
+	BleProxyEnabled     *bool    `json:"bleProxyEnabled,omitempty"`
+	BleProxyConnections *bool    `json:"bleProxyConnections,omitempty"`
+	SendspinEnabled     *bool    `json:"sendspinEnabled,omitempty"`
+	SendspinUnpaired    *bool    `json:"sendspinUnpaired,omitempty"`
+	SendspinName        string   `json:"sendspinName,omitempty"`
 	// WakeSound: a pointer so "off" is distinguishable from absent.
 	WakeSound      *bool  `json:"wakeSound,omitempty"`
 	WakeSoundLevel string `json:"wakeSoundLevel,omitempty"`
+	// VolumeButtonSound: a pointer so "off" is distinguishable from absent.
+	VolumeButtonSound *bool `json:"volumeButtonSound,omitempty"`
 
 	// Output chain (internal/outchain). Pointers because zero is a real
 	// setting for every one of them; see applyOutput.

@@ -66,6 +66,7 @@ _DEVICE_FIELDS = (
     "first_seen", "last_seen", "config_sections", "use_global_config",
     "esphome_port", "ble_proxy_port", "ble_proxy_enabled",
     "base_os", "kernel_arch", "kernel_release",
+    "emos_version", "emos_build",
 )
 
 # Config keys are behaviour, not secrets — but the WiFi credential is neither
@@ -398,6 +399,20 @@ def redact_stats(stats: Any) -> dict | None:
     return {k: stats[k] for k in _STATS_FIELDS if k in stats}
 
 
+# The latest boot and wear rows (schema v28), by name for the allowlist's reason.
+_BOOT_FIELDS = (
+    "boot_at", "firmware_ver", "boot_reason", "day", "emmc_rev", "emmc_pre_eol",
+    "emmc_life_a", "emmc_life_b", "emmc_name", "emmc_date", "emmc_manfid",
+)
+
+
+def redact_boot(boot: Any) -> dict | None:
+    """Project a device's latest boot row onto the allowlist."""
+    if not isinstance(boot, dict):
+        return None
+    return {k: boot[k] for k in _BOOT_FIELDS if k in boot}
+
+
 def redact_config(config: dict) -> dict:
     """
     Drop anything credential-shaped from a device/fleet config.
@@ -551,7 +566,12 @@ _PROVISION_PROBES = (
     "packages",       # how many of the disable/hide lists are still visible
     "data_property",  # filenames only
     "boot_target",    # what /dev/block/other-boot resolves to (TWRP steps)
+    "net_log",        # tail of /run/net.log, over the emOS serial console
 )
+
+# How many lines of the network log survive. The wizard already tails it; this
+# is the limit that holds if something else posts.
+_NET_LOG_LINES = 200
 
 _INIT_SVC = re.compile(r"^\[init\.svc\.[a-z0-9_.-]+\]:\s*\[[a-z]+\]$", re.I)
 
@@ -637,6 +657,45 @@ def _probe_services(text: str) -> list[str]:
             if _INIT_SVC.match(ln.strip())]
 
 
+# Where a network name starts in a line of /run/net.log. Every message
+# wpa_supplicant 2.10 prints an SSID in at its default log level carries the
+# word (read from its source: "Trying to associate with SSID '%s'",
+# "(SSID='%s' freq=%d MHz)", `ssid="%s"`); the other two are dhcpcd's and the
+# mesh join line, which do not. An event NAME containing the word
+# (CTRL-EVENT-SSID-TEMP-DISABLED) is not where a name starts, and `bssid` is
+# a MAC, which _scrub takes.
+_NET_LOG_NAME = re.compile(
+    r"(?<![a-z])ssid(?![-\w])|access point|joining mesh", re.I)
+
+# What follows the name in the two messages where the tail is the diagnosis:
+# the channel, and why a network was disabled (reason=WRONG_KEY is a wrong
+# password). Anchored at the END of the line, so a name containing the same
+# text cannot stand in for it.
+_NET_LOG_TAIL = re.compile(
+    r"(freq=\d+ MHz\)|auth_failures=\d+ duration=\d+ reason=[A-Z_]+)$")
+
+
+def _probe_net_log(text: str) -> list[str]:
+    """
+    emOS's network log with the network names cut out.
+
+    `_scrub` alone is not enough here. It redacts quoted strings, and
+    wpa_supplicant quotes an SSID without escaping an apostrophe inside it
+    (`printf_encode` escapes `"` and `\\` only), so `SSID 'Bob's WiFi'` would
+    lose `'Bob'` and keep the rest. An SSID is 0-32 arbitrary bytes, so the
+    line is cut where the name starts instead of at whatever looks like its
+    end.
+    """
+    out = []
+    for ln in (text or "").splitlines()[-_NET_LOG_LINES:]:
+        m = _NET_LOG_NAME.search(ln)
+        if m:
+            tail = _NET_LOG_TAIL.search(ln)
+            ln = ln[:m.start()] + "<network>" + (f" {tail.group(1)}" if tail else "")
+        out.extend(_scrub(ln))
+    return out
+
+
 def build_provision_diagnostics(
     *,
     step: str,
@@ -688,6 +747,8 @@ def build_provision_diagnostics(
             value = _probe_wpa_scan(text, selected_ssid)
         elif name == "services":
             value = _probe_services(text)
+        elif name == "net_log":
+            value = _probe_net_log(text)
         else:
             value = _scrub(text)
         out["probes"][name] = value

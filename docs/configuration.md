@@ -34,7 +34,7 @@ opens with the device's **network (WiFi)** settings at the top — always
 per-device, never inherited from the fleet — followed by the
 fleet-inheritable sections, in order of how often you'll realistically touch
 them: **Playback**, **Wake word**, **Microphones**, **Ring**, **Advanced**,
-**Bluetooth**.
+**Bluetooth**, **Sendspin**.
 
 The **CPU** meter shows the core count beside the percentage — "27% · 2/4
 cores". The Dot has four CPU cores and parks the ones it isn't using, and the
@@ -56,7 +56,8 @@ the Status row reads `Online`, or `Offline` with how long ago the device was
 last heard from) and **Activity** (voice-turn history — what was heard, how it was
 transcribed, wake-word scores, playback underruns, near-misses, and — if
 **Save utterances** is on — the recorded audio of each turn, playable and
-downloadable). Activity
+downloadable). If **Save wake-word samples** is on, Activity also lists
+score candidates and detector hits for review and labeling. Activity
 history is stored in the controller's database, so it survives controller
 and device restarts; hourly hardware trends (CPU, memory, WiFi signal) are
 kept for 180 days and available via the API
@@ -214,6 +215,13 @@ The physical buttons step about 4dB per press across the audible range,
 rather than spending presses near the bottom of a scale where nothing is
 audible — silencing the device is the mute button's job. The cyan ring
 spans that same range, so a press always moves it.
+
+**Volume button sound** plays a short, low beep with a quick decay at the newly
+selected volume when you change it with the Dot's physical buttons while the
+speaker is idle. It stays silent for Home Assistant volume changes and while
+voice or music is already playing. Pressing Volume Up again at maximum replays
+the beep so the upper limit is audible. The switch follows the Playback
+section's Fleet / Device scope and is on by default.
 
 Mute is remembered too, but by the device itself: a muted Dot stays muted
 through reboots, power cuts, and firmware updates — red ring and all —
@@ -395,12 +403,39 @@ Where the wake word is heard. Set per Echo; two choices.
   This is how EchoMuse worked before private listening, and installs from
   before it keep this setting until you change it.
 
+### Wake-word sample capture
+For collecting examples to improve a custom wake model, enable **Save
+wake-word samples** under Config → Wake word. The controller keeps a short
+in-memory audio buffer and saves a clip when its score reaches **Minimum
+sample score**, plus every actual wake trigger. In **Both (compare)** mode it
+also saves crossings reported by the Echo. A clip includes audio before and
+after the score peak; it does not continuously write room audio to disk.
+
+Review clips in the device's Activity panel. Label each as **Wake word**,
+**Not wake word**, or **Unsure**. This makes a reviewable set of positive and
+negative examples; it does not train or change the model automatically.
+Labeling also copies the clip into a permanent, uncapped store on disk,
+organised by label, alongside its score and model as a small metadata
+file — so a clip worth keeping survives the 50-per-device limit below rather
+than eventually being pruned with everything else. Capture is off by default,
+and clips are admin-only because they may contain ordinary speech. A phrase
+that scores below the chosen minimum on both detectors will not be captured.
+
+Both the reviewable clips and the labeled archive are plain WAV files on
+disk, in `data/recordings/wake_samples/` and
+`data/recordings/wake_samples_archive/<label>/` respectively — never
+uploaded anywhere. The controller retains at most **50 clips per Echo** in
+the first folder, oldest pruned automatically; the second has no limit and
+nothing removes from it. Turning capture off stops new clips immediately but
+leaves existing ones, reviewable or archived, exactly where they are.
+
 Under the setting, a line says what the Echo is actually doing right now,
 from its own report rather than from the setting: listening privately,
 streaming, or **button only** with the reason. The home screen has one line
 for the whole fleet — for example *1 of 3 connected Echoes streams audio
 continuously*. The full rules, including exactly when audio leaves an Echo,
 are in [listening.md](listening.md).
+
 
 Things to know about **On this Echo**:
 
@@ -682,18 +717,94 @@ Two things to know before enabling:
   Android's stack** (it survives reboots). Nothing EchoMuse uses needs
   Android Bluetooth — but stock-style Bluetooth speaker pairing stops being
   possible on that device.
-- The proxy is **receive-only** (passive scanning). Devices that need an
-  active connection to read data (some smart locks, older BLE devices)
-  aren't supported — advert-based sensors and presence tracking are.
+- On its own the proxy is **receive-only** (passive scanning). Devices that
+  need a connection to read data or take commands need **Allow connections**
+  as well, below.
 - The Dot's WiFi and Bluetooth **share one antenna**, and scanning costs the
   WiFi link. So the scan **pauses automatically** while the Dot is hearing
   you, while a reply is arriving, and while its console or an update is
   running, then resumes; presence tracking loses a few seconds per voice
   turn.
 
+**Allow connections** — lets Home Assistant connect to Bluetooth devices
+through the Dot: smart locks, SwitchBot, anything that needs more than its
+advertisements. Off by default. It needs **Bluetooth proxy** on, and firmware
+that supports it (the toggle says so when it does not).
+
+Turning it on changes one thing you have to act on: **the proxy's Home
+Assistant connection becomes encrypted, and Home Assistant will ask for an
+encryption key.** Save the setting, press **Show encryption key** under the
+toggle (admin only), and paste it into Home Assistant when the `<label> BT
+Proxy` device asks to be reconfigured. Until you do, that proxy stops
+delivering advertisements too, because Home Assistant cannot connect to it.
+The key stays the same for that Dot from then on.
+
+The key is required, with no option to skip it: a connection can operate
+whatever is at the other end, and without it anything on your network could
+use the proxy to do so. Treat the key like a password. Turning connections
+off again makes the proxy unencrypted and ends any open connection.
+
+Limits to know:
+
+- **Three connections per Dot** at a time.
+- **No pairing.** Devices that require Bluetooth pairing (bonding) will
+  refuse; most locks and SwitchBot devices encrypt in their own app layer
+  and do not need it.
+- **A held connection costs presence tracking.** The scan shares the radio
+  with the connection: the Dot catches roughly half as many advertisements
+  while a connection is open. A connection goes to a slower rhythm after
+  five seconds idle to keep that cost down, so the first command after a
+  quiet spell takes about a second.
+- Connections end when the Dot loses its controller, and Home Assistant
+  reconnects them.
+
 Diagnostics live on the device's **Status tab** (Bluetooth proxy panel):
 scanner state, advertisements seen, nearby device count, and whether Home
 Assistant is connected and receiving.
+
+## 07 — Sendspin (Early Access)
+
+**Sendspin player** makes the Echo a [Sendspin](https://github.com/Sendspin/spec)
+player, so Music Assistant can put it in a group with other speakers and play
+to all of them in sync. Music Assistant connects to the Echo directly; the
+controller only turns the player on and shows its status.
+
+To set it up:
+
+1. Turn on **Sendspin player** for the Echo. Music Assistant finds it on the
+   network within a few seconds, listed under the Echo's name.
+2. Press **Show pairing token** under the switch, then **Copy**.
+3. In Music Assistant, open the player and pair it with the token.
+
+The token pairs the Echo with a server, so treat it like a password. Anyone
+who has it can pair with that Echo. Pairing is remembered on both sides, so it
+is a one-time step per Music Assistant install.
+
+**Play without pairing** skips the token: any server that Music Assistant's
+operator approves can play. It is off by default, because without pairing the
+Echo cannot tell a real server from anything else on your network claiming to
+be one.
+
+Things to know:
+
+- **Music from Home Assistant wins.** Asking the Echo for music by voice, or
+  playing to its Home Assistant media player, takes the speaker. The Echo
+  leaves its Sendspin group, and Music Assistant does not put it back by
+  itself. Start the group again from Music Assistant.
+- **Voice still ducks the music.** A wake word lowers synced music exactly as
+  it lowers other music, and the other speakers in the group carry on.
+- **One volume.** Music Assistant's volume slider for the Echo is the Echo's
+  own volume: moving it moves Home Assistant's slider too, and the Echo's
+  buttons move both. Music Assistant's mute silences only the synced music;
+  the Echo's mute button still mutes the microphone.
+- **It needs the controller.** When the Echo loses its controller (the ring
+  pulses orange) it stops playing and leaves its group, and Music Assistant
+  reconnects it once the link is back.
+- **Mono.** The Echo asks for one channel, which is what its speaker plays.
+- The player listens on port **8928** and advertises itself over mDNS as
+  `_sendspin._tcp`. The connection is encrypted.
+- Decoding and decryption cost about 4% of one CPU core while playing,
+  measured on a Dot.
 
 ---
 
@@ -890,6 +1001,11 @@ it still asks GitHub when you press it.
   Assistant add-on every household user can reach the dashboard, so read-only
   accounts get turn timings, scores and outcomes without the speech. Enforced
   on the server, not just hidden in the page.
+- **Wake-word sample clips** (`wakeClipCapture`, off by default) — written to
+  disk beside the database and never uploaded, same as utterance recordings
+  above. Playing, downloading, labeling and deleting them is admin-only.
+  Labeling a clip additionally copies it into a permanent archive on disk,
+  organised by label — still never uploaded, still admin-only to reach.
 - **Device serials, WiFi credentials, network names and your fleet's
   configuration.** These live only in the controller's database.
 - **Support bundles** are built only when you ask for one, and sharing the

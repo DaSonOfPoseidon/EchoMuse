@@ -38,8 +38,8 @@ import (
 	"github.com/wilbowes/EchoMuse/internal/wakeword"
 	"github.com/wilbowes/EchoMuse/internal/wakeword/shadow"
 	"github.com/wilbowes/EchoMuse/internal/wifi"
-	pkgbuttons "github.com/wilbowes/EchoMuse/pkg/buttons"
 	"github.com/wilbowes/EchoMuse/pkg/board"
+	pkgbuttons "github.com/wilbowes/EchoMuse/pkg/buttons"
 	"github.com/wilbowes/EchoMuse/pkg/led"
 )
 
@@ -50,6 +50,7 @@ start_server.sh, which restarts it; do not run a second copy by hand).
 
   version         print the firmware version and build time
   platform-init   apply the board's platform settings, for emOS's boot
+  board           print the board and where each part was found; changes nothing
   help            this text
 `
 
@@ -62,6 +63,18 @@ func main() {
 		switch os.Args[1] {
 		case "platform-init":
 			os.Exit(platformInit())
+		case "board":
+			// Read-only, so it is safe beside a running server: what a
+			// tester on a new board pastes back (#541).
+			layout := board.CurrentLayout()
+			fmt.Printf("board: %s\n", board.IDOf(layout.Board))
+			for _, n := range layout.Notes {
+				fmt.Println(n)
+			}
+			fmt.Printf("mute led gpio: %q\n", layout.MuteLEDGPIO)
+			fmt.Printf("light sensor: %q (%s)\n", layout.LightSensor.Driver, layout.LightSensor.Attr)
+			fmt.Printf("bluetooth hci: %q\n", layout.HCI)
+			os.Exit(0)
 		case "version", "--version", "-v":
 			built := "unknown"
 			if sec, err := strconv.ParseInt(client.BuildUnix, 10, 64); err == nil {
@@ -101,6 +114,19 @@ func main() {
 	// every start — see applyCoreFloor for why the mic pipeline's 160ms
 	// deadline makes it worth doing.
 	applyCoreFloor()
+
+	// Which board this is, and where each part the bindings open was found
+	// (#541). A part found by its old number instead of by name says so here.
+	var boardReport sync.Once
+	layout := board.CurrentLayout()
+	if layout.Board == nil {
+		log.Printf("[board] not identified — using biscuit's layout")
+	} else {
+		log.Printf("[board] %s", layout.Board.ID)
+	}
+	for _, n := range layout.Notes {
+		log.Printf("[board] %s", n)
+	}
 
 	buttonController, err := internalbuttons.NewButtonController()
 	if err != nil {
@@ -145,10 +171,21 @@ func main() {
 			log.Println("[cmd] volume button ignored — no controller session")
 			return
 		}
+		changed := false
 		if direction == "up" {
-			s.VolumeStepUp()
+			changed = s.VolumeStepUp()
 		} else {
-			s.VolumeStepDown()
+			changed = s.VolumeStepDown()
+		}
+		// The cue is for the person pressing the physical button. Remote
+		// volume changes stay silent, and active voice/music already provides
+		// the audible reference this setting exists to supply while idle.
+		const playbackTail = 100 * time.Millisecond
+		if cue.VolumeButtonPreviewDue(direction, changed, s.VolumeAtMax()) &&
+			config.Get().VolumeButtonSoundEnabled() &&
+			!pcmSpeaker.VoiceAudible(playbackTail) &&
+			!pcmSpeaker.MusicAudible(playbackTail) {
+			playVolumeCue(pcmSpeaker, s.VolumeLevel())
 		}
 	})
 	buttonController.SetMuteCallback(func() {
@@ -159,7 +196,7 @@ func main() {
 
 	dataClient := client.NewDataClient(deviceID, microphone, pcmSpeaker, canceller)
 	canceller.SetStatePath(aec.DefaultStatePath) // saved echo path: loaded on the hardware reference
-	applyAecConfig(canceller, dataClient) // arm from env defaults before any config push
+	applyAecConfig(canceller, dataClient)        // arm from env defaults before any config push
 
 	// Direction callback — update LED ring to show estimated source angle
 	dataClient.OnDirectionChanged(func(angle float64) {
@@ -284,7 +321,22 @@ func main() {
 		}
 		controlClient.SendBleAdverts(batch)
 	})
-	applyBleConfig(bleScanner)
+	// Connections for Home Assistant's active proxy (#656). Every Dot reports
+	// the same public Bluetooth address, so links use a random static one
+	// derived from the serial. The bridge speaks only to a controller that
+	// announced ble_connect; to any other, results would be frames it ignores.
+	bleScanner.Conns().SetOwnAddress(bluetooth.StaticRandomAddr(deviceID))
+	bleBridge := bluetooth.NewBridge(bleScanner.Conns(), func(msg []byte) {
+		if controlClient.HasFeature(client.FeatureBleConnect) {
+			dataClient.SendBleGatt(msg)
+		}
+	})
+	dataClient.OnBleGatt(func(msg []byte) {
+		if controlClient.HasFeature(client.FeatureBleConnect) {
+			bleBridge.Handle(msg)
+		}
+	})
+	applyBleConfig(bleScanner, bleBridge)
 
 	// The BLE scan costs this device's WiFi dearly (see Scanner.Yield), so it
 	// stops whenever the link carries something that cannot wait: the user's
@@ -298,7 +350,12 @@ func main() {
 		defer t.Stop()
 		duty := bluetooth.NewMusicDuty()
 		for now := range t.C {
-			music := duty.Yield(now, pcmSpeaker.MusicArriving(), pcmSpeaker.MusicLead())
+			// Synced music (Sendspin) is music too: it streams for hours
+			// and has its own buffer, so it gets the same bursts.
+			ssOn, ssLead := sendspinMusic()
+			music := duty.Yield(now, pcmSpeaker.MusicArriving() || ssOn,
+				max(pcmSpeaker.MusicLead(), ssLead))
+			sendspinPoll(pcmSpeaker)
 			bleScanner.Yield(music ||
 				dataClient.TurnStreamActive() ||
 				dataClient.ListenOpen() ||
@@ -403,6 +460,9 @@ func main() {
 	go pcmSpeaker.WatchJackRouting(ctx)
 
 	controlClient.OnDisconnected(func() {
+		// A Bluetooth link's results have nowhere to go now, and a
+		// controller that comes back starts from no links.
+		bleBridge.DropAll()
 		// Stop any device-local animation: the controller that owned it is
 		// gone, and the pulse below would otherwise fight its ticker. Safe to
 		// repeat — StopAnim only bumps the animator generation, and the pulse
@@ -422,6 +482,7 @@ func main() {
 		// buttons go inert. Set BEFORE the pulse starts, or its first frames
 		// are swallowed by the mute suppression on a muted device.
 		s.SetLinkDown(true)
+		sendspinLinkDown(pcmSpeaker)
 		go pulseOrange(pulseCtx, s)
 	})
 
@@ -440,6 +501,7 @@ func main() {
 		// nothing above this device, so the white pulse owns the ring and the
 		// buttons do nothing.
 		s.SetLinkDown(true)
+		sendspinLinkDown(pcmSpeaker)
 		go pulseWhite(pulseCtx, s)
 	})
 
@@ -459,12 +521,24 @@ func main() {
 		pulseCancel = cancel
 		pulseKind = "refused"
 		s.SetLinkDown(true)
+		sendspinLinkDown(pcmSpeaker)
 		go pulseRefused(pulseCtx, s)
 	})
 
 	// Connected — stop pulse, report current mute state, restore ring or hand
 	// back to direction arc depending on mute state.
 	controlClient.OnConnected(func() {
+		// A part opened by its old number, or not found at all, is reported
+		// once per process: it is how a kernel that names something
+		// differently is learned about from the field (#541).
+		boardReport.Do(func() {
+			if layout.Board == nil {
+				controlClient.SendLog("warn", "[board] not identified — using biscuit's layout")
+			}
+			for _, p := range layout.Problems {
+				controlClient.SendLog("warn", "[board] "+p)
+			}
+		})
 		if pulseCancel != nil {
 			pulseCancel()
 			pulseCancel = nil
@@ -508,6 +582,7 @@ func main() {
 			st.Ble = bleScanner.Stats()
 			st.OwwShadow = shadowStats(dataClient)
 			st.AecRef = canceller.RefSource()
+			st.Sendspin = sendspinStatus()
 			controlClient.SendStats(st)
 		}()
 		// Deliver any unacknowledged WiFi change outcome (including the
@@ -538,7 +613,8 @@ func main() {
 			s.SeedVolume(msg.StartupVolume)
 		}
 		applyAecConfig(canceller, dataClient)
-		applyBleConfig(bleScanner)
+		applyBleConfig(bleScanner, bleBridge)
+		applySendspinConfig(pcmSpeaker, controlClient, s, deviceID)
 		applyShadowConfig(dataClient, controlClient, pcmSpeaker, s)
 		syncListenState(dataClient, controlClient, false)
 	})
@@ -553,6 +629,8 @@ func main() {
 		}
 		playWakeCue(pcmSpeaker)
 	})
+
+	controlClient.OnSendspinToken(sendspinToken)
 
 	// Speaker flush — barge-in: cut buffered TTS the moment the controller
 	// hears the wake word during playback.
@@ -680,6 +758,7 @@ func main() {
 	// Fires on every Set() call: physical button press or future volume_set command.
 	s.SetVolumeChangeCallback(func(level int) {
 		controlClient.SendVolumeState(level)
+		sendspinVolumeChanged(level)
 	})
 
 	// Volume set from controller (HA MediaPlayerCommandRequest forwarded down).
@@ -754,6 +833,7 @@ func main() {
 				snaps = append(snaps, sn)
 			}
 			st.TcpUpRetrans, st.TcpUpSegs = upLoss.Drain(snaps...)
+			st.Sendspin = sendspinStatus()
 			controlClient.SendStats(st)
 			if tick%10 == 0 {
 				var ms runtime.MemStats
@@ -788,6 +868,11 @@ func main() {
 	sig := <-sigCh
 	log.Printf("Received %v — shutting down (muting output, amp off)", sig)
 	bleScanner.SetEnabled(false) // scan off + /dev/stpbt closed so the chip idles
+	// "restart", not "shutdown": this is an OTA or a supervisor restart far
+	// more often than a power-off, and restart asks the server to redial.
+	if c := sendspinPlayer(); c != nil {
+		c.Stop("restart")
+	}
 	pcmSpeaker.Close()
 	os.Exit(0)
 }
@@ -823,6 +908,16 @@ func shadowStats(dc *client.DataClient) interface{} {
 	}
 }
 
+// emmcForStats is the eMMC wear for the stats tick, read at most every six
+// hours. An untyped nil when unreadable, so the field is null rather than a
+// typed nil the controller would have to tell apart.
+func emmcForStats() interface{} {
+	if e := platform.EmmcCached(6 * time.Hour); e != nil {
+		return e
+	}
+	return nil
+}
+
 func collectStats() client.DeviceStats {
 	cpuPct := cpuPercent()
 	memUsed, memTotal := memStats()
@@ -853,6 +948,7 @@ func collectStats() client.DeviceStats {
 		TxErrors:         txErr,
 		TxDropped:        txDrop,
 		RxCrcErrors:      rxCrc,
+		Emmc:             emmcForStats(),
 	}
 }
 
@@ -1298,6 +1394,16 @@ func playWakeCue(spk *speaker.PcmSpeaker) {
 	spk.PlayCue(c)
 }
 
+// playVolumeCue previews the newly selected device volume. PlayCue is mixed
+// after software volume (so wake sounds can stay absolute), therefore these
+// samples carry the device-volume gain themselves.
+func playVolumeCue(spk *speaker.PcmSpeaker, level int) {
+	if spk == nil {
+		return
+	}
+	spk.PlayCue(cue.VolumeCue(speakerRate, speaker.VolumeGain(level)))
+}
+
 // speakerRate mirrors the speaker binding's rate, declared here so this file
 // still builds on a host, where the //go:build server binding does not.
 const speakerRate = 48000
@@ -1408,9 +1514,12 @@ func syncListenState(dc *client.DataClient, cc *client.ControlClient, force bool
 	}
 }
 
-func applyBleConfig(scanner *bluetooth.Scanner) {
+func applyBleConfig(scanner *bluetooth.Scanner, bridge *bluetooth.Bridge) {
 	snap := config.Get().Snapshot()
-	scanner.SetEnabled(snap.BleProxyEnabled != nil && *snap.BleProxyEnabled)
+	proxy := snap.BleProxyEnabled != nil && *snap.BleProxyEnabled
+	scanner.SetEnabled(proxy)
+	// Connections live inside the scan session, so they need the proxy on.
+	bridge.SetEnabled(proxy && snap.BleProxyConnections != nil && *snap.BleProxyConnections)
 }
 
 func allLEDs(r, g, b uint8) []led.Led {

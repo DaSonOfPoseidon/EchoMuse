@@ -118,9 +118,10 @@ The wizard offers two ways to run EchoMuse on the Dot:
   Dots that have one, and the action button as an event you can automate.
 - **A dashboard** for setup, updates, per-device settings (EQ, LED ring, mic
   tuning), logs and a history of voice turns.
-- **Firmware updates over WiFi**, with automatic rollback if a new version
-  fails to start. emOS itself is updated by re-running the wizard, for now
-  ([#573](https://github.com/wilbowes/EchoMuse/issues/573)).
+- **Updates over WiFi**, for the firmware and for emOS itself, each with
+  automatic rollback if the new version fails. emOS updates need emOS 0.10 as
+  the release to install and a controller newer than 2.25.0; before that,
+  emOS is updated by re-running the wizard.
 
 ## Privacy
 
@@ -180,6 +181,8 @@ Everything else is in the [issue tracker](https://github.com/wilbowes/EchoMuse/i
 | [emOS](emos/README.md) | How our own userspace on the Dot works. |
 | [How the voice pipeline works](docs/voice-pipeline.md) | The path from wake word to answer. |
 | [Device ↔ controller protocol](docs/device-controller-interface.md) | For porting EchoMuse to new hardware. |
+| [Boards](docs/boards.md) | How the firmware finds its hardware by name, and how to describe a new board. |
+| [Profiling a new Echo](porting/README.md) | Scripts that collect what a port needs from an unsupported device. |
 | [Contributing](CONTRIBUTING.md) | Building from source, tests, and how to send changes. |
 | [Engineering journal](JOURNAL.md) | How each part was worked out, including the dead ends. |
 

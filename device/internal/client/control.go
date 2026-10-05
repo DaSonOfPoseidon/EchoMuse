@@ -117,6 +117,7 @@ type ControlClient struct {
 	refusedCallback       StateCallback
 	configAppliedCallback ConfigAppliedCallback
 	playCueCallback       func(string)
+	sendspinTokenCallback func() map[string]any
 	volumeSetCallback     VolumeSetCallback
 	beamLockCallback      BeamLockCallback
 	speakerFlushCallback  StateCallback
@@ -193,6 +194,21 @@ func (c *ControlClient) OnDuck(cb func(on bool))                  { c.duckCallba
 func (c *ControlClient) OnWifiChange(cb WifiChangeCallback)       { c.wifiChangeCallback = cb }
 func (c *ControlClient) OnWifiCommit(cb StateCallback)            { c.wifiCommitCallback = cb }
 func (c *ControlClient) OnWifiScan(cb StateCallback)              { c.wifiScanCallback = cb }
+
+// OnSendspinToken answers the controller's request for the Sendspin pairing
+// token, which the dashboard shows for pasting into Music Assistant. Asked
+// for on demand rather than reported, because it is a secret: it never rides
+// the stats report, which lands in support bundles. The callback returns nil
+// when the player is off.
+func (c *ControlClient) OnSendspinToken(cb func() map[string]any) { c.sendspinTokenCallback = cb }
+
+// SendSendspinStatus reports the Sendspin player's state as it changes. The
+// stats tick carries it too; this is what makes the dashboard follow a
+// pairing or a stream starting without a 30s wait. Unknown message types are
+// ignored by older controllers.
+func (c *ControlClient) SendSendspinStatus(status any) error {
+	return c.writeJSON(map[string]any{"type": "sendspin_status", "status": status})
+}
 
 // IsConnected reports whether the control WebSocket is registered and
 // live — the wifi change executor's "controller reachable" gate.
@@ -608,7 +624,7 @@ func (c *ControlClient) connect(ctx context.Context, server *discovery.ServerInf
 		"base_os": platform.Base(),
 		// Which board detection matched (pkg/board), "unknown" when none did.
 		// Unread by current controllers, so safe to add unnegotiated.
-		"board": board.IDOf(board.Detect("")),
+		"board": board.IDOf(board.Current()),
 	}
 	// The running kernel, `uname -m` and `uname -r`. Generic across boards, and
 	// on biscuit the only thing that separates emOS on FireOS 5's 64-bit
@@ -622,6 +638,19 @@ func (c *ControlClient) connect(ctx context.Context, server *discovery.ServerInf
 	if m, r := platform.Kernel(); m != "" {
 		reg["kernel_arch"] = m
 		reg["kernel_release"] = r
+	}
+	// Flash wear and how this boot started (platform/health.go): static for
+	// the boot, so here and not on the stats tick. boot_id lets the controller
+	// keep one row per boot rather than per redial. Each is omitted when
+	// unreadable, which older controllers ignore and newer ones store as NULL.
+	if id := platform.BootID(""); id != "" {
+		reg["boot_id"] = id
+	}
+	if r := platform.BootReason(""); r != "" {
+		reg["boot_reason"] = r
+	}
+	if e := platform.ReadEmmc(""); e != nil {
+		reg["emmc"] = e
 	}
 	// Resolved fresh per registration: a cached-at-startup value goes stale
 	// after a WiFi change, and if the process started while the network was
@@ -949,6 +978,17 @@ func (c *ControlClient) connect(ctx context.Context, server *discovery.ServerInf
 				c.playCueCallback(cueMsg.Cue)
 			}
 
+		case "sendspin_token_request":
+			var reply map[string]any
+			if c.sendspinTokenCallback != nil {
+				reply = c.sendspinTokenCallback()
+			}
+			if reply == nil {
+				reply = map[string]any{"error": "sendspin is off"}
+			}
+			reply["type"] = "sendspin_token"
+			c.writeJSON(reply)
+
 		case "speaker_flush":
 			// Barge-in: controller detected the wake word during TTS
 			// playback and wants the buffered audio cut immediately.
@@ -1224,6 +1264,8 @@ func capabilities() []string {
 	// Without it the dashboard shows the toggle disabled, since a switch that
 	// saves and makes no sound fails the person it exists for.
 	//
+	// "volume_cue": this firmware can play a physical-button volume preview
+	// at the new level, and suppress it while voice or music is audible.
 	// "wake_word_off": this firmware honours wakeWordEnabled=false (#286),
 	// so a crossing opens no session. Without it the controller declines
 	// HA's "No wake word" for a privately listening Echo, which would
@@ -1232,9 +1274,20 @@ func capabilities() []string {
 	// "pairing": this firmware asks to pair itself when its owner holds the
 	// action button 5 s (pairing.go). Without it the controller offers the
 	// admin a Pair action instead, since the device cannot ask.
+	//
+	// "ble_connect": this firmware can hold Bluetooth LE connections for the
+	// controller and speak GATT over them (#656), exchanging requests and
+	// results as ble-gatt frames on the data plane. It does so only against
+	// a controller announcing the same feature, and only while
+	// bleProxyConnections is on.
+	//
+	// "sendspin": this firmware can be a Sendspin player (internal/sendspin),
+	// switched by sendspinEnabled. Whether it is running, and paired, is the
+	// sendspin status, for the aec_hw_ref reason.
 	caps := []string{"mic", "speaker", "leds", "led_anim", "buttons",
 		"oww_shadow", "oww_trigger", "button_hold", "audio_mix",
-		"aec_hw_ref", "oww_local_only", "output_chain", "wake_cue", "pairing", "wake_word_off"}
+		"aec_hw_ref", "oww_local_only", "output_chain", "wake_cue", "volume_cue", "pairing",
+		"wake_word_off", "sendspin", "ble_connect"}
 	if als.Present() {
 		caps = append(caps, "ambient_light")
 	}
@@ -1476,6 +1529,12 @@ func (c *ControlClient) HasFeature(name string) bool {
 // controller ignores unknown frame types and would drop every advert in
 // silence.
 const FeatureBleAdvertsData = "ble_adverts_data"
+
+// FeatureBleConnect is announced by a controller that drives Bluetooth LE
+// connections through this device (frameTypeBleGatt both ways). Without it
+// nothing is sent: an older controller ignores the frame, and a result nobody
+// reads is a connection held for nobody.
+const FeatureBleConnect = "ble_connect"
 
 // FeatureListenSession is announced by a controller that understands
 // private-listening sessions: listen_state, session-tagged oww_wake, the

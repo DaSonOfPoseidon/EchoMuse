@@ -25,7 +25,8 @@ SECTIONS: dict[str, dict] = {
         "label": "Playback",
         "keys": ["eqBands", "eqLoudness", "duckDb",
                  "limiterEnabled", "limiterThreshold", "limiterRelease",
-                 "bassGuardEnabled", "bassGuardDb", "streamReply"],
+                 "bassGuardEnabled", "bassGuardDb", "streamReply",
+                 "volumeButtonSound"],
     },
     "wakeword": {
         "label": "Wake word",
@@ -33,6 +34,7 @@ SECTIONS: dict[str, dict] = {
             "owwModel", "owwThreshold", "owwSpeexNs",
             "bargeInEnabled", "bargeInThreshold", "wakeArbitrationMs",
             "owwOnDevice", "wakeSound", "wakeSoundLevel",
+            "wakeClipCapture", "wakeClipMinScore",
         ],
     },
     "microphones": {
@@ -68,7 +70,11 @@ SECTIONS: dict[str, dict] = {
     },
     "bluetooth": {
         "label": "Bluetooth",
-        "keys": ["bleProxyEnabled"],
+        "keys": ["bleProxyEnabled", "bleProxyConnections"],
+    },
+    "sendspin": {
+        "label": "Sendspin",
+        "keys": ["sendspinEnabled", "sendspinUnpaired"],
     },
 }
 

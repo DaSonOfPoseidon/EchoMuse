@@ -12,11 +12,15 @@ The Echo Dot runs FireOS 5 (API 22). Standard Go cross-compilation won't work �
 **One-time setup:**
 ```bash
 # GoTinyAlsa is a git submodule at the repo root — the wilbowes/GoTinyAlsa
-# fork, NOT upstream Binozo, pinned to the fork's master. It carries two
-# GetAudioStream fixes: the defer-in-loop leak (v2.9.2) and a fresh slice per
-# read (fork PR #1, #607 — one reused buffer meant queued batches were
-# overwritten by the next read). Don't repoint it upstream until both are
-# merged there (Binozo/GoTinyAlsa#2 is the second).
+# fork, NOT upstream Binozo. It carries two GetAudioStream fixes: the
+# defer-in-loop leak (v2.9.2) and a fresh slice per read (fork PR #1, #607 —
+# one reused buffer meant queued batches were overwritten by the next read),
+# both now upstream (Binozo/GoTinyAlsa#2). It also carries a PLAYBACK fix
+# upstream does not have: WriteFrames blocks signals around pcm_write (fork
+# PR #2, #707). tinyalsa's pcm_write ignores the partial count a
+# signal-interrupted WRITEI returns, so the rest of the buffer was silently
+# dropped — ~15 audible clicks an hour per device, on every playback path,
+# before; 0 after. Don't repoint it upstream until that one is there too.
 git submodule update --init
 
 # Build the compiler Docker image (from device/)
@@ -165,7 +169,8 @@ The always-on wake stream (`mic_start` without `lock_mic`) is **ungated and AGC-
 | `internal/client/data.go` | WebSocket client to controller `/data` — mic streaming, speaker playback |
 | `internal/server/` | Local state machine: mute, volume, LED mode priority |
 | `internal/config/config.go` | Global runtime config; env var defaults, overridden by controller push |
-| `internal/bindings/` | Hardware drivers: mic PCM, speaker PCM, LED I2C, button evdev |
+| `internal/bindings/` | Hardware drivers: mic PCM, speaker PCM, LED I2C, button evdev. None of them names hardware by number: each opens what `pkg/board` resolved (see "Boards" below) |
+| `pkg/board/` | Which board this is (idme `device_type_id`), where its parts are BY NAME (`Hardware`), the lookup (`Resolve`), and the emOS thermal tuning. `guard_test.go` fails on an event number, i2c bus address, pcm path or `NewDevice` with literal numbers anywhere outside this package |
 | `internal/wakeword/` | openWakeWord streaming feature pipeline (mel ring → 76-frame windows → embedding ring → classifier). Pure Go: inference sits behind the `Inferer` interface so the buffering is host-testable with no ONNX/cgo. Validated tensor-for-tensor against Python via a golden fixture (`testdata/`, regenerate with `gen_fixture.py`) |
 | `internal/wakeword/ort/` | The `Inferer` implementation: ONNX Runtime via cgo. The library is **dlopen'd at runtime, never linked** (only the MIT C header is vendored) so a device without it boots normally and falls back to controller-side wake word — verified by the ARM binary needing only libdl/liblog/libc with zero undefined `Ort*` symbols. `DefaultOptions` (1 thread, XNNPACK, `allow_spinning=0`) is the measured optimum: 37.7% of one core against 243% for ORT's defaults. Don't "fix" the thread count — more threads lowers latency and *raises* CPU, the wrong trade for duty-cycled work |
 | `internal/wakeword/shadow/` | On-device scoring that reports but never acts (see "On-device wake word"). `Push` must never block: inference runs on its own goroutine and drops frames when behind |
@@ -174,9 +179,56 @@ The always-on wake stream (`mic_start` without `lock_mic`) is **ungated and AGC-
 | `internal/bindings/als/` | Ambient light (ams **TSL2540** on i2c). Android does not expose it AT ALL — `dumpsys sensorservice` reports an empty list, nothing under `/sys/class/sensors`, no input device; it is visible only on the raw i2c bus, the same shape as the mute LED being on a different GPIO than the vendor HAL believed. Resolved **by name, not address** (`0-0039` is an enumeration accident). **The bus listing is not a hardware inventory**: both ALS names are registered by Amazon's board file, so a `tsl2540` at 0x39 and a `tsl2584tsv` at 0x29 appear on every unit whatever is soldered on (`modalias` is static kernel data). Which one answers differs by batch — ours have the 2540 and nothing at 0x29 (`taos_probe() err = -6`, ENXIO), the `G090LF096` batch has the 2584 instead, reachable only through IIO at `/sys/bus/iio/devices/iio:device0` (#90). A second-sourced part, not a driver fault, so the answer is to read the IIO sensor too, never to loosen the match to a `tsl` prefix. The **boot log is the real inventory** — both drivers probe on every unit and log what replied — but `dmesg` rolls, so it needs reading soon after a reboot. Never `unbind` the driver to experiment: it succeeds, leaves the `als_*` attributes in place, and the next read hangs the device until a power cycle. **Polled every 5s, not every 1s, and the reason is the kernel log rather than the syscalls.** The driver prints a line on every read under its darkness threshold (`tsl2540_get_lux: darkness (0 <= 10)`), so a 1Hz poll is ~86,000 kernel lines a day — and it only fires in the dark, so it runs all night, which is exactly when a device sits idle and a crash most needs explaining. Measured on EFF 2026-09-04: the whole log ring was that one line and `messages.last` had reached 609KB. The cost is not disk — MediaTek's ram_console is the ONLY crash channel this kernel has and it is a fixed-size ring we do not control, so anything filling it evicts the evidence. `MinInterval` already refuses to report more often than every 2s, so 1Hz was finer than the reporting floor it feeds; if #296 ever wants faster, make the poll adaptive rather than paying a permanent flood. `Lux()` returns **nil, never 0** — a covered sensor reads a genuine 0. `Watch` reports a step change immediately (25% relative, 10-lux floor, measured noise ±1.5%); the steady value rides the ~30s stats tick. `Report()` says **why** there is no sensor (`ok`/`no_chip`/`no_attribute`/`unknown`, plus every i2c name it saw) and rides the register message as `ambient_light_status` — absence used to be logged only to the device's own stdout, which support bundles do not collect, so two users could not be told apart without a shell session (#90). The whole bus is enumerated **before** matching: returning at the match truncated the list on working devices, which is exactly the side you compare against |
 | `internal/bindings/jack/` | Headphone jack detect (`/sys/class/switch/h2w`, mediatek accdet). Polled, not evented — the ACCDET input node reports no keys on this hardware. `Watch` dispatches the state it STARTS in as well as every change: accdet is edge-triggered and a boot has no edge, so a device booted with a cable in got no correction at all. The callback (`PcmSpeaker.SetJackRouting`) owns both positions — the amp switch, and the `HP Driver Gain Volume` that accdet drops to the floor of its range on insert and nothing used to raise. Output *destination* is still physical, done by the jack's own switch contacts, so no mux layer should be driven — but level is ours |
 | `internal/outchain/` | Speaker output chain — EQ → bass guard → limiter — run on the MIX at the ALSA write, after the duck and before the taps. A port of `em_eq`/`em_mbc`/`em_limiter`, held **bit-exact** to vectors the Python generates (`testdata/gen_vectors.py`), on the host and on VVV's A53. Inactive until the controller's ack carries `output_chain`, so it never runs twice. Processing is mono (L+R)/2 written to both channels — exact, since the wire is mono. Idles after ~2 silent periods, so a quiet speaker costs nothing. **Cost on VVV, 2026-09-22: 1.9ms per 42.7ms period at defaults (4.4% of one core), 2.6ms worst case (shaped EQ + speech boost, 6.2%)**, only while audio plays. Most of it is per-sample `Log`/`Exp` in the guard and 13 biquads; a `%` in the limiter cost a runtime divide call per sample, since Go's 32-bit ARM build has no divide instruction |
+| `internal/sendspin/` | Sendspin player (#89, EA): Music Assistant connects to the Echo directly for synchronised multi-room audio. Noise KKpsk2 responder, token pairing, the spec's Kalman time filter, FLAC decode, and a **pull** scheduler: `PcmSpeaker.SetMusicSource` makes the write loop read the substream's ALSA `delay` each period and ask for the audio due when that period reaches the DAC — the `0x04` plane plays in order and has no timestamps, so a push could not place anything. Consulted only while `0x04` is empty (HA wins), and the player reports itself taken while `0x04` has anything. **Speaks aiosendspin 9.1.1's wire, which disagrees with the spec in seven places** — `docs/audio-states.md` §6.4 lists them; re-run `tools/sendspin_interop/run.sh` against any new aiosendspin before trusting a Music Assistant upgrade. Held to references rather than readings: the time filter to aiosendspin's to the microsecond, FLAC bit-exact against its encoder, the token and Sentinel psk_id to the spec's vectors. **It is the first thing on the Echo that LISTENS, and emOS drops inbound** (init's `firewall()`): `internal/firewall` inserts an ACCEPT for 8928 before `Start` advertises and removes it on every stop, so an Echo with Sendspin off stays outbound-only. Without it the player logs "listening" and every connection times out, and Music Assistant does not list the player at all, so it looks like discovery failing. First heard on 15LE (emOS 32-bit) 2026-09-30: play, duck, seek, volume both ways, pause/resume, discovery. 2026-10-01, 15LE + C95 grouped: in sync by ear, 0.1–0.4ms self-reported, corrections 2–7/min settled (bursts to ~300/min for a minute or two), playback cost below what /proc resolves, both players stop in the same second as the controller link and resume with it, and a Music Assistant left/right stereo pair works with the mono player (MA picks the channel before encoding). `[sendspin] playing:` logs the counts once a minute. The occasional crackle was dropped audio, not corrections: tinyalsa's `pcm_write` discards the rest of a signal-interrupted write, fixed in the fork (see the GoTinyAlsa note above). `OutputClock` gates any reading over 3ms from prediction and `pullSource` brackets its status read with two clock reads (#710) |
 | `internal/wifi/` | Safe WiFi network change with auto-rollback (wifi_change/wifi_commit/wifi_scan control messages; pending-marker recovery at startup). Reload path is `svc wifi disable/enable` ONLY — see package comment for the hardware-proven constraints. **An SSID is 0–32 arbitrary BYTES and is handled as bytes** (`ssid.go`): decoded from wpa_cli's printf_encode, carried as `ssid_hex`, compared as bytes, and written quoted when wpa_supplicant's quoted form can hold it (it reads to the LAST `"`, so quotes and backslashes are literal) or as hex when not. Until 2026-09-19 every path refused `"` and `\`, trimmed spaces, and wrote escaped text back as a different network — and the emOS wizard put SSIDs into a shell command |
 | `internal/bluetooth/` | BLE proxy — raw HCI passive scan over `/dev/stpbt` (single-owner, so Android's Bluedroid is durably `pm disable`d first), parsed into adverts and forwarded to the controller. `emit.go` decides which of them are worth sending; see "The BLE proxy" below, and read it before changing the scan cadence or the filtering |
 | `pkg/led/`, `pkg/mic/`, `pkg/speaker/`, `pkg/buttons/` | Hardware abstractions (interfaces) |
+
+## Boards: hardware is found by name (#541, 2026-10-04)
+
+**`docs/boards.md` is the guide for anyone trying a new board; this is what
+must stay true.** A board states its parts in `pkg/board/hardware.go`: the two
+input devices, the ring's i2c driver, the mic and speaker PCM stream names,
+the light sensor and its lux attribute, the mute LED GPIO and the Bluetooth
+HCI device. `board.Resolve` finds them (`/proc/bus/input/devices`,
+`/proc/asound/pcm`, `/sys/bus/i2c/devices/*/name`) once per process, and the
+bindings open `board.CurrentLayout()`. Only biscuit is registered.
+
+- **Biscuit keeps its old numbers as a FALLBACK, and a new board must not get
+  one.** The fallback exists so a FireOS build that names a part differently
+  behaves as before; it is used only when the name is absent, logged, and sent
+  to the controller once per start as a `[board]` warning
+  (`Layout.Problems`), because the device's own log is RAM-backed and nobody
+  reads it on a working Echo. No unit we own takes that path: it is covered
+  by tests only, and the EA is how we learn whether any unit does.
+- **An unidentified device gets biscuit's layout**, as every build before
+  this assumed. That includes gpio444, so a new board is ADDED before the
+  firmware is run on it. On the Dot 3 that pin is an audio clock, and
+  exporting it silences the speaker until reboot.
+- **Ambiguous is refused, never first-match.** Biscuit has four
+  `tlv320aic3101` ADCs; a name that matches twice does not identify a part.
+- **Match input devices by NAME, not by key capability.** Both of biscuit's
+  claim `KEY_VOLUMEDOWN`; only `keys` sends it.
+- **The Bluetooth node is stated, never probed.** `/dev/stpbt` exists on the
+  Dot 3 too, where the radio is an MT7668 over SDIO.
+- **`server board`** prints the layout and changes nothing, so it runs beside
+  the supervised server: push the binary to a temp path and run it before
+  installing a build that changes any of this.
+
+Names were read on 2026-10-04 from VVV (FireOS 5.5.5.4), 15LE (emOS, FireOS 6
+32-bit kernel) and C95 (emOS, FireOS 5 64-bit kernel): `mtk-kpd` on event1,
+`keys` on event2, `is31fl3236` at 0-003f, `TLV320AIC3204 Playback` 0-23,
+`TLV320AIC3101 Capture` 0-24, identical on all three. VVV's output is the
+fixture `pkg/board/testdata/biscuit-fireos5/`.
+
+**Still biscuit's, inside the drivers:** the 9-channel S24 capture layout,
+`codec.Routes`, the amp switch and DAC unity, the jack tables, start-up
+ordering and the Android `stop <service>` names. They move into `Hardware`
+with the first second board. What the two existing ports need, from reading
+their diffs (nothing verified on hardware of ours): radar is close to biscuit (same SoC, ring, PCM layout and four
+ADCs; a speaker amp with a mute GPIO and a 117-byte filter); the Dot 3 needs
+behaviour as well as data (a 48kHz capture opened before the mic, no amp
+switch, unity at 255, 4-channel S32 capture, a different radio).
 
 ## Private listening (the default since 2026-09-21)
 
@@ -1099,6 +1151,25 @@ to go nowhere. Silencing the device is the mute button's job. Explicit `Set()`
 calls are deliberately **not** floored — HA's volume 0.0 must still mean
 silent — and a press from below the floor lands *on* it, so one press always
 reaches audible.
+
+`volumeButtonSound` is the optional physical-button preview (#637). It plays
+only when the button actually changes the level and both voice and music have
+been quiet for 100ms; HA/controller volume sets never play it. The cue mixer
+sits after software volume for the wake sound's sake, so `VolumeCue` receives
+`speaker.VolumeGain(newLevel)` and bakes that gain into its samples exactly
+once. The cue is a single 350Hz electronic beep: a 36ms level body followed by
+a 125ms exponential release, with only 3% second harmonic so the fundamental
+remains dominant on the Echo's raw speaker path. Its rendered peak is
+normalised to -3dBFS at maximum volume; the extra headroom keeps the sustained
+low tone clean at the top of the range. It still bypasses EQ and the output
+chain so its timbre never changes, while `VolumeGain` makes its level follow
+playback's 0.5dB-per-index law. An extra Volume Up press at the ceiling replays
+the max-level cue even though the level cannot change; Volume Down at the floor
+remains silent. Repeated button presses replace the in-flight cue instead of
+queueing.
+The dashboard gates the setting on `volume_cue`, separate from `wake_cue`, so
+firmware that can play wake sounds but predates the volume behaviour is not
+offered a switch it will ignore.
 
 Volume is **state, not a setting** — it rides the config channel but has no dashboard control (the slider was removed 2026-07-25: `SeedVolume` ignores later pushes, so moving it did nothing until the device restarted and any real volume change overwrote it). It is listed in `em_config_sections.STATE_KEYS`, exempt from section scoping, and shown read-only on the Status tab.
 
