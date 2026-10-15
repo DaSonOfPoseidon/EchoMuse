@@ -1,0 +1,11 @@
+# count<TAB>file<TAB>rule. Written by tools/hygiene/ratchet.py --update;
+# lower it by fixing findings, never raise it by hand.
+1	internal/beamformer/beamformer.go	U1000
+4	internal/bindings/speaker/dacstep.go	U1000
+1	internal/bluetooth/emit.go	U1000
+1	internal/bluetooth/gatt.go	S1016
+2	internal/processor/processor_test.go	SA4003
+1	internal/sendspin/noise.go	U1000
+1	internal/sendspin/timefilter.go	U1000
+1	pkg/buttons/button.go	U1000
+2	pkg/buttons/button_test.go	U1000

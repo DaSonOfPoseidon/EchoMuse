@@ -47,6 +47,10 @@ jobs:
       - name: Coverage floors
         working-directory: controller
         run: python tools/coverage_floor.py check coverage.json
+      # The ratchet decides whether the lint jobs are red, so it is tested
+      # like anything else that decides something.
+      - name: Ratchet tests
+        run: python -m pytest tools/hygiene -v -p no:cacheprovider
 
   forge-metadata-tests:
     name: ONNX metadata round trip
@@ -848,6 +852,25 @@ jobs:
             echo "::error::not gofmt-formatted -- run: gofmt -w cmd internal pkg tools"
             exit 1
           fi
+      # staticcheck as a RATCHET (#822): the 14 findings on 2026-10-15 are in
+      # tools/hygiene/baseline/staticcheck.txt and pass; a new one, or one in
+      # a file that had none, fails. Fixing one also fails until the baseline
+      # is lowered, so the count only goes down.
+      #
+      # GOTOOLCHAIN=auto for the INSTALL only, as for govulncheck: staticcheck
+      # 2026.2 builds with Go 1.26 and this runner is pinned to the firmware's
+      # Go by go.mod. The analysis itself runs under the module's own Go.
+      #
+      # Same scope as vet. cmd/ and the //go:build server bindings need the
+      # tinyalsa headers, which only the compiler image has, so they are not
+      # checked here; several U1000 findings in the baseline (dacstep.go) are
+      # code that only the server build uses.
+      - name: Install staticcheck
+        run: GOTOOLCHAIN=auto go install honnef.co/go/tools/cmd/staticcheck@v0.8.1 # 2026.2.1
+      - name: Run staticcheck
+        run: |
+          python3 tools/hygiene/ratchet.py staticcheck --cwd device -- \
+            staticcheck ./internal/... ./pkg/...
 
   shell-lint:
     name: Shell and Dockerfile lint
