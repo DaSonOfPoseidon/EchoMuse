@@ -1,0 +1,2 @@
+# Go coverage floor in percent, read by ci.yml (device-tests). Raise it, never lower it.
+58

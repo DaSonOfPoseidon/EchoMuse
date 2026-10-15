@@ -197,6 +197,17 @@ jobs:
       - name: Report coverage
         working-directory: device
         run: go tool cover -func=coverage.out | tail -30
+      # A floor at today's figure rounded down (58.8% on 2026-10-15, #822),
+      # kept in tools/hygiene/baseline/go-coverage.txt. Raise it when a change
+      # lifts the total; never lower it to make a change pass.
+      - name: Coverage floor
+        working-directory: device
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {sub("%","",$NF); print $NF}')
+          floor=$(grep -v '^#' ../tools/hygiene/baseline/go-coverage.txt)
+          echo "coverage ${total}%, floor ${floor}%"
+          awk -v t="$total" -v f="$floor" 'BEGIN { exit !(t != "" && t + 0 >= f + 0) }' || {
+            echo "::error::Go coverage ${total:-unknown}% is below the floor of ${floor}%"; exit 1; }
 
   python-deps-audit:
     name: Python dependency audit
