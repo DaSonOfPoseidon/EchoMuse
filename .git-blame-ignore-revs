@@ -1,0 +1,7 @@
+# Formatting-only commits, skipped by git blame (#822):
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub's blame view reads this file by name.
+34fb18759252dc573e640b9be1eb404ded3429a9 # black: emos, porting, tools, device (#822)
+9109be5afe60f6037d261509cefca3882411c0e0 # black: oww_forge (#822)
+dc347ac689669acd53410e9071db75290625aa33 # black: controller/esphome, controller/tools (#822)
+402163ff9efd51ed5751c2705c84620f9ddb7b41 # black: controller/tests (#822)

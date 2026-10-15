@@ -24,6 +24,13 @@ repos:
         entry: ruff check --force-exclude
         types_or: [python, pyi]
 
+      - id: black
+        name: black
+        language: python
+        additional_dependencies: [black==26.5.1]
+        entry: black
+        types_or: [python, pyi]
+
       - id: blind-except
         name: blind excepts (ratchet)
         language: python

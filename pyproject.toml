@@ -73,3 +73,25 @@ files = [
     "controller/em_wsclose.py",
     "controller/version.py",
 ]
+
+[tool.black]
+# Default line length (88). Applied one directory per commit (#822); those
+# commits are in .git-blame-ignore-revs.
+target-version = ["py312"]
+# force-exclude rather than extend-exclude, so the exclusions also hold for
+# the explicit filenames pre-commit passes.
+#
+# controller/*.py, the top-level modules, are NOT formatted yet. Twelve
+# tests in controller/tests (test_deploy and others) read those modules'
+# source and assert on exact substrings such as `_transfer_failed("corrupt"`,
+# and black splits those calls across lines, so formatting them fails the
+# suite with the code unchanged. Those tests need to match tokens, not
+# spellings, before the modules can be formatted. em_api.py is also being
+# split, so formatting it now would conflict with that work.
+force-exclude = '''
+^/(
+    controller/esphome/vendor/
+  | GoTinyAlsa/
+  | controller/[^/]+\.py$
+)
+'''

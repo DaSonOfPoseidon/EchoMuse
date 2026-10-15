@@ -103,6 +103,13 @@ jobs:
       # existing findings do not fail them. Configuration is pyproject.toml.
       - name: ruff check
         run: ruff check --output-format=github .
+      # black is the formatter (#822). Everything is formatted except the
+      # top-level controller modules; pyproject.toml says why and what has
+      # to change first.
+      - name: black --check
+        run: |
+          pip install black==26.5.1
+          black --check --diff .
       # Every `except Exception` either logs what it caught with a traceback
       # (log.exception, or exc_info=True), re-raises, or says why not with
       # `# noqa: BLE001  <reason>` (#822). That is ruff's BLE001, as a
