@@ -12,6 +12,9 @@
 # output hash is unchanged with 2.3.5 (checked on linux/amd64).
 FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 AS silero
 COPY tools/silero_typed.py /tmp/
+# The pipes here only feed a hash to `sha256sum -c`, which is the status that
+# counts, so pipefail would change nothing (hadolint DL4006).
+# hadolint ignore=DL4006
 RUN pip install --no-cache-dir --root-user-action=ignore onnx==1.20.1 numpy==2.3.5 && \
     python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/silero_vad.onnx', '/tmp/in.onnx')" && \
     echo "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28  /tmp/in.onnx" | sha256sum -c - && \
@@ -224,6 +227,8 @@ RUN mkdir -p /app/models/dtln && \
 # of the hand-installed copy was confirmed. MIT licensed.
 #
 # Extracted with Python's zipfile because unzip is not in the slim base.
+# Pipe feeds a hash to `sha256sum -c`; see the silero stage (DL4006).
+# hadolint ignore=DL4006
 RUN mkdir -p /app/models/oww_runtime && \
     curl -sfL -o /tmp/ort.aar \
       https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/1.19.2/onnxruntime-android-1.19.2.aar && \
