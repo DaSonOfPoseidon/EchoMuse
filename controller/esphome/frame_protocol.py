@@ -116,13 +116,18 @@ def _enable_tcp_keepalive(transport: asyncio.BaseTransport, log_name: str) -> No
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         if hasattr(socket, "TCP_KEEPIDLE"):
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, _KEEPALIVE_IDLE_SEC)
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, _KEEPALIVE_IDLE_SEC
+            )
         if hasattr(socket, "TCP_KEEPINTVL"):
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, _KEEPALIVE_INTERVAL_SEC)
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, _KEEPALIVE_INTERVAL_SEC
+            )
         if hasattr(socket, "TCP_KEEPCNT"):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, _KEEPALIVE_COUNT)
     except OSError as e:
         log.warning(f"[{log_name}] failed to set TCP keepalive: {e}")
+
 
 # Sentinels for the streaming varuint reader (negative — varuints are
 # never negative, so these can't collide with a real decoded value).
@@ -155,12 +160,7 @@ def encode_frame(msg_type: int, payload: bytes) -> bytes:
     Multiple encoded frames may be concatenated and written in one
     socket write — the protocol does not require one frame per write.
     """
-    return (
-        b"\x00"
-        + encode_varuint(len(payload))
-        + encode_varuint(msg_type)
-        + payload
-    )
+    return b"\x00" + encode_varuint(len(payload)) + encode_varuint(msg_type) + payload
 
 
 class _VaruintReader:
@@ -185,7 +185,7 @@ class _VaruintReader:
             # A previous read_varuint/read_exact call consumed `pos` bytes
             # from `buf` for a still-incomplete frame; drop the consumed
             # prefix before appending so `pos` can reset to 0.
-            self.buf = self.buf[self.pos:]
+            self.buf = self.buf[self.pos :]
             self.pos = 0
         self.buf += data
 
@@ -213,7 +213,7 @@ class _VaruintReader:
         end = self.pos + length
         if len(self.buf) < end:
             return None
-        data = self.buf[self.pos:end]
+        data = self.buf[self.pos : end]
         self.pos = end
         return data
 
@@ -251,7 +251,7 @@ class PlaintextFrameProtocol(asyncio.Protocol):
         # Encryption: None for a plaintext listener. See set_encryption.
         self._noise_psk: Optional[bytes] = None
         self._noise_hello = b""
-        self._noise_state = "hello"       # hello → handshake → data
+        self._noise_state = "hello"  # hello → handshake → data
         self._noise_buf = bytearray()
         self._noise_responder = None
         self._noise_recv = None
@@ -266,8 +266,9 @@ class PlaintextFrameProtocol(asyncio.Protocol):
         if len(psk) != 32:
             raise ValueError("the encryption key must be 32 bytes")
         self._noise_psk = psk
-        self._noise_hello = (b"\x01" + server_name.encode() + b"\x00"
-                             + mac.encode() + b"\x00")
+        self._noise_hello = (
+            b"\x01" + server_name.encode() + b"\x00" + mac.encode() + b"\x00"
+        )
 
     @property
     def encrypted(self) -> bool:
@@ -344,7 +345,8 @@ class PlaintextFrameProtocol(asyncio.Protocol):
             if self._transport is not None and not self._transport.is_closing():
                 self._transport.write(b"\x00Bad indicator byte")
             raise FrameProtocolError(
-                "peer sent an encrypted frame to a listener with no key")
+                "peer sent an encrypted frame to a listener with no key"
+            )
         if preamble != 0x00:
             raise FrameProtocolError(f"invalid frame preamble 0x{preamble:02x}")
 
@@ -388,8 +390,10 @@ class PlaintextFrameProtocol(asyncio.Protocol):
             if buf[0] != 0x01:
                 # A plaintext client. The reply opens with 0x01, which is how
                 # it learns this device requires encryption.
-                log.warning(f"[{self._log_name}] {self.peer}: unencrypted "
-                            f"connection refused — this port requires a key")
+                log.warning(
+                    f"[{self._log_name}] {self.peer}: unencrypted "
+                    f"connection refused — this port requires a key"
+                )
                 self._noise_reject("Bad indicator byte")
                 return
             if len(buf) < 3:
@@ -397,8 +401,8 @@ class PlaintextFrameProtocol(asyncio.Protocol):
             length = (buf[1] << 8) | buf[2]
             if len(buf) < 3 + length:
                 return
-            frame = bytes(buf[3:3 + length])
-            del buf[:3 + length]
+            frame = bytes(buf[3 : 3 + length])
+            del buf[: 3 + length]
             try:
                 self._noise_frame(frame)
             except FrameProtocolError as e:
@@ -428,8 +432,10 @@ class PlaintextFrameProtocol(asyncio.Protocol):
                 reply = self._noise_responder.write_message_2()
                 self._noise_recv, self._noise_send = self._noise_responder.split()
             except noise.NoiseError as e:
-                log.warning(f"[{self._log_name}] {self.peer}: encryption "
-                            f"handshake failed ({e}) — wrong key?")
+                log.warning(
+                    f"[{self._log_name}] {self.peer}: encryption "
+                    f"handshake failed ({e}) — wrong key?"
+                )
                 self._noise_reject("Handshake MAC failure")
                 return
             self._noise_responder = None
@@ -446,7 +452,7 @@ class PlaintextFrameProtocol(asyncio.Protocol):
         msg_type, length = struct.unpack(">HH", plain[:4])
         if length > len(plain) - 4:
             raise FrameProtocolError("encrypted frame shorter than its stated length")
-        self._on_packet(self, msg_type, plain[4:4 + length])
+        self._on_packet(self, msg_type, plain[4 : 4 + length])
 
     def _noise_write(self, data: bytes) -> None:
         if self._transport is None or self._transport.is_closing():
@@ -460,8 +466,12 @@ class PlaintextFrameProtocol(asyncio.Protocol):
 
     def _noise_encode(self, msg_type: int, payload: bytes) -> bytes:
         if len(payload) > MAX_PLAINTEXT_FRAME_SIZE - 4 - 16:
-            raise FrameProtocolError(f"message of {len(payload)} bytes does not fit a frame")
-        data = self._noise_send.encrypt(struct.pack(">HH", msg_type, len(payload)) + payload)
+            raise FrameProtocolError(
+                f"message of {len(payload)} bytes does not fit a frame"
+            )
+        data = self._noise_send.encrypt(
+            struct.pack(">HH", msg_type, len(payload)) + payload
+        )
         return b"\x01" + struct.pack(">H", len(data)) + data
 
     # ── Writing ───────────────────────────────────────────────────────────

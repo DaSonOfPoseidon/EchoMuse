@@ -34,7 +34,9 @@ from typing import Optional
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import (
-    X25519PrivateKey, X25519PublicKey)
+    X25519PrivateKey,
+    X25519PublicKey,
+)
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 PROTOCOL_NAME = b"Noise_NNpsk0_25519_ChaChaPoly_SHA256"
@@ -43,7 +45,7 @@ DH_LEN = 32
 TAG_LEN = 16
 # A Noise message is at most 65535 bytes; so is an ESPHome frame.
 MAX_MESSAGE_LEN = 65535
-_MAX_NONCE = 2 ** 64 - 1
+_MAX_NONCE = 2**64 - 1
 
 
 class NoiseError(Exception):
@@ -103,8 +105,9 @@ class Responder:
     `ephemeral` fixes the ephemeral private key, for test vectors only.
     """
 
-    def __init__(self, psk: bytes, prologue: bytes,
-                 ephemeral: Optional[bytes] = None) -> None:
+    def __init__(
+        self, psk: bytes, prologue: bytes, ephemeral: Optional[bytes] = None
+    ) -> None:
         if len(psk) != KEY_LEN:
             raise ValueError("the pre-shared key must be 32 bytes")
         self._psk = psk
@@ -138,7 +141,9 @@ class Responder:
         return nonce
 
     def _encrypt_and_hash(self, plaintext: bytes) -> bytes:
-        ciphertext = ChaCha20Poly1305(self._k).encrypt(self._nonce(), plaintext, self._h)
+        ciphertext = ChaCha20Poly1305(self._k).encrypt(
+            self._nonce(), plaintext, self._h
+        )
         self._mix_hash(ciphertext)
         return ciphertext
 
@@ -146,7 +151,9 @@ class Responder:
         if len(ciphertext) < TAG_LEN:
             raise NoiseError("handshake message shorter than its tag")
         try:
-            plaintext = ChaCha20Poly1305(self._k).decrypt(self._nonce(), ciphertext, self._h)
+            plaintext = ChaCha20Poly1305(self._k).decrypt(
+                self._nonce(), ciphertext, self._h
+            )
         except InvalidTag:
             # The first thing the key authenticates. A wrong pre-shared key
             # shows up here and nowhere earlier.
@@ -179,7 +186,8 @@ class Responder:
         else:
             e = X25519PrivateKey.generate()
         e_pub = e.public_key().public_bytes(
-            serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
         self._mix_hash(e_pub)
         self._mix_key(e_pub)
         try:

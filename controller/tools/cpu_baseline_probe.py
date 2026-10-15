@@ -18,6 +18,7 @@ Three parts, and the order matters:
    not execute its SIMD kernels, so a clean import proves less than it
    looks like it does.
 """
+
 import importlib
 import pathlib
 import sys
@@ -29,11 +30,15 @@ from numpy._core._multiarray_umath import __cpu_features__ as feats
 EXPECT_ABSENT = ("SSE41", "SSE42", "POPCNT", "AVX2")
 present = [f for f in EXPECT_ABSENT if feats.get(f)]
 if "--kvm64" in sys.argv and present:
-    sys.exit(f"harness fault: CPU reports {present}, so this is not kvm64 "
-             f"and a pass would prove nothing")
-print(f"numpy {np.__version__}; CPU reports "
-      f"{', '.join(f for f in EXPECT_ABSENT if f not in present) or 'all'} "
-      f"absent of {', '.join(EXPECT_ABSENT)}")
+    sys.exit(
+        f"harness fault: CPU reports {present}, so this is not kvm64 "
+        f"and a pass would prove nothing"
+    )
+print(
+    f"numpy {np.__version__}; CPU reports "
+    f"{', '.join(f for f in EXPECT_ABSENT if f not in present) or 'all'} "
+    f"absent of {', '.join(EXPECT_ABSENT)}"
+)
 
 sys.path.insert(0, "/app")
 mods = sorted(p.stem for p in pathlib.Path("/app").glob("*.py"))
@@ -55,7 +60,7 @@ from openwakeword.model import Model  # noqa: E402
 model = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
 pcm = (np.random.default_rng(0).standard_normal(16000 * 3) * 3000).astype(np.int16)
 for i in range(0, len(pcm) - 1280, 1280):
-    model.predict(pcm[i:i + 1280])
+    model.predict(pcm[i : i + 1280])
 print("wake word prediction ran")
 
 import em_eq  # noqa: E402

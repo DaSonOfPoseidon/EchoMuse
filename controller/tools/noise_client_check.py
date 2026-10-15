@@ -23,6 +23,7 @@ in protobuf's descriptor pool.
     docker run --rm -v "$PWD":/c -w /c python:3.12 sh -c \\
       'pip install -q aioesphomeapi && python tools/noise_client_check.py'
 """
+
 import asyncio
 import base64
 import os
@@ -49,10 +50,12 @@ def serve(key_hex: str) -> None:
         def handle_message(self, msg):
             if isinstance(msg, api_pb2.DeviceInfoRequest):
                 yield api_pb2.DeviceInfoResponse(
-                    name=NAME, mac_address="02:EC:00:00:00:01",
+                    name=NAME,
+                    mac_address="02:EC:00:00:00:01",
                     # Long enough to need more than one TCP segment's worth
                     # of ciphertext in a single frame.
-                    friendly_name="x" * 4000)
+                    friendly_name="x" * 4000,
+                )
 
     async def main():
         loop = asyncio.get_running_loop()
@@ -66,12 +69,12 @@ def serve(key_hex: str) -> None:
 
 async def client(key: bytes) -> int:
     import aioesphomeapi
-    from aioesphomeapi import (InvalidEncryptionKeyAPIError,
-                               RequiresEncryptionAPIError)
+    from aioesphomeapi import InvalidEncryptionKeyAPIError, RequiresEncryptionAPIError
 
     async def attempt(psk):
-        c = aioesphomeapi.APIClient("127.0.0.1", PORT, None, noise_psk=psk,
-                                    expected_name=NAME)
+        c = aioesphomeapi.APIClient(
+            "127.0.0.1", PORT, None, noise_psk=psk, expected_name=NAME
+        )
         try:
             await c.connect(login=True)
             return await c.device_info()
@@ -86,7 +89,11 @@ async def client(key: bytes) -> int:
     failed += not ok
 
     for label, psk, want in (
-        ("wrong key", base64.b64encode(bytes(32)).decode(), InvalidEncryptionKeyAPIError),
+        (
+            "wrong key",
+            base64.b64encode(bytes(32)).decode(),
+            InvalidEncryptionKeyAPIError,
+        ),
         ("no key", None, RequiresEncryptionAPIError),
     ):
         try:
@@ -104,16 +111,20 @@ async def client(key: bytes) -> int:
 async def plain_client(key: bytes) -> int:
     """A client still holding a key meets a listener that no longer wants one."""
     import aioesphomeapi
-    c = aioesphomeapi.APIClient("127.0.0.1", PORT, None,
-                                noise_psk=base64.b64encode(key).decode())
+
+    c = aioesphomeapi.APIClient(
+        "127.0.0.1", PORT, None, noise_psk=base64.b64encode(key).decode()
+    )
     try:
         await c.connect(login=True)
         print("FAIL keyed client on a plaintext port: connected")
         return 1
     except Exception as e:
         ok = "EncryptionPlaintext" in type(e).__name__
-        print("PASS" if ok else "FAIL",
-              f"keyed client on a plaintext port: {type(e).__name__}")
+        print(
+            "PASS" if ok else "FAIL",
+            f"keyed client on a plaintext port: {type(e).__name__}",
+        )
         return 0 if ok else 1
     finally:
         await c.disconnect(force=True)
@@ -124,19 +135,26 @@ if __name__ == "__main__":
         serve(sys.argv[2])
         sys.exit(0)
     if len(sys.argv) == 2 and sys.argv[1] == "--plain":
-        proc = subprocess.Popen([sys.executable, __file__, "--serve", "plain"],
-                                stdout=subprocess.PIPE, text=True)
+        proc = subprocess.Popen(
+            [sys.executable, __file__, "--serve", "plain"],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
         try:
             assert proc.stdout.readline().strip() == "listening"
             sys.exit(asyncio.run(plain_client(os.urandom(32))))
         finally:
             proc.terminate()
     key = os.urandom(32)
-    proc = subprocess.Popen([sys.executable, __file__, "--serve", key.hex()],
-                            stdout=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(
+        [sys.executable, __file__, "--serve", key.hex()],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
     try:
         assert proc.stdout.readline().strip() == "listening"
         import aioesphomeapi
+
         print("aioesphomeapi", getattr(aioesphomeapi, "__version__", "?"))
         sys.exit(1 if asyncio.run(client(key)) else 0)
     finally:

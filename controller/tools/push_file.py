@@ -41,8 +41,10 @@ wrong answer first:
 
 Success is md5 agreement, not "no errors". Exit status is non-zero otherwise.
 """
+
 import asyncio, base64, hashlib, os, secrets, sqlite3, sys, time
 import websockets
+
 
 def _resolve_db() -> str:
     # #270: the container keeps its database at /app/data, the HA add-on at
@@ -50,6 +52,7 @@ def _resolve_db() -> str:
     # are docker-cp'd into the container one file at a time and must stay
     # standalone.
     import os
+
     env = os.environ.get("EM_DB", "").strip()
     if env:
         return env
@@ -82,10 +85,15 @@ def make_token():
     if "expires_at" in cols:
         con.execute(
             "INSERT INTO sessions (token, user_id, created_at, expires_at) "
-            "VALUES (?, 1, datetime('now'), datetime('now', '+30 minutes'))", (tok,))
+            "VALUES (?, 1, datetime('now'), datetime('now', '+30 minutes'))",
+            (tok,),
+        )
     else:
-        con.execute("INSERT INTO sessions (token, user_id, created_at) "
-                    "VALUES (?, 1, datetime('now'))", (tok,))
+        con.execute(
+            "INSERT INTO sessions (token, user_id, created_at) "
+            "VALUES (?, 1, datetime('now'))",
+            (tok,),
+        )
     con.commit()
     con.close()
     return tok
@@ -109,7 +117,9 @@ class Shell:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
-                msg = await asyncio.wait_for(self.ws.recv(), timeout=deadline - time.monotonic())
+                msg = await asyncio.wait_for(
+                    self.ws.recv(), timeout=deadline - time.monotonic()
+                )
             except asyncio.TimeoutError:
                 break
             if isinstance(msg, str):
@@ -175,8 +185,10 @@ async def trim_to(sh, path, size):
     if size == 0:
         await sh.cmd(f"rm -f {path}")
         return
-    await sh.cmd(f"busybox dd if={path} of={path}.t bs={size} count=1 2>/dev/null && "
-                 f"busybox mv {path}.t {path}")
+    await sh.cmd(
+        f"busybox dd if={path} of={path}.t bs={size} count=1 2>/dev/null && "
+        f"busybox mv {path}.t {path}"
+    )
     got = await remote_size(sh, path)
     if got != size:
         raise RuntimeError(f"trim to {size} left {got} bytes")
@@ -193,7 +205,9 @@ async def remote_size(sh, path):
 async def remote_md5(sh, path):
     # Split marker: the PTY echoes this command back, and an unsplit marker
     # would match its own echo.
-    out = await sh.cmd(f"echo M'D'5:$(busybox md5sum {path} | busybox cut -d' ' -f1)", timeout=120)
+    out = await sh.cmd(
+        f"echo M'D'5:$(busybox md5sum {path} | busybox cut -d' ' -f1)", timeout=120
+    )
     for line in out.splitlines():
         line = line.strip()
         if line.startswith("MD5:") and len(line) == 4 + 32:
@@ -220,8 +234,10 @@ async def push(device, local, remote, mode, resume):
                 # with dd, because truncate silently does nothing here.
                 sent = have - (have % payload)
                 if have != sent:
-                    await sh.cmd(f"busybox dd if={remote} of={remote}.t bs={sent} count=1 "
-                                 f"2>/dev/null && busybox mv {remote}.t {remote}")
+                    await sh.cmd(
+                        f"busybox dd if={remote} of={remote}.t bs={sent} count=1 "
+                        f"2>/dev/null && busybox mv {remote}.t {remote}"
+                    )
                 if sent:
                     print(f"resuming at {sent} bytes", file=sys.stderr)
             else:
@@ -236,7 +252,7 @@ async def push(device, local, remote, mode, resume):
                     ws, sh = await connect(device, tok)
                     opened = time.monotonic()
 
-                blk = data[sent:sent + payload]
+                blk = data[sent : sent + payload]
                 # The plane can drop mid-block, not only between blocks, so
                 # each block gets its own retry. Recovery trims the file back
                 # to this block's start offset rather than trusting whatever
@@ -251,20 +267,30 @@ async def push(device, local, remote, mode, resume):
                     except Exception as e:
                         if attempt == BLOCK_TRIES:
                             raise
-                        print(f"\n  block at {sent} failed ({type(e).__name__}: {e}); "
-                              f"retry {attempt}/{BLOCK_TRIES - 1}", file=sys.stderr)
+                        print(
+                            f"\n  block at {sent} failed ({type(e).__name__}: {e}); "
+                            f"retry {attempt}/{BLOCK_TRIES - 1}",
+                            file=sys.stderr,
+                        )
                         await close_quietly(ws)
                         ws, sh = await connect(device, tok)
                         opened = time.monotonic()
                         await trim_to(sh, remote, sent)
                 sent += len(blk)
                 pct = 100.0 * sent / len(data)
-                print(f"\r  {sent}/{len(data)} bytes ({pct:.1f}%)", end="", file=sys.stderr)
+                print(
+                    f"\r  {sent}/{len(data)} bytes ({pct:.1f}%)",
+                    end="",
+                    file=sys.stderr,
+                )
             print(file=sys.stderr)
 
             got = await remote_md5(sh, remote)
             if got != want_md5:
-                print(f"MD5 MISMATCH: device has {got}, local is {want_md5}", file=sys.stderr)
+                print(
+                    f"MD5 MISMATCH: device has {got}, local is {want_md5}",
+                    file=sys.stderr,
+                )
                 return 1
             print(f"md5 ok: {got}", file=sys.stderr)
             if mode:
@@ -279,14 +305,21 @@ async def push(device, local, remote, mode, resume):
 
 if __name__ == "__main__":
     import argparse
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("device", help="device id, e.g. G090LF11803611NF")
     ap.add_argument("local", help="local path (inside the controller container)")
     ap.add_argument("remote", help="destination path on the device")
-    ap.add_argument("--chmod", metavar="MODE", help="chmod the file after a verified push")
-    ap.add_argument("--resume", action="store_true",
-                    help="continue an interrupted push instead of deleting the destination; "
-                         "the md5 check still decides")
+    ap.add_argument(
+        "--chmod", metavar="MODE", help="chmod the file after a verified push"
+    )
+    ap.add_argument(
+        "--resume",
+        action="store_true",
+        help="continue an interrupted push instead of deleting the destination; "
+        "the md5 check still decides",
+    )
     a = ap.parse_args()
     sys.exit(asyncio.run(push(a.device, a.local, a.remote, a.chmod, a.resume)))

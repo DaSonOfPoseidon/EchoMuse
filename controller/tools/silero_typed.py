@@ -9,6 +9,7 @@ rewriting the int64 tensors alone was not enough. Output is bit-identical.
 Run at image build time (Dockerfile); the result is distributed to devices
 with the wake word assets (em_oww_assets.VAD_NAME).
 """
+
 import sys
 
 import onnx

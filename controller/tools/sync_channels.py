@@ -51,13 +51,20 @@ REPO = CONTROLLER.parent
 # Files a pull-only add-on needs. EA carries no build context at all — it
 # pulls the same published image as GA, differing only in which tag — so
 # there is no Dockerfile and no source here to fall out of step.
-PRESENTATION = ("translations/en.yaml", "icon.png", "logo.png",
-                "CHANGELOG.md")
+PRESENTATION = ("translations/en.yaml", "icon.png", "logo.png", "CHANGELOG.md")
 
 
 class Channel:
-    def __init__(self, dirname: str, slug: str, name: str, panel_title: str,
-                 blurb: str, docs_banner: str, esphome_port_base: int):
+    def __init__(
+        self,
+        dirname: str,
+        slug: str,
+        name: str,
+        panel_title: str,
+        blurb: str,
+        docs_banner: str,
+        esphome_port_base: int,
+    ):
         self.dirname = dirname
         self.slug = slug
         self.name = name
@@ -126,6 +133,7 @@ EA = Channel(
     ),
 )
 
+
 # Identity lines rewritten per channel. Everything else is copied byte for
 # byte, which is the point: an option, a schema entry or a permission added
 # to GA reaches EA without anyone remembering to do it.
@@ -152,17 +160,25 @@ def _render(ga_config: str, ch: Channel, version: str) -> str:
     # Matches the integer default in options:, never the quoted type in
     # schema: — the two lines share a key name and only one of them is a
     # channel's own value.
-    out = re.sub(r'^(\s*)esphome_port_base:\s*\d+\s*$',
-                 rf'\1esphome_port_base: {ch.esphome_port_base}',
-                 out, count=1, flags=re.M)
+    out = re.sub(
+        r"^(\s*)esphome_port_base:\s*\d+\s*$",
+        rf"\1esphome_port_base: {ch.esphome_port_base}",
+        out,
+        count=1,
+        flags=re.M,
+    )
 
-    out = re.sub(r'^name:.*$',        f'name: "{ch.name}"',        out, count=1, flags=re.M)
-    out = re.sub(r'^slug:.*$',        f'slug: "{ch.slug}"',        out, count=1, flags=re.M)
-    out = re.sub(r'^panel_title:.*$', f'panel_title: {ch.panel_title}', out, count=1, flags=re.M)
-    out = re.sub(r'^version:.*$',     f'version: "{version}"',     out, count=1, flags=re.M)
+    out = re.sub(r"^name:.*$", f'name: "{ch.name}"', out, count=1, flags=re.M)
+    out = re.sub(r"^slug:.*$", f'slug: "{ch.slug}"', out, count=1, flags=re.M)
+    out = re.sub(
+        r"^panel_title:.*$", f"panel_title: {ch.panel_title}", out, count=1, flags=re.M
+    )
+    out = re.sub(r"^version:.*$", f'version: "{version}"', out, count=1, flags=re.M)
 
     # description: is a single long quoted scalar in the GA file.
-    out = re.sub(r'^description:.*$', f'description: "{ch.blurb}"', out, count=1, flags=re.M)
+    out = re.sub(
+        r"^description:.*$", f'description: "{ch.blurb}"', out, count=1, flags=re.M
+    )
 
     return header + out
 
@@ -233,16 +249,16 @@ def main(argv: list[str]) -> int:
     if "--set-version" in argv:
         i = argv.index("--set-version")
         if i + 1 >= len(argv):
-            print("--set-version needs a value, e.g. 2.20.0-ea.1",
-                  file=sys.stderr)
+            print("--set-version needs a value, e.g. 2.20.0-ea.1", file=sys.stderr)
             return 2
         wanted = argv[i + 1]
         for ch in channels:
             write(ch)  # ensure the file exists before rewriting its pin
             path = ch.path / "config.yaml"
             text = path.read_text(encoding="utf-8")
-            text = re.sub(r'^version:.*$', f'version: "{wanted}"', text,
-                          count=1, flags=re.M)
+            text = re.sub(
+                r"^version:.*$", f'version: "{wanted}"', text, count=1, flags=re.M
+            )
             path.write_text(text, encoding="utf-8")
             print(f"{ch.dirname} pinned to {wanted}")
         return 0
@@ -260,8 +276,10 @@ def main(argv: list[str]) -> int:
 
     for ch in channels:
         write(ch)
-        print(f"wrote {ch.dirname}/ "
-              f"(version {_current_version(ch.path / 'config.yaml', '?')})")
+        print(
+            f"wrote {ch.dirname}/ "
+            f"(version {_current_version(ch.path / 'config.yaml', '?')})"
+        )
     return 0
 
 

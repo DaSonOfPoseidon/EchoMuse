@@ -30,9 +30,11 @@ MARGIN = 1.0
 
 def covered(report: Path) -> dict[str, float]:
     files = json.loads(report.read_text())["files"]
-    return {name: data["summary"]["percent_covered"]
-            for name, data in files.items()
-            if name.startswith("em_") and "/" not in name}
+    return {
+        name: data["summary"]["percent_covered"]
+        for name, data in files.items()
+        if name.startswith("em_") and "/" not in name
+    }
 
 
 def floor_for(percent: float) -> float:
@@ -45,10 +47,14 @@ def check(report: Path) -> list[str]:
     for name, percent in sorted(covered(report).items()):
         floor = floors.get(name)
         if floor is None:
-            problems.append(f"{name}: {percent:.1f}% and no floor — run "
-                            f"`python tools/coverage_floor.py raise` to set one")
+            problems.append(
+                f"{name}: {percent:.1f}% and no floor — run "
+                f"`python tools/coverage_floor.py raise` to set one"
+            )
         elif percent < floor:
-            problems.append(f"{name}: {percent:.1f}% is under its floor of {floor:.0f}%")
+            problems.append(
+                f"{name}: {percent:.1f}% is under its floor of {floor:.0f}%"
+            )
     return problems
 
 

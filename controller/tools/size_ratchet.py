@@ -52,8 +52,9 @@ def measure() -> dict[str, dict[str, int]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--update", action="store_true",
-                        help="rewrite the baseline to today's sizes")
+    parser.add_argument(
+        "--update", action="store_true", help="rewrite the baseline to today's sizes"
+    )
     args = parser.parse_args()
     now = measure()
     if args.update:
