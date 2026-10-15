@@ -13,3 +13,63 @@ extend-exclude = [
 # The full pyflakes set. Undefined names were the only check until #822;
 # they are still the reason this job exists (see ci.yml).
 select = ["F"]
+
+[tool.mypy]
+# A RATCHET (tools/hygiene/baseline/mypy.txt, #822), starting with the
+# controller's pure-logic modules: those importing nothing beyond the
+# standard library, numpy and scipy, so this needs no aiohttp, websockets
+# or openwakeword. Widen the list as modules are typed; the ratchet holds
+# whatever a newly added module brings.
+python_version = "3.12"
+mypy_path = "controller"
+ignore_missing_imports = true
+files = [
+    "controller/em_announce.py",
+    "controller/em_arbiter.py",
+    "controller/em_barge.py",
+    "controller/em_ble_gatt.py",
+    "controller/em_ble_health.py",
+    "controller/em_broadcast.py",
+    "controller/em_button.py",
+    "controller/em_cacerts.py",
+    "controller/em_config_sections.py",
+    "controller/em_config_types.py",
+    "controller/em_console_pw.py",
+    "controller/em_dbwriter.py",
+    "controller/em_earlytts.py",
+    "controller/em_emos_build.py",
+    "controller/em_endpoints.py",
+    "controller/em_firmware.py",
+    "controller/em_health.py",
+    "controller/em_hostip.py",
+    "controller/em_ingressauth.py",
+    "controller/em_labels.py",
+    "controller/em_limiter.py",
+    "controller/em_linkauth.py",
+    "controller/em_listen.py",
+    "controller/em_loglevel.py",
+    "controller/em_output_mute.py",
+    "controller/em_oww_models.py",
+    "controller/em_oww_warmup.py",
+    "controller/em_pacing.py",
+    "controller/em_pairing.py",
+    "controller/em_platform.py",
+    "controller/em_recordings.py",
+    "controller/em_rttlog.py",
+    "controller/em_runbarrier.py",
+    "controller/em_scenes.py",
+    "controller/em_shadow.py",
+    "controller/em_tap_burst.py",
+    "controller/em_tasks.py",
+    "controller/em_tcp.py",
+    "controller/em_timers.py",
+    "controller/em_turnclock.py",
+    "controller/em_volume.py",
+    "controller/em_wake_samples.py",
+    "controller/em_wakelevel.py",
+    "controller/em_wakeword.py",
+    "controller/em_wav.py",
+    "controller/em_wifi.py",
+    "controller/em_wsclose.py",
+    "controller/version.py",
+]

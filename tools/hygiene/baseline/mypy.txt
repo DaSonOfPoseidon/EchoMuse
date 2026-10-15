@@ -1,0 +1,16 @@
+# count<TAB>file<TAB>rule. Written by tools/hygiene/ratchet.py --update;
+# lower it by fixing findings, never raise it by hand.
+1	controller/em_arbiter.py	no-redef
+1	controller/em_arbiter.py	return-value
+1	controller/em_ble_gatt.py	func-returns-value
+5	controller/em_emos_build.py	assignment
+1	controller/em_health.py	arg-type
+2	controller/em_listen.py	attr-defined
+1	controller/em_listen.py	misc
+1	controller/em_scenes.py	arg-type
+1	controller/em_scenes.py	assignment
+4	controller/em_scenes.py	attr-defined
+4	controller/em_scenes.py	call-overload
+1	controller/em_scenes.py	index
+1	controller/em_shadow.py	operator
+1	controller/em_wsclose.py	arg-type

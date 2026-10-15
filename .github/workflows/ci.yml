@@ -109,6 +109,15 @@ jobs:
         run: |
           python tools/hygiene/ratchet.py ruff-blind-except -- \
             ruff check --no-cache --select BLE001 --output-format concise .
+      # mypy over the pure-logic modules listed in pyproject.toml, as a
+      # RATCHET from 25 findings in 48 modules on 2026-10-15 (#822). 820 of
+      # the repository's ~1,000 functions carry hints that nothing checked.
+      # numpy and scipy at the controller's own pins, because they are the
+      # only third-party imports those modules have.
+      - name: Type check (ratchet)
+        run: |
+          pip install -c controller/requirements.txt mypy==2.3.1 numpy scipy
+          python tools/hygiene/ratchet.py mypy -- mypy --no-incremental
 
   dashboard-tests:
     name: Dashboard logic tests

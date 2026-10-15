@@ -159,8 +159,9 @@ def resources_dir() -> Path | None:
     all detect their own wake word never needs. None when it is not installed.
     """
     mod = sys.modules.get("openwakeword")
-    if mod is not None and getattr(mod, "__file__", None):
-        base = Path(mod.__file__).parent
+    mod_file = getattr(mod, "__file__", None) if mod is not None else None
+    if mod_file:
+        base = Path(mod_file).parent
     else:
         try:
             spec = importlib.util.find_spec("openwakeword")
