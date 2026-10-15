@@ -59,9 +59,11 @@ WORKDIR /app
 # curl is for vendoring JS dependencies.
 ARG APT_SNAPSHOT=unset
 RUN echo "apt snapshot: ${APT_SNAPSHOT}" && apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends curl ffmpeg && rm -rf /var/lib/apt/lists/*
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies. requirements.txt is the hash-pinned lock
+# compiled from requirements.in (#822), so a changed file on PyPI fails the
+# build instead of installing.
+COPY requirements.txt requirements-nodeps.txt ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 # GPU=1 swaps the CPU onnxruntime from requirements.txt for the CUDA build
 # (both provide the same `onnxruntime` import, so they can't coexist).
 # Local docker-compose.yml sets it; the published GHCR image is CPU-only.
@@ -79,8 +81,9 @@ RUN if [ "$GPU" = "1" ]; then \
       pip install --no-cache-dir onnxruntime-gpu==1.20.2; \
     fi
 # Install openwakeword without deps — tflite-runtime has no Python 3.12
-# x86_64 build; onnxruntime handles inference instead
-RUN pip install --no-cache-dir --no-deps openwakeword==0.6.0 && \
+# x86_64 build; onnxruntime handles inference instead. Hash-pinned in its
+# own file because --no-deps applies to the whole invocation.
+RUN pip install --no-cache-dir --no-deps --require-hashes -r requirements-nodeps.txt && \
     python3 -c "import openwakeword; openwakeword.utils.download_models()"
 # Vendor JS dependencies — served locally, no CDN needed at runtime
 RUN mkdir -p /app/static/vendor/fonts && \

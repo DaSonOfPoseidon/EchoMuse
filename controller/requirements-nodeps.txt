@@ -1,0 +1,7 @@
+# Installed with --no-deps, separately from requirements.txt: openwakeword
+# declares tflite-runtime, which has no Python 3.12 x86_64 build, and
+# onnxruntime does its inference instead. Hash-pinned like requirements.txt
+# (#822); hashes from PyPI's own digests for the wheel and the sdist.
+openwakeword==0.6.0 \
+    --hash=sha256:6f423a4e3ae9dd0e3cd12b50ff8abf69679f687b4ab349d7c82c021c0e2abc9d \
+    --hash=sha256:36858d90f1183e307485597a912a4e3c3384b14ea9923f83feaffae7c1565565
