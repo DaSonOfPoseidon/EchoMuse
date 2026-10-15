@@ -106,8 +106,24 @@ cd controller && python -m pytest tests/    # needs pytest pytest-cov numpy scip
 cd device && go test ./... && go vet ./...
 ```
 
-Both run in CI on every push and both report coverage; the controller
-baseline is in `controller/.coveragerc`.
+Both run in CI on every push, and both have coverage floors: the
+controller's per module in `controller/tests/coverage_floor.json`
+(`controller/tools/coverage_floor.py`), Go's overall in
+`tools/hygiene/baseline/go-coverage.txt`. Raise a floor when your change
+lifts the figure.
+
+Every language has a formatter or linter in CI. `pre-commit` runs the same
+checks, at the same versions, before each commit:
+
+```bash
+pip install pre-commit && pre-commit install
+pre-commit run --all-files
+```
+
+Some checks are **ratchets**: findings that existed when the check was added
+are recorded in `tools/hygiene/baseline/` and pass, and a new one fails. If
+you fix one, the check fails too, and prints the `--update` command that
+lowers the baseline. Commit the lowered baseline with the fix. Never raise it.
 
 **Please add a test for anything you can reach.** This said "if your change
 is pure logic" until 2026-10-03, when the suite could not import
