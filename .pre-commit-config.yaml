@@ -1,0 +1,71 @@
+# The same checks CI runs, run locally before a commit (#822).
+#
+#   pip install pre-commit && pre-commit install
+#   pre-commit run --all-files        # everything, as CI sees it
+#
+# Every tool is pinned to the version CI installs, and
+# tools/hygiene/test_pins.py fails when the two disagree, so a hook that
+# passes here passes there. Local hooks with PyPI pins rather than each
+# tool's hook repository, so there is one version scheme to keep in step.
+#
+# The ratchets (staticcheck, BLE001, mypy) run over the whole tree, as in
+# CI, because a baseline is per file and a partial run would read every
+# file it skipped as fixed.
+
+default_install_hook_types: [pre-commit]
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff check
+        language: python
+        additional_dependencies: [ruff==0.16.10]
+        entry: ruff check --force-exclude
+        types_or: [python, pyi]
+
+      - id: blind-except
+        name: blind excepts (ratchet)
+        language: python
+        additional_dependencies: [ruff==0.16.10]
+        entry: python tools/hygiene/ratchet.py ruff-blind-except -- ruff check --no-cache --select BLE001 --output-format concise .
+        pass_filenames: false
+        types: [python]
+
+      - id: mypy
+        name: mypy (ratchet)
+        language: python
+        additional_dependencies: [mypy==2.3.1, numpy==2.3.5, scipy]
+        entry: python tools/hygiene/ratchet.py mypy -- mypy --no-incremental
+        pass_filenames: false
+        types: [python]
+
+      - id: shellcheck
+        name: shellcheck
+        language: python
+        additional_dependencies: [shellcheck-py==0.11.0.1]
+        entry: shellcheck --severity=warning
+        types: [shell]
+
+      - id: hadolint
+        name: hadolint
+        language: python
+        additional_dependencies: [hadolint-py==2.15.1.2]
+        entry: hadolint --failure-threshold style
+        types: [dockerfile]
+
+      # Go tools come from the Go toolchain, so these use whatever is on PATH
+      # and skip with a message when it is not there: a Python contributor
+      # should not need Go to commit, and CI runs both regardless.
+      - id: gofmt
+        name: gofmt
+        language: script
+        entry: tools/hygiene/gofmt.sh
+        types: [go]
+
+      - id: staticcheck
+        name: staticcheck (ratchet)
+        language: script
+        entry: tools/hygiene/staticcheck.sh
+        pass_filenames: false
+        types: [go]
