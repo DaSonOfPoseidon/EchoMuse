@@ -98,6 +98,17 @@ jobs:
       # existing findings do not fail them. Configuration is pyproject.toml.
       - name: ruff check
         run: ruff check --output-format=github .
+      # Every `except Exception` either logs what it caught with a traceback
+      # (log.exception, or exc_info=True), re-raises, or says why not with
+      # `# noqa: BLE001  <reason>` (#822). That is ruff's BLE001, as a
+      # RATCHET: 131 sites did none of those on 2026-10-15 and are in
+      # tools/hygiene/baseline/ruff-blind-except.txt, to be worked down a
+      # file at a time. A new one fails. Checked separately from the step
+      # above so pyproject.toml's rule set stays the gate with no baseline.
+      - name: Blind excepts (ratchet)
+        run: |
+          python tools/hygiene/ratchet.py ruff-blind-except -- \
+            ruff check --no-cache --select BLE001 --output-format concise .
 
   dashboard-tests:
     name: Dashboard logic tests
