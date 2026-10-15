@@ -166,6 +166,7 @@ def dir_has_files(path: Path, pattern: str = "*") -> bool:
 
 # ---------------------------------------------------------------- assets
 
+
 def fetch_piper() -> None:
     if PIPER_CKPT.exists():
         log(f"piper checkpoint present: {PIPER_CKPT}")
@@ -184,7 +185,9 @@ def fetch_features() -> None:
         if (FEATURES_DIR / fname).exists():
             log(f"features present: {fname}")
             continue
-        log(f"downloading {fname} (resumable — rerun on interrupt; the negative set is ~17GB)")
+        log(
+            f"downloading {fname} (resumable — rerun on interrupt; the negative set is ~17GB)"
+        )
         hf_hub_download(
             repo_id=HF_FEATURES_REPO,
             filename=fname,
@@ -265,11 +268,15 @@ def fetch_fma(max_clips: int) -> None:
 
     log(f"downloading FMA music clips (streaming, {max_clips} × 30s)")
     FMA_DIR.mkdir(parents=True, exist_ok=True)
-    ds = datasets.load_dataset("rudraml/fma", name="small", split="train", streaming=True)
+    ds = datasets.load_dataset(
+        "rudraml/fma", name="small", split="train", streaming=True
+    )
     n = 0
     for row in ds:
         audio = row["audio"]
-        write_wav_16k(FMA_DIR / f"fma_{n:05d}.wav", audio["array"], audio["sampling_rate"])
+        write_wav_16k(
+            FMA_DIR / f"fma_{n:05d}.wav", audio["array"], audio["sampling_rate"]
+        )
         n += 1
         if n % 100 == 0:
             log(f"  …{n}/{max_clips}")
@@ -282,7 +289,9 @@ def cmd_assets(args) -> None:
     parts = args.only.split(",") if args.only else ASSET_PARTS
     unknown = set(parts) - set(ASSET_PARTS)
     if unknown:
-        sys.exit(f"unknown asset part(s): {', '.join(unknown)} (valid: {', '.join(ASSET_PARTS)})")
+        sys.exit(
+            f"unknown asset part(s): {', '.join(unknown)} (valid: {', '.join(ASSET_PARTS)})"
+        )
     if "piper" in parts:
         fetch_piper()
     if "features" in parts:
@@ -311,6 +320,7 @@ def missing_assets() -> list:
 
 
 # ---------------------------------------------------------------- new
+
 
 def cmd_new(args) -> None:
     # comma-separated variants train ONE model that fires on any of them —
@@ -345,10 +355,18 @@ def cmd_new(args) -> None:
 # ---------------------------------------------------------------- build
 
 BUILD_STEPS = ["generate", "augment", "train"]
-STEP_FLAGS = {"generate": "--generate_clips", "augment": "--augment_clips", "train": "--train_model"}
+STEP_FLAGS = {
+    "generate": "--generate_clips",
+    "augment": "--augment_clips",
+    "train": "--train_model",
+}
 # What augment writes to <output_dir>/<name>/, in the order train.py computes them.
-FEATURE_FILES = ("positive_features_train.npy", "negative_features_train.npy",
-                 "positive_features_test.npy", "negative_features_test.npy")
+FEATURE_FILES = (
+    "positive_features_train.npy",
+    "negative_features_train.npy",
+    "positive_features_test.npy",
+    "negative_features_test.npy",
+)
 
 
 def cmd_build(args) -> None:
@@ -358,6 +376,7 @@ def cmd_build(args) -> None:
         sys.exit(f"no such wake word: {cfg_path} missing (run forge.py new first)")
     import yaml
     from model_metadata import publish_model, training_metadata
+
     config_text = cfg_path.read_text()
     config = yaml.safe_load(config_text)
     training_metadata(config)  # reject invalid identity before expensive training
@@ -370,10 +389,12 @@ def cmd_build(args) -> None:
     if torch.cuda.is_available():
         log(f"torch {torch.__version__} — CUDA: {torch.cuda.get_device_name(0)}")
     else:
-        log(f"torch {torch.__version__} — no CUDA device visible, falling back to CPU "
-            "(generation and training will be slow)")
+        log(
+            f"torch {torch.__version__} — no CUDA device visible, falling back to CPU "
+            "(generation and training will be slow)"
+        )
 
-    steps = BUILD_STEPS[BUILD_STEPS.index(args.from_step):]
+    steps = BUILD_STEPS[BUILD_STEPS.index(args.from_step) :]
     if args.only_step:
         steps = [args.only_step]
 
@@ -385,12 +406,20 @@ def cmd_build(args) -> None:
         feat_dir = WAKEWORDS / name / name
         have = [f for f in FEATURE_FILES if (feat_dir / f).exists()]
         if have and len(have) < len(FEATURE_FILES):
-            log(f"found {len(have)}/4 feature files from an interrupted augment — recomputing all")
+            log(
+                f"found {len(have)}/4 feature files from an interrupted augment — recomputing all"
+            )
             args.overwrite = True
 
     for step in steps:
         log(f"=== step: {step} ===")
-        cmd = [sys.executable, TRAIN_PY, "--training_config", str(cfg_path), STEP_FLAGS[step]]
+        cmd = [
+            sys.executable,
+            TRAIN_PY,
+            "--training_config",
+            str(cfg_path),
+            STEP_FLAGS[step],
+        ]
         if args.overwrite and step == "augment":
             cmd.append("--overwrite")
         subprocess.run(cmd, check=True)
@@ -398,17 +427,22 @@ def cmd_build(args) -> None:
     if "train" in steps:
         src = WAKEWORDS / name / f"{name}.onnx"
         if not src.exists():
-            sys.exit(f"training finished but {src} was not produced — check the logs above")
+            sys.exit(
+                f"training finished but {src} was not produced — check the logs above"
+            )
         MODELS.mkdir(parents=True, exist_ok=True)
         dest = MODELS / f"{name}.onnx"
         if cfg_path.read_text() != config_text:
-            sys.exit("training config changed during the build; refusing to publish mismatched metadata")
+            sys.exit(
+                "training config changed during the build; refusing to publish mismatched metadata"
+            )
         publish_model(src, dest, config)
         log(f"model ready: {dest} ({dest.stat().st_size / 1e3:.0f} kB)")
         log("install into EchoMuse: see oww_forge/README.md §Installing")
 
 
 # ---------------------------------------------------------------- google-tts
+
 
 def cmd_google_tts(args) -> None:
     import yaml
@@ -434,22 +468,28 @@ def cmd_google_tts(args) -> None:
 
 # ---------------------------------------------------------------- piper voices
 
+
 def cmd_voices(args) -> None:
     """List what Piper publishes, so --language/--voices can be chosen."""
     import piper_voices
 
     if args.language:
-        rows = [v for v in piper_voices.catalogue(ASSETS)
-                if v["language"] == args.language]
+        rows = [
+            v for v in piper_voices.catalogue(ASSETS) if v["language"] == args.language
+        ]
         if not rows:
-            sys.exit(f"no voices for {args.language} — run without --language to list them")
+            sys.exit(
+                f"no voices for {args.language} — run without --language to list them"
+            )
         print(f"{'voice':<40}{'speakers':>9}  quality")
         for v in rows:
             print(f"{v['name']:<40}{v['speakers']:>9}  {v['quality']}")
     else:
         print(f"{'language':<10}{'voices':>7}{'best speakers':>15}  name")
         for l in piper_voices.languages(ASSETS):
-            print(f"{l['language']:<10}{l['voices']:>7}{l['max_speakers']:>15}  {l['label']}")
+            print(
+                f"{l['language']:<10}{l['voices']:>7}{l['max_speakers']:>15}  {l['label']}"
+            )
 
 
 def cmd_piper_voices(args) -> None:
@@ -476,6 +516,7 @@ def cmd_piper_voices(args) -> None:
 
 # ---------------------------------------------------------------- test
 
+
 def cmd_test(args) -> None:
     import numpy as np
     import soundfile as sf
@@ -500,7 +541,9 @@ def cmd_test(args) -> None:
             import librosa
 
             f = librosa.resample(f.T if f.ndim > 1 else f, orig_sr=sr, target_sr=16000)
-            audio = (np.clip(f if f.ndim == 1 else f.mean(axis=0), -1, 1) * 32767).astype("int16")
+            audio = (
+                np.clip(f if f.ndim == 1 else f.mean(axis=0), -1, 1) * 32767
+            ).astype("int16")
         if audio.ndim > 1:
             audio = audio.mean(axis=1).astype("int16")
         oww.reset()
@@ -513,6 +556,7 @@ def cmd_test(args) -> None:
 
 # ---------------------------------------------------------------- ui
 
+
 def cmd_ui(args) -> None:
     import forge_web
 
@@ -521,66 +565,114 @@ def cmd_ui(args) -> None:
 
 # ---------------------------------------------------------------- main
 
+
 def main() -> None:
-    ap = argparse.ArgumentParser(prog="forge.py", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        prog="forge.py",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("assets", help="download shared training assets (~25GB total)")
     p.add_argument("--only", help=f"comma-separated subset of: {','.join(ASSET_PARTS)}")
-    p.add_argument("--fma-clips", type=int, default=1000,
-                   help="number of 30s FMA music clips to fetch (default 1000 ≈ 1GB)")
-    p.add_argument("--audioset-clips", type=int, default=2000,
-                   help="number of 10s AudioSet noise clips to fetch (default 2000)")
+    p.add_argument(
+        "--fma-clips",
+        type=int,
+        default=1000,
+        help="number of 30s FMA music clips to fetch (default 1000 ≈ 1GB)",
+    )
+    p.add_argument(
+        "--audioset-clips",
+        type=int,
+        default=2000,
+        help="number of 10s AudioSet noise clips to fetch (default 2000)",
+    )
     p.set_defaults(func=cmd_assets)
 
     p = sub.add_parser("new", help="create a wake-word training config")
-    p.add_argument("phrase", help='wake phrase; comma-separate pronunciation variants '
-                                  '(e.g. "hey clara, hey clarra") — one model fires on any')
+    p.add_argument(
+        "phrase",
+        help="wake phrase; comma-separate pronunciation variants "
+        '(e.g. "hey clara, hey clarra") — one model fires on any',
+    )
     p.add_argument("--name", help="model name (default: slug of the phrase)")
-    p.add_argument("--samples", type=int, default=30000, help="synthetic positives (default 30000)")
+    p.add_argument(
+        "--samples", type=int, default=30000, help="synthetic positives (default 30000)"
+    )
     p.add_argument("--samples-val", type=int, default=2000)
-    p.add_argument("--steps", type=int, default=50000, help="max training steps (default 50000)")
-    p.add_argument("--force", action="store_true", help="overwrite an existing config.yml")
+    p.add_argument(
+        "--steps", type=int, default=50000, help="max training steps (default 50000)"
+    )
+    p.add_argument(
+        "--force", action="store_true", help="overwrite an existing config.yml"
+    )
     p.set_defaults(func=cmd_new)
 
-    p = sub.add_parser("build", help="run the training pipeline (generate → augment → train)")
+    p = sub.add_parser(
+        "build", help="run the training pipeline (generate → augment → train)"
+    )
     p.add_argument("name")
-    p.add_argument("--from-step", choices=BUILD_STEPS, default="generate",
-                   help="resume from this step (clip generation is itself resumable)")
+    p.add_argument(
+        "--from-step",
+        choices=BUILD_STEPS,
+        default="generate",
+        help="resume from this step (clip generation is itself resumable)",
+    )
     p.add_argument("--only-step", choices=BUILD_STEPS, help="run a single step")
-    p.add_argument("--overwrite", action="store_true",
-                   help="recompute augmented features even if they exist")
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="recompute augmented features even if they exist",
+    )
     p.set_defaults(func=cmd_build)
 
-    p = sub.add_parser("google-tts",
-                       help="add extra positive samples via Google Cloud TTS (run before build; "
-                            "needs GOOGLE_APPLICATION_CREDENTIALS)")
+    p = sub.add_parser(
+        "google-tts",
+        help="add extra positive samples via Google Cloud TTS (run before build; "
+        "needs GOOGLE_APPLICATION_CREDENTIALS)",
+    )
     p.add_argument("name")
-    p.add_argument("--samples", type=int, default=2000, help="clips to synthesize (default 2000)")
-    p.add_argument("--languages", default="en-US,en-GB,en-AU",
-                   help="comma-separated language codes to draw voices from")
-    p.add_argument("--include-standard", action="store_true",
-                   help="also use lower-quality Standard voices")
-    p.add_argument("--yes", action="store_true", help="skip the cost-estimate confirmation")
+    p.add_argument(
+        "--samples", type=int, default=2000, help="clips to synthesize (default 2000)"
+    )
+    p.add_argument(
+        "--languages",
+        default="en-US,en-GB,en-AU",
+        help="comma-separated language codes to draw voices from",
+    )
+    p.add_argument(
+        "--include-standard",
+        action="store_true",
+        help="also use lower-quality Standard voices",
+    )
+    p.add_argument(
+        "--yes", action="store_true", help="skip the cost-estimate confirmation"
+    )
     p.set_defaults(func=cmd_google_tts)
 
-    p = sub.add_parser("voices",
-                       help="list the Piper voices available, by language")
+    p = sub.add_parser("voices", help="list the Piper voices available, by language")
     p.add_argument("--language", help="e.g. en_GB, de_DE — omit to list languages")
     p.set_defaults(func=cmd_voices)
 
-    p = sub.add_parser("piper-voices",
-                       help="add positives in another accent or language, generated "
-                            "locally from Piper's published voices (no account, no cost)")
+    p = sub.add_parser(
+        "piper-voices",
+        help="add positives in another accent or language, generated "
+        "locally from Piper's published voices (no account, no cost)",
+    )
     p.add_argument("name")
-    p.add_argument("--samples", type=int, default=4000,
-                   help="clips to synthesize (default 4000)")
-    p.add_argument("--language", default="en_GB",
-                   help="language code to draw voices from (default en_GB); "
-                        "see `forge.py voices`")
-    p.add_argument("--voices",
-                   help="comma-separated voice names, overriding --language")
+    p.add_argument(
+        "--samples", type=int, default=4000, help="clips to synthesize (default 4000)"
+    )
+    p.add_argument(
+        "--language",
+        default="en_GB",
+        help="language code to draw voices from (default en_GB); "
+        "see `forge.py voices`",
+    )
+    p.add_argument(
+        "--voices", help="comma-separated voice names, overriding --language"
+    )
     p.set_defaults(func=cmd_piper_voices)
 
     p = sub.add_parser("ui", help="serve the web frontend")
@@ -590,7 +682,9 @@ def main() -> None:
 
     p = sub.add_parser("test", help="score wav file(s) against a trained model")
     p.add_argument("name")
-    p.add_argument("--wav", nargs="+", required=True, help="wav file(s) or directorie(s)")
+    p.add_argument(
+        "--wav", nargs="+", required=True, help="wav file(s) or directorie(s)"
+    )
     p.set_defaults(func=cmd_test)
 
     args = ap.parse_args()

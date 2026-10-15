@@ -4,6 +4,7 @@ A name is a directory, the clips directory inside it, and the .onnx stem
 openWakeWord keys its predictions by, so rename has to move all of them and
 the two config lines that record it.
 """
+
 import sys
 from pathlib import Path
 
@@ -20,12 +21,27 @@ def test_default_name_is_the_first_spelling():
     assert forge.default_name("  , Hey O'Brien ") == "hey_o_brien"
 
 
-@pytest.mark.parametrize("ok", ["Verona", "Hey Verona", "hey o'brien", "Ünïcode ok", "x" * forge.NAME_MAX])
+@pytest.mark.parametrize(
+    "ok", ["Verona", "Hey Verona", "hey o'brien", "Ünïcode ok", "x" * forge.NAME_MAX]
+)
 def test_names_allowed(ok):
     assert forge.check_name(ok) == ok
 
 
-@pytest.mark.parametrize("bad", ["", "   ", "a/b", "a\\b", "..", ".hidden", "tab\there", "nul\x00", "x" * (forge.NAME_MAX + 1)])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "   ",
+        "a/b",
+        "a\\b",
+        "..",
+        ".hidden",
+        "tab\there",
+        "nul\x00",
+        "x" * (forge.NAME_MAX + 1),
+    ],
+)
 def test_names_refused(bad):
     with pytest.raises(ValueError):
         forge.check_name(bad)
@@ -41,8 +57,9 @@ def tree(tmp_path, monkeypatch):
     (d / "hello_marlow" / "positive_train" / "clip.wav").write_bytes(b"w")
     (d / "hello_marlow.onnx").write_bytes(b"inner")
     (d / "config.yml").write_text(
-        "# the name\nmodel_name: \"hello_marlow\"\ntarget_phrase:\n  - \"hello marlow\"\n"
-        f"# where\noutput_dir: \"{d}\"\nsteps: 50000\n")
+        '# the name\nmodel_name: "hello_marlow"\ntarget_phrase:\n  - "hello marlow"\n'
+        f'# where\noutput_dir: "{d}"\nsteps: 50000\n'
+    )
     models.mkdir()
     (models / "hello_marlow.onnx").write_bytes(b"published")
     return ww, models
@@ -59,10 +76,16 @@ def test_rename_moves_everything(tree):
     assert not (models / "hello_marlow.onnx").exists()
     cfg = (d / "config.yml").read_text()
     assert 'model_name: "Marlow"' in cfg and f'output_dir: "{d}"' in cfg
-    assert "# the name" in cfg and "# where" in cfg and "steps: 50000" in cfg  # comments and the rest kept
+    assert (
+        "# the name" in cfg and "# where" in cfg and "steps: 50000" in cfg
+    )  # comments and the rest kept
     import yaml
+
     loaded = yaml.safe_load(cfg)
-    assert loaded["model_name"] == "Marlow" and Path(loaded["output_dir"]) / loaded["model_name"] == d / "Marlow"
+    assert (
+        loaded["model_name"] == "Marlow"
+        and Path(loaded["output_dir"]) / loaded["model_name"] == d / "Marlow"
+    )
 
 
 def test_rename_refuses_an_existing_name(tree):
@@ -87,6 +110,7 @@ def test_rename_before_training(tree):
     # A word created but never built has no clips dir and no model yet.
     ww, models = tree
     import shutil
+
     shutil.rmtree(ww / "hello_marlow" / "hello_marlow")
     (ww / "hello_marlow" / "hello_marlow.onnx").unlink()
     (models / "hello_marlow.onnx").unlink()

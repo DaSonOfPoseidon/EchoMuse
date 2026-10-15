@@ -20,7 +20,9 @@ def contains_target(text: str, targets) -> bool:
     words = _words(text)
     for target in targets:
         t = _words(target)
-        if t and any(words[i:i + len(t)] == t for i in range(len(words) - len(t) + 1)):
+        if t and any(
+            words[i : i + len(t)] == t for i in range(len(words) - len(t) + 1)
+        ):
             return True
     return False
 

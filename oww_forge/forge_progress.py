@@ -34,7 +34,8 @@ CLIP_DIRS = ("positive_train", "positive_test", "negative_train", "negative_test
 _EVENT = re.compile(
     r"=== step: (\w+) ==="
     r"|Starting training sequence (\d)"
-    r"|Training:[^\r\n]*\|\s*(\d+)/(\d+)(?:\.\d+)?\s*\[")
+    r"|Training:[^\r\n]*\|\s*(\d+)/(\d+)(?:\.\d+)?\s*\["
+)
 
 # Per poll. Nobody may have had the page open since the build started, and
 # a CPU run's log is tens of MB by morning: folding it all in one go would
@@ -50,7 +51,7 @@ def complete_lines(buf: bytes) -> bytes:
     mid-number would parse as a smaller step. What is left over is not
     consumed, so the next read starts from it.
     """
-    return buf[:max(buf.rfind(b"\n"), buf.rfind(b"\r")) + 1]
+    return buf[: max(buf.rfind(b"\n"), buf.rfind(b"\r")) + 1]
 
 
 def fold_log(text: str, state: dict | None = None) -> dict:
@@ -64,7 +65,9 @@ def fold_log(text: str, state: dict | None = None) -> dict:
         if m.group(1):
             state.update(stage=m.group(1), sequence=1, step=0, total=0)
         elif m.group(2):
-            state.update(sequence=max(state["sequence"], int(m.group(2))), step=0, total=0)
+            state.update(
+                sequence=max(state["sequence"], int(m.group(2))), step=0, total=0
+            )
         else:
             step = int(m.group(3))
             if step < state["step"]:
@@ -79,7 +82,7 @@ class TrainLog:
     def __init__(self):
         self.state = None
         self.offset = 0
-        self.lagging = False   # a backlog is still being folded: state is stale
+        self.lagging = False  # a backlog is still being folded: state is stale
 
     def update(self, path: Path) -> dict | None:
         with open(path, "rb") as f:
@@ -88,7 +91,7 @@ class TrainLog:
         self.lagging = len(chunk) == READ_LIMIT
         text = complete_lines(chunk)
         if not text and len(chunk) == READ_LIMIT:
-            text = chunk   # a line longer than the limit: take it, or wait forever
+            text = chunk  # a line longer than the limit: take it, or wait forever
         self.offset += len(text)
         if text:
             self.state = fold_log(text.decode("utf-8", "replace"), self.state)
@@ -110,7 +113,7 @@ def train_progress(state: dict | None, steps: int) -> tuple[int, int]:
     if not state:
         return 0, total
     sequence = min(state["sequence"], len(per_sequence))
-    return min(sum(per_sequence[:sequence - 1]) + state["step"], total), total
+    return min(sum(per_sequence[: sequence - 1]) + state["step"], total), total
 
 
 def stage_progress(work_dir: Path, cfg: dict, state: dict | None) -> dict:
@@ -141,6 +144,8 @@ def stage_progress(work_dir: Path, cfg: dict, state: dict | None) -> dict:
         stage = "generate"
         n, nv = int(cfg.get("n_samples") or 0), int(cfg.get("n_samples_val") or 0)
         targets = zip(CLIP_DIRS, (n, nv, n, nv))
-        done = sum(min(sum(1 for _ in (work_dir / d).glob("*.wav")), t) for d, t in targets)
+        done = sum(
+            min(sum(1 for _ in (work_dir / d).glob("*.wav")), t) for d, t in targets
+        )
         total = 2 * (n + nv)
     return {"stage": stage, "done": done, "total": total}

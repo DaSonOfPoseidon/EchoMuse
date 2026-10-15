@@ -50,8 +50,15 @@ def log(msg: str) -> None:
     print(f"[google-tts] {msg}", flush=True)
 
 
-def synthesize(phrases, n_samples, train_dir: Path, test_dir: Path,
-               languages, include_standard=False, assume_yes=False) -> None:
+def synthesize(
+    phrases,
+    n_samples,
+    train_dir: Path,
+    test_dir: Path,
+    languages,
+    include_standard=False,
+    assume_yes=False,
+) -> None:
     try:
         from google.api_core import exceptions as gexc
         from google.cloud import texttospeech
@@ -79,13 +86,15 @@ def synthesize(phrases, n_samples, train_dir: Path, test_dir: Path,
     log(f"{len(voices)} voices across {languages}")
 
     n_chars = sum(len(p) for p in phrases) // len(phrases) * n_samples
-    log(f"~{n_chars} characters. Google's free tier is 1M/month for the "
+    log(
+        f"~{n_chars} characters. Google's free tier is 1M/month for the "
         f"premium families and 4M for WaveNet/Standard, each counted "
         f"separately, so this is normally free; beyond it the rate depends "
         f"on which family a clip drew "
         f"(${PRICE_MIN_PER_MCHAR:.0f}–${PRICE_MAX_PER_MCHAR:.0f} per 1M chars), "
         f"i.e. at most ${n_chars / 1e6 * PRICE_MAX_PER_MCHAR:.2f} if none of "
-        f"it were free.")
+        f"it were free."
+    )
     if not assume_yes:
         reply = input("continue? [y/N] ").strip().lower()
         if reply not in ("y", "yes"):
@@ -97,7 +106,9 @@ def synthesize(phrases, n_samples, train_dir: Path, test_dir: Path,
     combos = list(itertools.product(voices, SPEAKING_RATES, PITCHES))
     random.shuffle(combos)
     jobs = []
-    for i, (voice, rate, pitch) in enumerate(itertools.islice(itertools.cycle(combos), n_samples)):
+    for i, (voice, rate, pitch) in enumerate(
+        itertools.islice(itertools.cycle(combos), n_samples)
+    ):
         phrase = phrases[i % len(phrases)]
         out_dir = test_dir if random.random() < TEST_FRACTION else train_dir
         dest = out_dir / f"google_{i:06d}_{voice.name}.wav"
@@ -109,14 +120,14 @@ def synthesize(phrases, n_samples, train_dir: Path, test_dir: Path,
     # voice for the rest of the run. That is what cost 66 of 101 voices on
     # 2026-08-20 -- every Chirp and Chirp3-HD voice in the pool -- while the
     # reason was discarded by a bare `except Exception: continue`.
-    bad_voices = {}          # name -> reason, for the log
+    bad_voices = {}  # name -> reason, for the log
     # What each voice actually accepted. Chirp rejects `pitch` outright ("This
     # voice does not support pitch parameters at this time"), and two thirds
     # of a modern en-GB/en-AU pool is Chirp -- so without this, a third of
     # every run's API calls are requests known in advance to be refused.
     # Removing them removes the load that provokes rate limiting in the first
     # place.
-    voice_shape = {}         # name -> index of the request shape it accepts
+    voice_shape = {}  # name -> index of the request shape it accepts
     # Attempts that failed and were RETRIED, against clips that were finally
     # abandoned. Reporting the first as the second reads as "you lost 27
     # clips" on a run where all 300 were written, which is a lie in the
@@ -130,8 +141,8 @@ def synthesize(phrases, n_samples, train_dir: Path, test_dir: Path,
     # connection -- is the run's own fault or the network's, and must not
     # retire a voice.
     permanent = tuple(
-        getattr(gexc, n) for n in
-        ("InvalidArgument", "PermissionDenied", "NotFound", "Unauthenticated")
+        getattr(gexc, n)
+        for n in ("InvalidArgument", "PermissionDenied", "NotFound", "Unauthenticated")
         if hasattr(gexc, n)
     )
 
@@ -181,7 +192,7 @@ def synthesize(phrases, n_samples, train_dir: Path, test_dir: Path,
                 last = e
                 i += 1
                 attempt = 0
-                continue          # try a simpler request
+                continue  # try a simpler request
             except Exception as e:
                 # Transient — and on a run of any size this means the quota,
                 # measured: 1388 of 2000 clips lost to ResourceExhausted in a
@@ -196,10 +207,10 @@ def synthesize(phrases, n_samples, train_dir: Path, test_dir: Path,
                     with lock:
                         gave_up[0] += 1
                     return 0
-                delay = BACKOFF_BASE_S * (2 ** attempt)
+                delay = BACKOFF_BASE_S * (2**attempt)
                 time.sleep(min(delay, BACKOFF_MAX_S) * (0.5 + random.random()))
                 attempt += 1
-                continue          # same shape, after a wait
+                continue  # same shape, after a wait
         with lock:
             bad_voices[voice.name] = str(last)[:120] if last else "unknown"
         return 0
@@ -227,16 +238,20 @@ def synthesize(phrases, n_samples, train_dir: Path, test_dir: Path,
             log(f"  …and {len(bad_voices) - 5} more")
     if transient:
         total = sum(transient.values())
-        detail = ', '.join(f'{k}×{v}' for k, v in transient.most_common(3))
+        detail = ", ".join(f"{k}×{v}" for k, v in transient.most_common(3))
         if gave_up[0]:
-            log(f"{gave_up[0]} clips gave up after {RETRIES} retries "
-                f"({total} failed attempts: {detail}) — re-run to fill them in")
+            log(
+                f"{gave_up[0]} clips gave up after {RETRIES} retries "
+                f"({total} failed attempts: {detail}) — re-run to fill them in"
+            )
         else:
             # Worth saying rather than staying silent: it is the difference
             # between a run that went smoothly and one that was rate-limited
             # throughout and only finished because it waited.
-            log(f"absorbed {total} transient errors by retrying ({detail}) — "
-                f"nothing lost")
+            log(
+                f"absorbed {total} transient errors by retrying ({detail}) — "
+                f"nothing lost"
+            )
     log(f"wrote {done} clips → {train_dir.parent}")
     if done < n_samples * 0.5:
         log("WARNING: more than half the requests failed — check API quota/credentials")

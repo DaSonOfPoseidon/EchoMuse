@@ -63,8 +63,8 @@ INDEX_CACHE = "voices_index.json"
 # Around each voice config's own defaults rather than a fixed set: a value
 # that sounds natural for one voice is not necessarily natural for another,
 # and an unnatural positive teaches the model the wrong thing.
-LENGTH_SCALES = [0.85, 0.95, 1.0, 1.1, 1.2]   # multipliers, not absolutes
-NOISE_SCALES  = [0.9, 1.0, 1.1]
+LENGTH_SCALES = [0.85, 0.95, 1.0, 1.1, 1.2]  # multipliers, not absolutes
+NOISE_SCALES = [0.9, 1.0, 1.1]
 TEST_FRACTION = 0.1
 TARGET_RATE = 16000
 
@@ -97,15 +97,19 @@ def catalogue(assets: Path) -> list:
     out = []
     for name, v in index(assets).items():
         lang = v.get("language", {}) or {}
-        out.append({
-            "name": name,
-            "language": lang.get("code") or name.split("-")[0],
-            "language_name": lang.get("name_english") or "",
-            "country": lang.get("country_english") or "",
-            "quality": v.get("quality"),
-            "speakers": v.get("num_speakers") or 1,
-        })
-    out.sort(key=lambda v: (-v["speakers"], quality_rank.get(v["quality"], 9), v["name"]))
+        out.append(
+            {
+                "name": name,
+                "language": lang.get("code") or name.split("-")[0],
+                "language_name": lang.get("name_english") or "",
+                "country": lang.get("country_english") or "",
+                "quality": v.get("quality"),
+                "speakers": v.get("num_speakers") or 1,
+            }
+        )
+    out.sort(
+        key=lambda v: (-v["speakers"], quality_rank.get(v["quality"], 9), v["name"])
+    )
     return out
 
 
@@ -113,12 +117,16 @@ def languages(assets: Path) -> list:
     """Languages that have at least one voice, with the best speaker count."""
     best = {}
     for v in catalogue(assets):
-        cur = best.setdefault(v["language"], {
-            "language": v["language"],
-            "label": " ".join(x for x in (v["language_name"], v["country"]) if x)
-                     or v["language"],
-            "voices": 0, "max_speakers": 0,
-        })
+        cur = best.setdefault(
+            v["language"],
+            {
+                "language": v["language"],
+                "label": " ".join(x for x in (v["language_name"], v["country"]) if x)
+                or v["language"],
+                "voices": 0,
+                "max_speakers": 0,
+            },
+        )
         cur["voices"] += 1
         cur["max_speakers"] = max(cur["max_speakers"], v["speakers"])
     return sorted(best.values(), key=lambda l: l["label"])
@@ -159,8 +167,10 @@ def ensure_voice(assets: Path, name: str) -> tuple[Path, dict]:
     d = voice_dir(assets)
     d.mkdir(parents=True, exist_ok=True)
     onnx, cfg = d / f"{name}.onnx", d / f"{name}.onnx.json"
-    for path, url in ((onnx, f"{HF_BASE}/{subdir}/{name}.onnx"),
-                      (cfg,  f"{HF_BASE}/{subdir}/{name}.onnx.json")):
+    for path, url in (
+        (onnx, f"{HF_BASE}/{subdir}/{name}.onnx"),
+        (cfg, f"{HF_BASE}/{subdir}/{name}.onnx.json"),
+    ):
         if path.exists():
             continue
         # .part first: a truncated download is the right size to look
@@ -206,8 +216,9 @@ _preview_cache = {}
 _preview_lock = Lock()
 
 
-def preview(text: str, assets: Path, voice: str = None, speaker: int = 0,
-            language: str = None) -> bytes:
+def preview(
+    text: str, assets: Path, voice: str = None, speaker: int = 0, language: str = None
+) -> bytes:
     """
     One clip of `text`, as WAV bytes, for listening to before committing to a
     training run.
@@ -235,8 +246,9 @@ def preview(text: str, assets: Path, voice: str = None, speaker: int = 0,
     feeds = {
         "input": np.array([ids], dtype=np.int64),
         "input_lengths": np.array([len(ids)], dtype=np.int64),
-        "scales": np.array([inf["noise_scale"], inf["length_scale"],
-                            inf["noise_w"]], dtype=np.float32),
+        "scales": np.array(
+            [inf["noise_scale"], inf["length_scale"], inf["noise_w"]], dtype=np.float32
+        ),
     }
     if cfg["num_speakers"] > 1:
         feeds["sid"] = np.array([speaker % cfg["num_speakers"]], dtype=np.int64)
@@ -252,8 +264,15 @@ def preview(text: str, assets: Path, voice: str = None, speaker: int = 0,
     return buf.getvalue()
 
 
-def synthesize(phrases, n_samples: int, train_dir: Path, test_dir: Path,
-               assets: Path, voices=None, language: str = None) -> None:
+def synthesize(
+    phrases,
+    n_samples: int,
+    train_dir: Path,
+    test_dir: Path,
+    assets: Path,
+    voices=None,
+    language: str = None,
+) -> None:
     import soundfile as sf
 
     voices = list(voices or default_voices(assets, language or "en_GB"))
@@ -261,8 +280,10 @@ def synthesize(phrases, n_samples: int, train_dir: Path, test_dir: Path,
     for name in voices:
         onnx, cfg = ensure_voice(assets, name)
         loaded.append((name, _session(onnx), cfg))
-        log(f"{name}: {cfg['num_speakers']} speakers, "
-            f"{cfg['audio']['sample_rate']}Hz")
+        log(
+            f"{name}: {cfg['num_speakers']} speakers, "
+            f"{cfg['audio']['sample_rate']}Hz"
+        )
 
     train_dir.mkdir(parents=True, exist_ok=True)
     test_dir.mkdir(parents=True, exist_ok=True)
@@ -277,7 +298,8 @@ def synthesize(phrases, n_samples: int, train_dir: Path, test_dir: Path,
 
     jobs = []
     for i, (name, sess, cfg, sid, ls, ns) in enumerate(
-            itertools.islice(itertools.cycle(combos), n_samples)):
+        itertools.islice(itertools.cycle(combos), n_samples)
+    ):
         out_dir = test_dir if random.random() < TEST_FRACTION else train_dir
         dest = out_dir / f"piper_gb_{i:06d}_{name}_s{sid}.wav"
         jobs.append((phrases[i % len(phrases)], name, sess, cfg, sid, ls, ns, dest))
@@ -290,11 +312,14 @@ def synthesize(phrases, n_samples: int, train_dir: Path, test_dir: Path,
         try:
             ids = _phoneme_ids(phrase, cfg)
             inf = cfg["inference"]
-            scales = np.array([
-                inf["noise_scale"] * ns_mul,
-                inf["length_scale"] * ls_mul,
-                inf["noise_w"],
-            ], dtype=np.float32)
+            scales = np.array(
+                [
+                    inf["noise_scale"] * ns_mul,
+                    inf["length_scale"] * ls_mul,
+                    inf["noise_w"],
+                ],
+                dtype=np.float32,
+            )
             feeds = {
                 "input": np.array([ids], dtype=np.int64),
                 "input_lengths": np.array([len(ids)], dtype=np.int64),

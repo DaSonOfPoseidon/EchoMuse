@@ -18,18 +18,75 @@ tests/test_forge_g2p.py measures it against CMUdict itself.
 
 # Longest first, so diphthongs and affricates win over their parts.
 IPA_TO_ARPABET = {
-    "aɪə": "AY ER", "aʊə": "AW ER",
-    "aɪ": "AY", "aʊ": "AW", "eɪ": "EY", "oʊ": "OW", "əʊ": "OW", "ɔɪ": "OY",
-    "tʃ": "CH", "dʒ": "JH", "ɑː": "AA", "ɔː": "AO", "ɜː": "ER", "iː": "IY",
-    "uː": "UW", "ɪə": "IH R", "ɛə": "EH R", "ʊə": "UH R", "oː": "AO", "aː": "AA",
-    "ɑ": "AA", "æ": "AE", "ʌ": "AH", "ə": "AH", "ɐ": "AH", "ɔ": "AO", "ɛ": "EH",
-    "e": "EH", "ɜ": "ER", "ɚ": "ER", "ɝ": "ER", "ɪ": "IH", "ᵻ": "IH", "i": "IY",
-    "ʊ": "UH", "u": "UW", "o": "OW", "a": "AA", "ɒ": "AA",
-    "b": "B", "d": "D", "ð": "DH", "f": "F", "ɡ": "G", "g": "G", "h": "HH",
-    "k": "K", "l": "L", "ɫ": "L", "m": "M", "n": "N", "ŋ": "NG", "p": "P",
-    "ɹ": "R", "r": "R", "ɾ": "D", "s": "S", "ʃ": "SH", "t": "T", "θ": "TH",
-    "v": "V", "w": "W", "j": "Y", "z": "Z", "ʒ": "ZH", "x": "HH", "ç": "HH",
-    "ʔ": "", "ɬ": "L",
+    "aɪə": "AY ER",
+    "aʊə": "AW ER",
+    "aɪ": "AY",
+    "aʊ": "AW",
+    "eɪ": "EY",
+    "oʊ": "OW",
+    "əʊ": "OW",
+    "ɔɪ": "OY",
+    "tʃ": "CH",
+    "dʒ": "JH",
+    "ɑː": "AA",
+    "ɔː": "AO",
+    "ɜː": "ER",
+    "iː": "IY",
+    "uː": "UW",
+    "ɪə": "IH R",
+    "ɛə": "EH R",
+    "ʊə": "UH R",
+    "oː": "AO",
+    "aː": "AA",
+    "ɑ": "AA",
+    "æ": "AE",
+    "ʌ": "AH",
+    "ə": "AH",
+    "ɐ": "AH",
+    "ɔ": "AO",
+    "ɛ": "EH",
+    "e": "EH",
+    "ɜ": "ER",
+    "ɚ": "ER",
+    "ɝ": "ER",
+    "ɪ": "IH",
+    "ᵻ": "IH",
+    "i": "IY",
+    "ʊ": "UH",
+    "u": "UW",
+    "o": "OW",
+    "a": "AA",
+    "ɒ": "AA",
+    "b": "B",
+    "d": "D",
+    "ð": "DH",
+    "f": "F",
+    "ɡ": "G",
+    "g": "G",
+    "h": "HH",
+    "k": "K",
+    "l": "L",
+    "ɫ": "L",
+    "m": "M",
+    "n": "N",
+    "ŋ": "NG",
+    "p": "P",
+    "ɹ": "R",
+    "r": "R",
+    "ɾ": "D",
+    "s": "S",
+    "ʃ": "SH",
+    "t": "T",
+    "θ": "TH",
+    "v": "V",
+    "w": "W",
+    "j": "Y",
+    "z": "Z",
+    "ʒ": "ZH",
+    "x": "HH",
+    "ç": "HH",
+    "ʔ": "",
+    "ɬ": "L",
 }
 _KEYS = sorted(IPA_TO_ARPABET, key=len, reverse=True)
 # Stress and syllable marks, and the syllabic diacritic (n̩ = AH N).
@@ -43,7 +100,7 @@ def ipa_to_arpabet(ipa: str) -> list:
         if c in _SKIP:
             i += 1
             continue
-        if c == "̩":          # syllabic: the consonant before carries a vowel
+        if c == "̩":  # syllabic: the consonant before carries a vowel
             if out:
                 out.insert(len(out) - 1, "AH")
             i += 1
@@ -54,12 +111,13 @@ def ipa_to_arpabet(ipa: str) -> list:
                 i += len(k)
                 break
         else:
-            i += 1                  # a symbol with no English equivalent: drop it
+            i += 1  # a symbol with no English equivalent: drop it
     return out
 
 
 def arpabet(word: str) -> list:
     import piper_phonemize  # here, so the mapping is testable without espeak
+
     ipa = "".join("".join(p) for p in piper_phonemize.phonemize_espeak(word, "en-us"))
     return ipa_to_arpabet(ipa)
 
