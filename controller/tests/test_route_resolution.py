@@ -29,10 +29,10 @@ def _routes(app):
     for resource in app.router.resources():
         info = resource.get_info()
         path = info.get("path") or info.get("formatter")
-        if path is None:            # the static directory
+        if path is None:  # the static directory
             continue
         for route in resource:
-            if route.method == "HEAD":   # added alongside every GET
+            if route.method == "HEAD":  # added alongside every GET
                 continue
             yield route.method, path, route.handler
 

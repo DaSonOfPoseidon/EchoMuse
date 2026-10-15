@@ -24,16 +24,26 @@ import ast
 
 import _sources
 
-BASE = ("em_state", "em_http", "em_events", "em_shell", "em_tasks",
-        "em_dbwriter", "em_db")
+BASE = (
+    "em_state",
+    "em_http",
+    "em_events",
+    "em_shell",
+    "em_tasks",
+    "em_dbwriter",
+    "em_db",
+)
 ABOVE_BASE = ("em_api", "em_controller", "em_esphome")
 
 
 def _type_checking_only(tree: ast.Module) -> set[int]:
     lines = set()
     for node in ast.walk(tree):
-        if (isinstance(node, ast.If) and isinstance(node.test, ast.Name)
-                and node.test.id == "TYPE_CHECKING"):
+        if (
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name)
+            and node.test.id == "TYPE_CHECKING"
+        ):
             for sub in ast.walk(node):
                 lines.add(getattr(sub, "lineno", 0))
     return lines
@@ -76,11 +86,16 @@ def test_only_em_controller_imports_em_api():
 
 def test_route_modules_are_imported_only_by_the_api():
     graph = _imports()
-    wrong = sorted(f"{m} imports {r}" for m, deps in graph.items()
-                   for r in deps if _is_route(r)
-                   and m != "em_api" and not _is_route(m))
-    assert not wrong, ("route modules are for em_api to register; move what "
-                       "the importer needs below them: " + "; ".join(wrong))
+    wrong = sorted(
+        f"{m} imports {r}"
+        for m, deps in graph.items()
+        for r in deps
+        if _is_route(r) and m != "em_api" and not _is_route(m)
+    )
+    assert not wrong, (
+        "route modules are for em_api to register; move what "
+        "the importer needs below them: " + "; ".join(wrong)
+    )
 
 
 def test_base_modules_never_reach_the_layers_above():

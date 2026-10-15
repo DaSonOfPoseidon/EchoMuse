@@ -34,10 +34,12 @@ def test_find_def_fails_on_a_name_defined_twice():
 
 
 def test_code_only_drops_comments_and_docstrings_but_keeps_strings():
-    text = ('def f():\n'
-            '    """mentions forbidden()"""\n'
-            '    # forbidden() in a comment\n'
-            '    return "kept"\n')
+    text = (
+        "def f():\n"
+        '    """mentions forbidden()"""\n'
+        "    # forbidden() in a comment\n"
+        '    return "kept"\n'
+    )
     code = _sources.code_only(text)
     assert "forbidden" not in code
     assert "'kept'" in code
@@ -51,4 +53,4 @@ def test_find_def_takes_a_module_qualified_name():
     path, _ = _sources.find_def("em_ota.run_update")
     assert path.name == "em_ota.py"
     with pytest.raises(AssertionError, match="defined 3 times"):
-        _sources.find_def("run_update")       # em_ota, em_emos_ota, em_emos_update
+        _sources.find_def("run_update")  # em_ota, em_emos_ota, em_emos_update

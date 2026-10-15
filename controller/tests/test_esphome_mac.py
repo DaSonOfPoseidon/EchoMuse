@@ -8,6 +8,7 @@ that fixing the derivation does not move every device that already works.
 """
 
 import sys, pathlib
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import pytest
@@ -27,6 +28,7 @@ def fresh_db(tmp_path):
 
 # ── The derivation ────────────────────────────────────────────────────────────
 
+
 def test_serials_differing_only_in_stripped_characters_no_longer_collide():
     """
     The bug. The old derivation kept hex characters only, so devices from one
@@ -35,8 +37,9 @@ def test_serials_differing_only_in_stripped_characters_no_longer_collide():
     """
     a = db.esphome_mac_for("G090LF1180440C9K")
     b = db.esphome_mac_for("G090LF1180440C9R")
-    assert db._legacy_serialno_to_mac("G090LF1180440C9K") == \
-           db._legacy_serialno_to_mac("G090LF1180440C9R")   # the old bug
+    assert db._legacy_serialno_to_mac("G090LF1180440C9K") == db._legacy_serialno_to_mac(
+        "G090LF1180440C9R"
+    )  # the old bug
     assert a != b
 
 
@@ -59,11 +62,13 @@ def test_every_address_is_a_valid_locally_administered_unicast_mac():
 
 def test_the_derivation_is_stable():
     """It has to survive restarts and rebuilds, or HA loses the device."""
-    assert db.esphome_mac_for("G090LF1180440C95") == \
-           db.esphome_mac_for("G090LF1180440C95")
+    assert db.esphome_mac_for("G090LF1180440C95") == db.esphome_mac_for(
+        "G090LF1180440C95"
+    )
 
 
 # ── Assign once, then never move ──────────────────────────────────────────────
+
 
 def test_a_mac_is_assigned_once_and_kept(fresh_db):
     db.register_new_device("G090LF1180440C95", "10.0.0.9", "v2.12.0")
@@ -81,11 +86,14 @@ def test_a_stored_mac_wins_over_the_derivation(fresh_db):
     """
     db.register_new_device("G090LF1180440C95", "10.0.0.9", "v2.12.0")
     with db._tx() as conn:
-        conn.execute("UPDATE devices SET esphome_mac = ? WHERE device_id = ?",
-                     ("DE:AD:BE:EF:00:01", "G090LF1180440C95"))
+        conn.execute(
+            "UPDATE devices SET esphome_mac = ? WHERE device_id = ?",
+            ("DE:AD:BE:EF:00:01", "G090LF1180440C95"),
+        )
     assert db.get_esphome_mac("G090LF1180440C95") == "DE:AD:BE:EF:00:01"
-    assert db.get_esphome_mac("G090LF1180440C95") != \
-           db.esphome_mac_for("G090LF1180440C95")
+    assert db.get_esphome_mac("G090LF1180440C95") != db.esphome_mac_for(
+        "G090LF1180440C95"
+    )
 
 
 def test_an_unregistered_device_still_gets_an_answer(fresh_db):
@@ -101,6 +109,7 @@ def test_an_unregistered_device_still_gets_an_answer(fresh_db):
 # Built by reintroducing the situation: devices already in the database under
 # the old derivation, including a colliding pair. The migration's job is that
 # nothing which works today moves.
+
 
 def _legacy_fleet(tmp_path, serials):
     """A v18 database holding devices, then migrated to current."""
@@ -118,15 +127,18 @@ def _legacy_fleet(tmp_path, serials):
     # rather than a real regression — so the set is derived from the
     # migration SQL and needs no editing next time.
     import re
+
     with db._tx() as conn:
         conn.execute("UPDATE devices SET esphome_mac = NULL")
         for sql in db.MIGRATIONS[18:]:
-            for table, col in re.findall(
-                    r"ALTER TABLE (\w+)\s+ADD COLUMN (\w+)", sql):
+            for table, col in re.findall(r"ALTER TABLE (\w+)\s+ADD COLUMN (\w+)", sql):
                 conn.execute(f"ALTER TABLE {table} DROP COLUMN {col}")
-        conn.execute("UPDATE system_config SET value = '18' WHERE key = 'schema_version'")
-    db._conn.close(); db._conn = None
-    db.init(str(path))            # runs v19 + its fixup
+        conn.execute(
+            "UPDATE system_config SET value = '18' WHERE key = 'schema_version'"
+        )
+    db._conn.close()
+    db._conn = None
+    db.init(str(path))  # runs v19 + its fixup
     return {s: db.get_device(s)["esphome_mac"] for s in serials}
 
 
@@ -152,14 +164,19 @@ def test_a_colliding_pair_is_split_and_the_oldest_keeps_its_identity(tmp_path):
     a, b = "G090LF1180440C9K", "G090LF1180440C9R"
     assert db._legacy_serialno_to_mac(a) == db._legacy_serialno_to_mac(b)
     macs = _legacy_fleet(tmp_path, [a, b])
-    assert macs[a] == db._legacy_serialno_to_mac(a)      # oldest keeps it
-    assert macs[b] == db.esphome_mac_for(b)              # the overwritten one moves
+    assert macs[a] == db._legacy_serialno_to_mac(a)  # oldest keeps it
+    assert macs[b] == db.esphome_mac_for(b)  # the overwritten one moves
     assert macs[a] != macs[b]
 
 
 def test_the_migration_leaves_every_device_with_a_distinct_identity(tmp_path):
-    serials = ["G090LF1180440C95", "G090LF1180440C9K", "G090LF1180440C9R",
-               "G090LF1180440FRK", "G090LF1180440FRR"]
+    serials = [
+        "G090LF1180440C95",
+        "G090LF1180440C9K",
+        "G090LF1180440C9R",
+        "G090LF1180440FRK",
+        "G090LF1180440FRR",
+    ]
     macs = _legacy_fleet(tmp_path, serials)
     assert len(set(macs.values())) == len(serials)
 

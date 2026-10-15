@@ -30,8 +30,10 @@ def test_passthrough_leaves_audio_untouched():
     assert p.process(pcm) is pcm
     assert p.flush() == b""
     assert p.update(bands=[12.0] * 8, loudness=True, limiter_enabled=True) is False
-    assert em_eq.describe_activity(p.limiter, p.guard) == \
-        "guard_reduction=n/a limiter_reduction=n/a"
+    assert (
+        em_eq.describe_activity(p.limiter, p.guard)
+        == "guard_reduction=n/a limiter_reduction=n/a"
+    )
 
 
 def test_passthrough_has_every_method_the_playback_paths_call():
@@ -55,18 +57,23 @@ def _functions(path: Path):
 def _builds_a_chain(fn) -> bool:
     """Calls em_eq.StreamingEQ(...) or em_eq.apply(...) — in code, not prose."""
     for n in ast.walk(fn):
-        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                and n.func.attr in ("StreamingEQ", "apply")
-                and isinstance(n.func.value, ast.Name)
-                and n.func.value.id == "em_eq"):
+        if (
+            isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr in ("StreamingEQ", "apply")
+            and isinstance(n.func.value, ast.Name)
+            and n.func.value.id == "em_eq"
+        ):
             return True
     return False
 
 
 def _reads_the_gate(fn) -> bool:
     # An Attribute node, so a comment or docstring naming it cannot pass.
-    return any(isinstance(n, ast.Attribute) and n.attr == "output_chain_on_device"
-               for n in ast.walk(fn))
+    return any(
+        isinstance(n, ast.Attribute) and n.attr == "output_chain_on_device"
+        for n in ast.walk(fn)
+    )
 
 
 def test_every_playback_path_that_builds_a_chain_checks_the_gate():

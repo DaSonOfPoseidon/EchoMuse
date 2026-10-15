@@ -14,6 +14,7 @@ handles it (#417).
 """
 
 import sys, pathlib
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 
@@ -24,16 +25,27 @@ WAKE = 0.5
 
 
 def playback(score, prev=0.0, barge=BARGE):
-    return em_barge.decide(score=score, prev_score=prev, in_playback=True,
-                           barge_threshold=barge, wake_threshold=WAKE)
+    return em_barge.decide(
+        score=score,
+        prev_score=prev,
+        in_playback=True,
+        barge_threshold=barge,
+        wake_threshold=WAKE,
+    )
 
 
 def thinking(score, prev=0.0):
-    return em_barge.decide(score=score, prev_score=prev, in_playback=False,
-                           barge_threshold=BARGE, wake_threshold=WAKE)
+    return em_barge.decide(
+        score=score,
+        prev_score=prev,
+        in_playback=False,
+        barge_threshold=BARGE,
+        wake_threshold=WAKE,
+    )
 
 
 # ── Playback: the bug ─────────────────────────────────────────────────────────
+
 
 def test_one_loud_frame_during_playback_does_not_fire():
     """
@@ -79,6 +91,7 @@ def test_a_genuine_barge_still_fires_at_realistic_scores():
 
 # ── Thinking: unchanged behaviour ─────────────────────────────────────────────
 
+
 def test_one_frame_at_the_full_wake_threshold_fires_while_thinking():
     """Nothing is playing, so there is no self-echo to guard against."""
     d = thinking(WAKE)
@@ -100,8 +113,9 @@ def test_noise_does_not_fire_while_thinking_however_often_it_repeats():
     the user, who asked the Echo why it was listening.
     """
     for score in (0.206, 0.238, 0.25, 0.36, 0.462):
-        assert thinking(score, prev=score).fired is False, \
-            f"{score} is a noise-band score and must not barge"
+        assert (
+            thinking(score, prev=score).fired is False
+        ), f"{score} is a noise-band score and must not barge"
 
 
 def test_a_person_repeating_themselves_is_still_caught():
@@ -113,6 +127,7 @@ def test_a_person_repeating_themselves_is_still_caught():
     assert thinking(0.502).fired is True
     assert thinking(WAKE).fired is True
 
+
 def test_a_decision_that_did_not_fire_carries_no_reason():
     """So a caller cannot log a justification for something that never fired."""
     assert playback(0.9, prev=0.0).note == ""
@@ -121,9 +136,9 @@ def test_a_decision_that_did_not_fire_carries_no_reason():
 
 # ── Giving up the turn: two reasons, only one of them is an event ───────────
 
+
 def cede(serves=True, won_by="test-device", device="test-device", score=0.412):
-    return em_barge.cede(serves=serves, won_by=won_by, device_id=device,
-                         score=score)
+    return em_barge.cede(serves=serves, won_by=won_by, device_id=device, score=score)
 
 
 def test_no_ha_cedes_and_records():

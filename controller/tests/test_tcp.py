@@ -47,13 +47,14 @@ def test_every_device_plane_is_tuned():
     # All three planes (/control, /data, /shell) arrive through _route, so
     # that is where the call must sit, ahead of the dispatch.
     src = (Path(__file__).resolve().parent.parent / "em_controller.py").read_text()
-    route = src[src.index("async def _route("):]
-    route = route[:route.index("\nasync def ", 1)]
+    route = src[src.index("async def _route(") :]
+    route = route[: route.index("\nasync def ", 1)]
     assert "em_tcp.tune(" in route
     assert route.index("em_tcp.tune(") < route.index("handle_control(")
 
 
 # ─── LossWindow: cumulative kernel counters → per-report deltas ─────────────
+
 
 def test_window_needs_a_baseline_before_it_reports():
     w = em_tcp.LossWindow()
@@ -95,28 +96,28 @@ def test_read_info_reads_a_real_socket(accepted):
     assert segs >= 1 and retrans == 0 and rto_ms >= 200
 
 
-
 # ─── MinuteStrip: loss per minute for the Status tab ────────────────────────
+
 
 def test_strip_buckets_by_minute_and_grades_loss():
     st = em_tcp.MinuteStrip(keep_minutes=5)
-    t0 = 60 * 1000                      # a minute boundary
-    st.add(t0 + 5, 1000, 0)             # minute 0: clean
+    t0 = 60 * 1000  # a minute boundary
+    st.add(t0 + 5, 1000, 0)  # minute 0: clean
     st.add(t0 + 35, 1000, 0)
-    st.add(t0 + 65, 1000, 30)           # minute 1: 3% -> fair
-    st.add(t0 + 185, 1000, 80)          # minute 3: 8% -> poor; minute 2 missing
+    st.add(t0 + 65, 1000, 30)  # minute 1: 3% -> fair
+    st.add(t0 + 185, 1000, 80)  # minute 3: 8% -> poor; minute 2 missing
     assert st.minutes(t0 + 190) == [None, 0.0, 3.0, None, 8.0]
     s = st.summary(t0 + 190)
-    assert s["verdict"] == "fair" and s["lossPct"] == 2.8   # 110 of 4000 over 10 min
+    assert s["verdict"] == "fair" and s["lossPct"] == 2.8  # 110 of 4000 over 10 min
 
 
 def test_strip_forgets_old_minutes_and_unmeasured_is_none():
     st = em_tcp.MinuteStrip(keep_minutes=3)
     assert st.summary(1000.0) is None
     st.add(0, 100, 0)
-    st.add(600, None, None)             # a report with no downlink figure
-    assert st.summary(600.0) is None    # minute 0 has aged out
-    st.add(600, 0, 0)                   # no traffic: nothing to divide by
+    st.add(600, None, None)  # a report with no downlink figure
+    assert st.summary(600.0) is None  # minute 0 has aged out
+    st.add(600, 0, 0)  # no traffic: nothing to divide by
     assert st.minutes(600.0)[-1] is None
 
 

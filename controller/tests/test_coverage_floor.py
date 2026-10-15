@@ -11,8 +11,10 @@ import coverage_floor  # noqa: E402
 
 
 def _report(tmp_path, **percent):
-    files = {name.replace("_py", ".py"): {"summary": {"percent_covered": p}}
-             for name, p in percent.items()}
+    files = {
+        name.replace("_py", ".py"): {"summary": {"percent_covered": p}}
+        for name, p in percent.items()
+    }
     files["tests/test_x.py"] = {"summary": {"percent_covered": 1.0}}
     path = tmp_path / "coverage.json"
     path.write_text(json.dumps({"files": files}))
@@ -43,4 +45,5 @@ def test_every_module_has_a_floor():
     assert modules == set(floors), (
         "missing: %s; stale: %s — run the suite with --cov-report=json and "
         "`python tools/coverage_floor.py raise coverage.json`"
-        % (sorted(modules - set(floors)), sorted(set(floors) - modules)))
+        % (sorted(modules - set(floors)), sorted(set(floors) - modules))
+    )

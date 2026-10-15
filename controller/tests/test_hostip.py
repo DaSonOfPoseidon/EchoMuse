@@ -14,7 +14,9 @@ import em_hostip
 
 def test_configured_address_wins():
     assert em_hostip.resolve("10.10.1.81", "192.168.0.5") == (
-        "10.10.1.81", "configured")
+        "10.10.1.81",
+        "configured",
+    )
 
 
 def test_empty_configured_falls_back_to_detection():
@@ -70,8 +72,9 @@ def test_no_literal_fallback_address_remains_in_the_module():
     literals = re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", source)
     # 192.0.2.1 is RFC 5737 TEST-NET-1, the routing probe, and is never
     # advertised to anything.
-    assert set(literals) <= {"192.0.2.1"}, (
-        f"unexpected IP literal(s) in em_hostip: {literals}")
+    assert set(literals) <= {
+        "192.0.2.1"
+    }, f"unexpected IP literal(s) in em_hostip: {literals}"
 
 
 def test_detect_returns_an_address_or_none_but_never_raises():
@@ -83,6 +86,7 @@ def test_detect_returns_an_address_or_none_but_never_raises():
 
 # ── Container-bridge detection ────────────────────────────────────────────────
 
+
 def test_docker_bridge_addresses_are_flagged():
     # A container without host networking detects its own bridge address and
     # advertises it. The controller looks healthy and no device can reach it.
@@ -93,8 +97,7 @@ def test_docker_bridge_addresses_are_flagged():
 def test_ordinary_lan_addresses_are_not_flagged():
     # A false warning on a working install teaches people to ignore warnings,
     # which costs more than the one it would have caught.
-    for addr in ("10.10.1.81", "192.168.1.50", "172.16.4.2", "172.31.9.9",
-                 "172.1.1.1"):
+    for addr in ("10.10.1.81", "192.168.1.50", "172.16.4.2", "172.31.9.9", "172.1.1.1"):
         assert not em_hostip.looks_containerised(addr), addr
 
 
@@ -106,6 +109,7 @@ def test_the_warning_never_changes_the_answer():
 
 
 # ── mDNS on SERVER_IP's interface alone (#604) ──────────────────────────────
+
 
 class _Responder:
     def __init__(self, interfaces=None):

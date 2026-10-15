@@ -17,8 +17,11 @@ def test_git_describe_strips_controller_prefix(monkeypatch):
 
 def test_no_env_no_git_is_dev(monkeypatch):
     monkeypatch.delenv("EM_CONTROLLER_VERSION", raising=False)
-    monkeypatch.setattr(version.subprocess, "run",
-                        lambda *a, **k: (_ for _ in ()).throw(OSError("no git")))
+    monkeypatch.setattr(
+        version.subprocess,
+        "run",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("no git")),
+    )
     assert version._resolve() == "dev"
 
 
@@ -32,23 +35,28 @@ def test_no_env_no_git_is_dev(monkeypatch):
 import pytest
 
 
-@pytest.mark.parametrize("text,expected", [
-    ("v2.10.0",                    (2, 10, 0)),
-    ("controller-v2.10.0",         (2, 10, 0)),
-    ("2.10.0",                     (2, 10, 0)),
-    ("v2.10.0-3-gabc1234",         (2, 10, 0)),
-    ("v2.10.0-3-gabc1234-dirty",   (2, 10, 0)),
-    ("dev",                        None),
-    ("",                           None),
-    ("v",                          None),
-])
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("v2.10.0", (2, 10, 0)),
+        ("controller-v2.10.0", (2, 10, 0)),
+        ("2.10.0", (2, 10, 0)),
+        ("v2.10.0-3-gabc1234", (2, 10, 0)),
+        ("v2.10.0-3-gabc1234-dirty", (2, 10, 0)),
+        ("dev", None),
+        ("", None),
+        ("v", None),
+    ],
+)
 def test_parse_handles_every_form_the_resolver_can_produce(text, expected):
     assert version.parse(text) == expected
 
 
 def test_newer_tag_is_an_update():
     assert version.compare("v2.10.0", "v2.11.0") == {
-        "status": "update", "available": True}
+        "status": "update",
+        "available": True,
+    }
 
 
 def test_tags_sort_numerically_not_lexically():
@@ -64,7 +72,9 @@ def test_tags_sort_numerically_not_lexically():
 
 def test_running_the_newest_tag_is_not_an_update():
     assert version.compare("v2.11.0", "v2.11.0") == {
-        "status": "current", "available": False}
+        "status": "current",
+        "available": False,
+    }
 
 
 def test_a_build_ahead_of_the_tag_is_not_an_update():

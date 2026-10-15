@@ -38,6 +38,7 @@ def _strip_comments(src: str) -> str:
 
 # ─── The decision ─────────────────────────────────────────────────────────────
 
+
 def test_emos_is_not_android():
     """A device that said emos gets no Android payloads."""
     assert em_platform.android_userspace("emos") is False
@@ -85,6 +86,7 @@ def test_label_never_invents_fireos():
 
 # ─── The strings, mirrored across the two languages ──────────────────────────
 
+
 def test_values_match_the_firmware():
     """
     The three answers are spelled identically in Go and Python.
@@ -112,8 +114,9 @@ def test_wire_key_matches_the_firmware():
     the fleet keeps working and the feature simply never activates.
     """
     src = _strip_comments(CONTROL_GO.read_text())
-    assert re.search(r'"%s":\s*platform\.Base\(\)' % em_platform.REGISTER_KEY, src), \
-        "the register message does not carry the base OS"
+    assert re.search(
+        r'"%s":\s*platform\.Base\(\)' % em_platform.REGISTER_KEY, src
+    ), "the register message does not carry the base OS"
 
 
 def test_base_os_rides_registration_not_stats():
@@ -128,15 +131,19 @@ def test_base_os_rides_registration_not_stats():
     the full 120s transfer timeout. Measured on EFF, 2026-09-04: 240s.
     """
     stats_src = _strip_comments(
-        (ROOT / "device" / "internal" / "client" / "stats.go").read_text())
-    assert "BaseOs" not in stats_src, \
-        "the base OS is back on the stats message, where it is 30s too late"
+        (ROOT / "device" / "internal" / "client" / "stats.go").read_text()
+    )
+    assert (
+        "BaseOs" not in stats_src
+    ), "the base OS is back on the stats message, where it is 30s too late"
     assert em_platform.REGISTER_KEY not in stats_src
-    assert not hasattr(em_platform, "STATS_KEY"), \
-        "STATS_KEY implies a stats-borne value; the field rides registration"
+    assert not hasattr(
+        em_platform, "STATS_KEY"
+    ), "STATS_KEY implies a stats-borne value; the field rides registration"
 
 
 # ─── The consumers of that answer ────────────────────────────────────────────
+
 
 def _api_src():
     return (ROOT / "controller" / "em_api.py").read_text()
@@ -152,8 +159,7 @@ def test_debloat_endpoint_refuses_server_side():
     and the transfer holds that device's shell lock for its whole timeout.
     """
     body = _sources.def_source("_post_debloat")
-    assert "android_userspace" in body, \
-        "_post_debloat does not check the base OS"
+    assert "android_userspace" in body, "_post_debloat does not check the base OS"
 
 
 def test_dashboard_uses_the_servers_answer_not_its_own():
@@ -167,13 +173,14 @@ def test_dashboard_uses_the_servers_answer_not_its_own():
     jsx = (ROOT / "controller" / "static" / "dashboard.jsx").read_text()
     assert "androidUserspace" in jsx
     assert "'Re-apply debloat'" in jsx
-    assert "androidUserspace" in src_near(jsx, "'Re-apply debloat'"), \
-        "the debloat control is not gated on androidUserspace"
+    assert "androidUserspace" in src_near(
+        jsx, "'Re-apply debloat'"
+    ), "the debloat control is not gated on androidUserspace"
 
 
 def src_near(text: str, needle: str, radius: int = 900) -> str:
     i = text.index(needle)
-    return text[max(0, i - radius): i + radius]
+    return text[max(0, i - radius) : i + radius]
 
 
 def test_transfer_checks_the_destination_directory():
@@ -201,11 +208,13 @@ def test_shell_lock_release_is_ownership_checked():
     src = (ROOT / "controller" / "em_shell.py").read_text()
     assert "owners" in src, "no ownership tracking for the shell lock"
     helper = _sources.def_source("release_lock")
-    assert "current_task()" in helper, \
-        "release_lock does not verify the caller owns the lock"
+    assert (
+        "current_task()" in helper
+    ), "release_lock does not verify the caller owns the lock"
 
     # And the bare release in the acquire path is gone: it fired on a lock
     # another task may already have released, raising "Lock is not acquired"
     # and surfacing as an empty result three steps away.
-    assert "locks[device_id].release()" not in _sources.all_code(), \
-        "an unguarded shell-lock release is back"
+    assert (
+        "locks[device_id].release()" not in _sources.all_code()
+    ), "an unguarded shell-lock release is back"

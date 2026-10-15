@@ -34,8 +34,8 @@ def test_a_client_connecting_mid_broadcast_does_not_raise():
     asyncio.run(em_broadcast.broadcast(clients, "x"))
 
     assert first.got == ["x"]
-    assert late in clients      # kept for the next event
-    assert late.got == []       # and not sent this one; it gets a snapshot on connect
+    assert late in clients  # kept for the next event
+    assert late.got == []  # and not sent this one; it gets a snapshot on connect
 
 
 def test_a_client_disconnecting_mid_broadcast_does_not_raise():

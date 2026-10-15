@@ -34,7 +34,7 @@ def test_other_sessions_end_and_the_current_one_survives(fresh_db):
     revoked = db.update_user_password(alice, "h1-new", keep_session="a-here")
 
     assert revoked == 2
-    assert _tokens() == {"a-here", "b-1"}   # bob untouched
+    assert _tokens() == {"a-here", "b-1"}  # bob untouched
     assert db.get_user_by_id(alice)["password_hash"] == "h1-new"
 
 

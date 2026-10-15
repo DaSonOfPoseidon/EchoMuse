@@ -21,12 +21,12 @@ CONTROLLER = Path(__file__).resolve().parents[1]
 def _settings_src() -> str:
     src = (CONTROLLER / "static" / "dashboard.jsx").read_text()
     start = src.index("function SettingsPanel")
-    return src[start:start + 20_000]
+    return src[start : start + 20_000]
 
 
 def test_users_tab_exists_and_is_admin_only():
-    tabs = _settings_src()[_settings_src().index("const TABS"):]
-    tabs = tabs[:tabs.index(";")]
+    tabs = _settings_src()[_settings_src().index("const TABS") :]
+    tabs = tabs[: tabs.index(";")]
     assert "'users'" in tabs, "the Users tab must exist in Settings"
     # TABS already gates on isAdmin for account/support; users rides along.
     assert "isAdmin ?" in tabs
@@ -35,9 +35,9 @@ def test_users_tab_exists_and_is_admin_only():
 def test_users_screen_calls_both_existing_endpoints():
     src = _settings_src()
     assert "'/api/users'" in src, "the screen must list accounts"
-    assert "API.patch(`/api/users/${id}`" in src or \
-           'API.patch("/api/users/"' in src, \
-        "the promote/demote control must call PATCH /api/users/{id}"
+    assert (
+        "API.patch(`/api/users/${id}`" in src or 'API.patch("/api/users/"' in src
+    ), "the promote/demote control must call PATCH /api/users/{id}"
 
 
 def test_server_reason_reaches_the_user():
@@ -47,6 +47,12 @@ def test_server_reason_reaches_the_user():
     isn't there. The error field must be surfaced verbatim.
     """
     src = _settings_src()
-    fn = src[src.index("async function setUserRole"):]
-    fn = fn[:fn.index("async function loadUsers") if "async function loadUsers" in fn else 800]
+    fn = src[src.index("async function setUserRole") :]
+    fn = fn[
+        : (
+            fn.index("async function loadUsers")
+            if "async function loadUsers" in fn
+            else 800
+        )
+    ]
     assert "e.error ||" in fn, "the PATCH refusal reason must be shown"

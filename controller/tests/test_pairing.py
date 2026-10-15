@@ -29,6 +29,7 @@ def clean():
 
 # ── state ───────────────────────────────────────────────────────────────────
 
+
 def test_a_request_is_new_once_then_a_repeat():
     assert P.request(DEV, "plain", now=100) is True
     assert P.request(DEV, "plain", now=105) is False
@@ -39,7 +40,7 @@ def test_a_request_lapses_when_the_device_stops_asking():
     P.request(DEV, "link", now=100)
     assert P.pending_request(DEV, now=100 + P.REQUEST_TTL_S) is not None
     assert P.pending_request(DEV, now=100 + P.REQUEST_TTL_S + 1) is None
-    assert P.request(DEV, "link", now=200) is True     # a fresh ask
+    assert P.request(DEV, "link", now=200) is True  # a fresh ask
 
 
 def test_an_approval_lapses():
@@ -63,18 +64,26 @@ def test_devices_are_separate():
 
 # ── wiring ──────────────────────────────────────────────────────────────────
 
+
 def _tree(name):
     return ast.parse((CONTROLLER / name).read_text())
 
 
 def _fn(tree, name):
-    return next(n for n in ast.walk(tree)
-                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name)
+    return next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name
+    )
 
 
 def _calls(node, name):
-    return [n for n in ast.walk(node) if isinstance(n, ast.Call)
-            and getattr(n.func, "attr", getattr(n.func, "id", None)) == name]
+    return [
+        n
+        for n in ast.walk(node)
+        if isinstance(n, ast.Call)
+        and getattr(n.func, "attr", getattr(n.func, "id", None)) == name
+    ]
 
 
 def _names_in_call(call):
@@ -83,7 +92,11 @@ def _names_in_call(call):
 
 def test_an_approved_pairing_rotates_before_the_auth_decision():
     fn = _fn(_tree("em_controller.py"), "handle_control")
-    clears = [c for c in _calls(fn, "run_in_executor") if "clear_device_token" in _names_in_call(c)]
+    clears = [
+        c
+        for c in _calls(fn, "run_in_executor")
+        if "clear_device_token" in _names_in_call(c)
+    ]
     auth = _calls(fn, "_link_auth_ok")
     assert clears and auth
     assert clears[0].lineno < auth[0].lineno
@@ -92,7 +105,10 @@ def test_an_approved_pairing_rotates_before_the_auth_decision():
 def test_a_refused_pairing_dial_is_recorded():
     fn = _fn(_tree("em_controller.py"), "handle_control")
     notes = _calls(fn, "notify_pair_request")
-    assert any(isinstance(c.args[1], ast.Constant) and c.args[1].value == "plain" for c in notes)
+    assert any(
+        isinstance(c.args[1], ast.Constant) and c.args[1].value == "plain"
+        for c in notes
+    )
 
 
 def test_issuing_rotates_the_token_and_stores_it_only_once_delivered():
@@ -101,10 +117,16 @@ def test_issuing_rotates_the_token_and_stores_it_only_once_delivered():
     # connected over wss (15LE, 2026-09-26).
     _, fn = _sources.find_def("issue_credentials")
     assert _calls(fn, "token_urlsafe"), "a fresh token, never the stored one"
-    assert not [c for c in _calls(fn, "run_in_executor")
-                if "ensure_device_token" in _names_in_call(c)]
-    stores = [c for c in _calls(fn, "run_in_executor")
-              if "set_device_token" in _names_in_call(c)]
+    assert not [
+        c
+        for c in _calls(fn, "run_in_executor")
+        if "ensure_device_token" in _names_in_call(c)
+    ]
+    stores = [
+        c
+        for c in _calls(fn, "run_in_executor")
+        if "set_device_token" in _names_in_call(c)
+    ]
     pushes = _calls(fn, "stream_file")
     assert stores and pushes
     assert min(c.lineno for c in stores) > max(c.lineno for c in pushes)
@@ -118,14 +140,22 @@ def test_credentials_are_issued_only_behind_an_approval():
     for path in _sources.MODULES:
         tree = _sources.tree(path)
         for fn in ast.walk(tree):
-            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name != "issue_credentials":
+            if (
+                isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and fn.name != "issue_credentials"
+            ):
                 if _calls(fn, "issue_credentials"):
                     callers.add(fn.name)
     assert callers == {"handle_control", "_post_pair"}
     hc = _fn(_tree("em_controller.py"), "handle_control")
     issue = _calls(hc, "issue_credentials")[0]
-    gated = [n for n in ast.walk(hc) if isinstance(n, ast.If)
-             and _calls(n.test, "approved") and any(issue is x for x in ast.walk(n))]
+    gated = [
+        n
+        for n in ast.walk(hc)
+        if isinstance(n, ast.If)
+        and _calls(n.test, "approved")
+        and any(issue is x for x in ast.walk(n))
+    ]
     assert gated, "handle_control must issue credentials only under em_pairing.approved"
 
 

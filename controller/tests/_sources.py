@@ -45,13 +45,17 @@ def find_def(name: str) -> tuple[Path, ast.FunctionDef | ast.AsyncFunctionDef]:
     both define is asked for as `module.name` (`em_ota.run_update`)."""
     module, _, func = name.rpartition(".")
     paths = [p for p in MODULES if not module or p.stem == module]
-    hits = [(path, node) for path in paths for node in ast.walk(tree(path))
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == func]
+    hits = [
+        (path, node)
+        for path in paths
+        for node in ast.walk(tree(path))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == func
+    ]
     assert hits, f"{name} is not defined in any controller module"
-    assert len(hits) == 1, (
-        f"{name} is defined {len(hits)} times: "
-        + ", ".join(f"{p.name}:{n.lineno}" for p, n in hits))
+    assert len(hits) == 1, f"{name} is defined {len(hits)} times: " + ", ".join(
+        f"{p.name}:{n.lineno}" for p, n in hits
+    )
     return hits[0]
 
 
@@ -66,9 +70,13 @@ def code_only(text: str) -> str:
     parsed = ast.parse(textwrap.dedent(text))
     for node in ast.walk(parsed):
         body = getattr(node, "body", None)
-        if (isinstance(body, list) and body and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, ast.Constant)
-                and isinstance(body[0].value.value, str)):
+        if (
+            isinstance(body, list)
+            and body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
             body[0] = ast.Pass()
     return ast.unparse(parsed)
 

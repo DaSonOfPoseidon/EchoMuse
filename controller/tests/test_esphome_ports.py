@@ -39,8 +39,10 @@ def _db(tmp_path, monkeypatch, base=None):
 
 def _add(path, device_id):
     c = sqlite3.connect(path)
-    c.execute("INSERT INTO devices (device_id, label, approved) VALUES (?, ?, 1)",
-              (device_id, device_id))
+    c.execute(
+        "INSERT INTO devices (device_id, label, approved) VALUES (?, ?, 1)",
+        (device_id, device_id),
+    )
     c.commit()
     c.close()
 
@@ -54,6 +56,7 @@ def _restore_em_db():
 
 # ── The default is unchanged ──────────────────────────────────────────────────
 
+
 def test_a_fresh_database_still_starts_at_16001(tmp_path, monkeypatch):
     """
     Every fielded install allocated from 16001, and the ports are persisted —
@@ -66,6 +69,7 @@ def test_a_fresh_database_still_starts_at_16001(tmp_path, monkeypatch):
 
 
 # ── The base ──────────────────────────────────────────────────────────────────
+
 
 def test_a_fresh_database_allocates_from_the_configured_base(tmp_path, monkeypatch):
     p = _db(tmp_path, monkeypatch, base=16101)
@@ -99,8 +103,8 @@ def test_the_two_channel_defaults_do_not_overlap():
 
 # ── A floor, not a seed ───────────────────────────────────────────────────────
 
-def test_raising_the_base_leaves_existing_devices_where_they_are(tmp_path,
-                                                                 monkeypatch):
+
+def test_raising_the_base_leaves_existing_devices_where_they_are(tmp_path, monkeypatch):
     """
     The reason this is a floor. A device's port is persisted and HA holds a
     config entry against it, so changing the base must move only what has not
@@ -140,10 +144,11 @@ def test_lowering_the_base_never_reissues_a_port(tmp_path, monkeypatch):
 
 # ── Bad input ─────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("raw", ["", "  ", "sixteen thousand", "16101.5",
-                                 "80", "70000", "-1"])
-def test_an_unusable_base_falls_back_rather_than_refusing_to_start(raw,
-                                                                   monkeypatch):
+
+@pytest.mark.parametrize(
+    "raw", ["", "  ", "sixteen thousand", "16101.5", "80", "70000", "-1"]
+)
+def test_an_unusable_base_falls_back_rather_than_refusing_to_start(raw, monkeypatch):
     """
     A controller that would not start over a stray port number is a worse
     outcome than one that allocates where it always did — and on the add-on

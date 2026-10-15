@@ -43,7 +43,9 @@ def test_a_missing_or_blank_field_is_a_400_naming_it(body):
     with pytest.raises(web.HTTPBadRequest) as e:
         em_http.require_str(body, "name")
     assert json.loads(e.value.text) == {
-        "error": "Missing or empty required field: name", "code": "missing_field"}
+        "error": "Missing or empty required field: name",
+        "code": "missing_field",
+    }
 
 
 def test_a_present_field_is_returned_trimmed():

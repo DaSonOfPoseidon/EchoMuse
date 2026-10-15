@@ -28,13 +28,16 @@ def test_push_reaches_every_client():
 
 
 def test_push_with_nobody_listening_does_nothing():
-    asyncio.run(em_events.push({"type": "x"}))   # must not raise
+    asyncio.run(em_events.push({"type": "x"}))  # must not raise
 
 
 def test_push_log_queues_one_write_and_pushes_one_event(monkeypatch):
     queued = []
-    monkeypatch.setattr(em_events.em_dbwriter, "submit",
-                        lambda fn, *args: queued.append((fn.__name__, args)))
+    monkeypatch.setattr(
+        em_events.em_dbwriter,
+        "submit",
+        lambda fn, *args: queued.append((fn.__name__, args)),
+    )
     ws = FakeWS()
     em_events.clients.add(ws)
     try:
@@ -45,6 +48,9 @@ def test_push_log_queues_one_write_and_pushes_one_event(monkeypatch):
     assert len(ws.sent) == 1
     event = ws.sent[0]
     assert event["type"] == "device_log" and event["device_id"] == "dev1"
-    assert {k: event["entry"][k] for k in ("level", "source", "message")} == \
-        {"level": "warn", "source": "device", "message": "hello"}
+    assert {k: event["entry"][k] for k in ("level", "source", "message")} == {
+        "level": "warn",
+        "source": "device",
+        "message": "hello",
+    }
     assert isinstance(event["entry"]["ts"], int)

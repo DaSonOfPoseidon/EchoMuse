@@ -31,7 +31,10 @@ def test_the_measurement_finds_the_known_giants():
 def test_nothing_grew():
     base, now = _baseline(), size_ratchet.measure()
     grew = []
-    for kind, cap in (("files", size_ratchet.FILE_CAP), ("functions", size_ratchet.FN_CAP)):
+    for kind, cap in (
+        ("files", size_ratchet.FILE_CAP),
+        ("functions", size_ratchet.FN_CAP),
+    ):
         for name, size in now[kind].items():
             limit = base[kind].get(name)
             if limit is None:
@@ -51,5 +54,7 @@ def test_the_baseline_keeps_what_was_gained():
                 stale.append(f"{name} is no longer over the cap")
             elif limit - size > size_ratchet.SLACK:
                 stale.append(f"{name} shrank from {limit} to {size} lines")
-    assert not stale, ("; ".join(stale) + " — run "
-                       "`python controller/tools/size_ratchet.py --update`")
+    assert not stale, (
+        "; ".join(stale) + " — run "
+        "`python controller/tools/size_ratchet.py --update`"
+    )

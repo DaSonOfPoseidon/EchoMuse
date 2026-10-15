@@ -22,24 +22,41 @@ CONTROLLER = REPO / "controller"
 
 # Keys the table deliberately leaves out, and why.
 UNLISTED = {
-    "consolePassword",      # pointer on the wire; validated by em_console_pw
-    "consoleTimeoutMin",    # pointer on the wire; validate_console_timeout
+    "consolePassword",  # pointer on the wire; validated by em_console_pw
+    "consoleTimeoutMin",  # pointer on the wire; validate_console_timeout
     "controllerEndpoints",  # fleet-only, validated by em_endpoints
-    "ledScene", "ledListenColor", "ledThinkColor",  # em_scenes falls back
-    "meterAttack", "meterDecay", "meterFloor",       # em_scenes falls back
-    "meterGamma", "meterRef", "meterCurve",
+    "ledScene",
+    "ledListenColor",
+    "ledThinkColor",  # em_scenes falls back
+    "meterAttack",
+    "meterDecay",
+    "meterFloor",  # em_scenes falls back
+    "meterGamma",
+    "meterRef",
+    "meterCurve",
 }
 
 # ConfigMessage fields that are not config values. sendspinName is the
 # device's label, pushed beside the config rather than stored in it.
 # wakeWordEnabled is HA's picker state (em_wakeword), stored and sent apart
 # from device config.
-NOT_CONFIG = {"type", "hasBeamforming", "listeningAnim",
-              "consolePassword", "consoleTimeoutMin", "sendspinName",
-              "wakeWordEnabled"}
+NOT_CONFIG = {
+    "type",
+    "hasBeamforming",
+    "listeningAnim",
+    "consolePassword",
+    "consoleTimeoutMin",
+    "sendspinName",
+    "wakeWordEnabled",
+}
 
-GO_KIND = {"int": T.INT, "float64": T.FLOAT, "bool": T.BOOL,
-           "string": T.STR, "[]float64": T.FLOAT_LIST}
+GO_KIND = {
+    "int": T.INT,
+    "float64": T.FLOAT,
+    "bool": T.BOOL,
+    "string": T.STR,
+    "[]float64": T.FLOAT_LIST,
+}
 
 
 def _go_fields() -> dict[str, str]:
@@ -61,16 +78,20 @@ def test_every_device_field_is_listed_with_its_go_type():
     for key, go_type in _go_fields().items():
         if key in NOT_CONFIG:
             continue
-        assert key in T.KINDS, f"{key} ({go_type}) is decoded by the device but not listed"
-        assert T.KINDS[key] == GO_KIND[go_type], (
-            f"{key}: listed as {T.KINDS[key]!r}, the device decodes {go_type}")
+        assert (
+            key in T.KINDS
+        ), f"{key} ({go_type}) is decoded by the device but not listed"
+        assert (
+            T.KINDS[key] == GO_KIND[go_type]
+        ), f"{key}: listed as {T.KINDS[key]!r}, the device decodes {go_type}"
 
 
 def test_every_default_key_is_listed_or_named_as_unlisted():
     unclassified = set(em_db.DEFAULT_DEVICE_CONFIG) - set(T.KINDS) - UNLISTED
     assert not unclassified, (
         f"add {sorted(unclassified)} to em_config_types.KINDS, or to UNLISTED "
-        f"here with the reason")
+        f"here with the reason"
+    )
 
 
 def test_every_default_fits_its_kind():
@@ -83,19 +104,27 @@ def test_every_registration_conversion_is_covered():
     # handle_control converts these with float()/int()/bool(); each must be
     # listed, or a stored bad value reaches the conversion.
     body = _sources.def_source("handle_control")
-    converted = set(re.findall(
-        r'(?:float|int|bool)\(\s*config\.get\(\s*["\'](\w+)["\']', body))
+    converted = set(
+        re.findall(r'(?:float|int|bool)\(\s*config\.get\(\s*["\'](\w+)["\']', body)
+    )
     assert converted, "no conversions found; has handle_control changed shape?"
     assert converted <= set(T.KINDS), sorted(converted - set(T.KINDS))
 
 
-@pytest.mark.parametrize("kind,good,bad", [
-    (T.INT, [0, -1, 42], [30.0, 1.5, "3", True, None]),
-    (T.FLOAT, [0, 0.5, -30, 1e-3], ["0.5", math.nan, math.inf, False, None]),
-    (T.BOOL, [True, False], ["false", 0, 1, None]),
-    (T.STR, ["", "hey_jarvis_v0.1"], [1, None, ["x"]]),
-    (T.FLOAT_LIST, [[], [0.0] * 8, [1, -2.5]], [[1, None], [math.nan], "0,0", None]),
-])
+@pytest.mark.parametrize(
+    "kind,good,bad",
+    [
+        (T.INT, [0, -1, 42], [30.0, 1.5, "3", True, None]),
+        (T.FLOAT, [0, 0.5, -30, 1e-3], ["0.5", math.nan, math.inf, False, None]),
+        (T.BOOL, [True, False], ["false", 0, 1, None]),
+        (T.STR, ["", "hey_jarvis_v0.1"], [1, None, ["x"]]),
+        (
+            T.FLOAT_LIST,
+            [[], [0.0] * 8, [1, -2.5]],
+            [[1, None], [math.nan], "0,0", None],
+        ),
+    ],
+)
 def test_fits_from_the_edges(kind, good, bad):
     for v in good:
         assert T.fits(kind, v), (kind, v)
@@ -104,8 +133,15 @@ def test_fits_from_the_edges(kind, good, bad):
 
 
 def test_problems_names_each_bad_changed_key():
-    msgs = T.problems({"owwThreshold": "0.5", "saveUtterances": "false",
-                       "micGainDb": 24, "ledScene": 7}, stored={})
+    msgs = T.problems(
+        {
+            "owwThreshold": "0.5",
+            "saveUtterances": "false",
+            "micGainDb": 24,
+            "ledScene": 7,
+        },
+        stored={},
+    )
     assert len(msgs) == 2
     assert any(m.startswith("owwThreshold must be a number") for m in msgs)
     assert any(m.startswith("saveUtterances must be true or false") for m in msgs)
@@ -126,7 +162,7 @@ def test_drop_invalid_removes_only_bad_listed_keys():
     out, bad = T.drop_invalid(cfg)
     assert bad == ["owwThreshold"]
     assert out == {"micGainDb": 24, "ledScene": 7, "x": None}
-    assert cfg["owwThreshold"] == "abc"   # input not mutated
+    assert cfg["owwThreshold"] == "abc"  # input not mutated
 
 
 def test_drop_invalid_returns_a_clean_config_unchanged():
@@ -137,6 +173,7 @@ def test_drop_invalid_returns_a_clean_config_unchanged():
 
 # ── Every full-config push is filtered ──────────────────────────────────────
 
+
 def _config_pushes(tree):
     """(enclosing function, splatted expression) for send_control({"type": "config", **x})."""
     out = []
@@ -144,45 +181,71 @@ def _config_pushes(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for node in ast.walk(fn):
-            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "send_control" and node.args
-                    and isinstance(node.args[0], ast.Dict)):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "send_control"
+                and node.args
+                and isinstance(node.args[0], ast.Dict)
+            ):
                 continue
             d = node.args[0]
-            is_config = any(isinstance(k, ast.Constant) and k.value == "type"
-                            and isinstance(v, ast.Constant) and v.value == "config"
-                            for k, v in zip(d.keys, d.values))
+            is_config = any(
+                isinstance(k, ast.Constant)
+                and k.value == "type"
+                and isinstance(v, ast.Constant)
+                and v.value == "config"
+                for k, v in zip(d.keys, d.values)
+            )
             for k, v in zip(d.keys, d.values):
-                if is_config and k is None:   # a ** splat: a full config
+                if is_config and k is None:  # a ** splat: a full config
                     out.append((fn, v))
     return out
 
 
 def _calls(fn, name):
-    return any(isinstance(n, ast.Call) and getattr(n.func, "id", getattr(n.func, "attr", None)) == name
-               for n in ast.walk(fn))
+    return any(
+        isinstance(n, ast.Call)
+        and getattr(n.func, "id", getattr(n.func, "attr", None)) == name
+        for n in ast.walk(fn)
+    )
 
 
 def test_every_config_push_outside_registration_is_filtered():
     # Every module: a push moved out of em_api is still a push. Registration
     # (handle_control) filters with drop_invalid, pinned below.
-    pushes = [(fn, v) for path in _sources.MODULES if path.name != "em_controller.py"
-              for fn, v in _config_pushes(_sources.tree(path)) if fn.name != "push_config"]
+    pushes = [
+        (fn, v)
+        for path in _sources.MODULES
+        if path.name != "em_controller.py"
+        for fn, v in _config_pushes(_sources.tree(path))
+        if fn.name != "push_config"
+    ]
     assert len(pushes) >= 3
     for fn, v in pushes:
-        direct = isinstance(v, ast.Call) and getattr(v.func, "attr", None) == "well_typed"
-        assert direct or _calls(fn, "well_typed"), (
-            f"{fn.name} pushes a full config without em_config_types.well_typed")
+        direct = (
+            isinstance(v, ast.Call) and getattr(v.func, "attr", None) == "well_typed"
+        )
+        assert direct or _calls(
+            fn, "well_typed"
+        ), f"{fn.name} pushes a full config without em_config_types.well_typed"
 
 
 def test_registration_filters_before_it_pushes():
     tree = ast.parse((CONTROLLER / "em_controller.py").read_text())
-    fn = next(n for n in ast.walk(tree)
-              if isinstance(n, ast.AsyncFunctionDef) and n.name == "handle_control")
-    pushes = [v for f, v in _config_pushes(ast.Module(body=[fn], type_ignores=[]))
-              if f is fn]
+    fn = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.AsyncFunctionDef) and n.name == "handle_control"
+    )
+    pushes = [
+        v for f, v in _config_pushes(ast.Module(body=[fn], type_ignores=[])) if f is fn
+    ]
     assert len(pushes) == 1
-    drops = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
-             and getattr(n.func, "attr", None) == "drop_invalid"]
+    drops = [
+        n
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "drop_invalid"
+    ]
     assert drops, "handle_control no longer calls em_config_types.drop_invalid"
     assert drops[0].lineno < pushes[0].lineno, "drop_invalid must run before the push"

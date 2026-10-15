@@ -52,9 +52,11 @@ async def _send(*commands):
 def test_play_then_pause_ends_paused():
     async def main():
         s = await _playing()
-        await _send(em_player.play("office", "http://radio/new"),
-                    em_player.pause("office"))
+        await _send(
+            em_player.play("office", "http://radio/new"), em_player.pause("office")
+        )
         return s
+
     s = asyncio.run(main())
     assert s.state == PAUSED
     assert s.url == "http://radio/new"
@@ -64,11 +66,13 @@ def test_play_then_pause_ends_paused():
 def test_pause_then_play_ends_playing_the_new_track():
     async def main():
         s = await _playing()
-        await _send(em_player.pause("office"),
-                    em_player.play("office", "http://radio/new"))
+        await _send(
+            em_player.pause("office"), em_player.play("office", "http://radio/new")
+        )
         state, url = s.state, s.url
         await s.stop()
         return state, url
+
     state, url = asyncio.run(main())
     assert (state, url) == (PLAYING, "http://radio/new")
 
@@ -76,9 +80,11 @@ def test_pause_then_play_ends_playing_the_new_track():
 def test_play_then_stop_ends_stopped():
     async def main():
         s = await _playing()
-        await _send(em_player.play("office", "http://radio/new"),
-                    em_player.stop("office"))
+        await _send(
+            em_player.play("office", "http://radio/new"), em_player.stop("office")
+        )
         return s
+
     s = asyncio.run(main())
     assert s.state == IDLE
     assert s._task is None or s._task.done()
@@ -98,6 +104,7 @@ def test_devices_do_not_wait_on_each_other():
         state = b.state
         await a.stop()
         return state
+
     assert asyncio.run(main()) == PAUSED
 
 
@@ -135,8 +142,7 @@ def test_a_dead_link_does_not_wedge_the_player():
         # wait_for returns normally after the full timeout and hides the hang.
         loop = asyncio.get_running_loop()
         t0 = loop.time()
-        await asyncio.wait_for(
-            em_player.play("office", "http://radio/new"), 2.0)
+        await asyncio.wait_for(em_player.play("office", "http://radio/new"), 2.0)
         took = loop.time() - t0
         state, url = s.state, s.url
         await asyncio.wait_for(em_player.stop("office"), 2.0)
@@ -166,6 +172,7 @@ def test_a_live_link_still_gets_the_eos_before_the_next_stream():
         await asyncio.sleep(0.05)
         await em_player.stop("office")
         return device
+
     device = asyncio.run(main())
     types = [f[0] for f in device.data_frames]
     first_eos = types.index(0x03)

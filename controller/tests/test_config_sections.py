@@ -5,6 +5,7 @@ The load-bearing test here is test_every_config_key_belongs_somewhere: a key
 in DEFAULT_DEVICE_CONFIG that belongs to no section can never be overridden
 per device and never appears in the dashboard, and nothing else would notice.
 """
+
 import json
 import re
 from pathlib import Path
@@ -14,11 +15,11 @@ import pytest
 import em_db
 import em_config_sections as cs
 
-
 DASHBOARD = Path(__file__).resolve().parents[1] / "static" / "dashboard.jsx"
 
 
 # ─── The partition must stay total ───────────────────────────────────────────
+
 
 def test_every_config_key_belongs_somewhere():
     """
@@ -39,9 +40,9 @@ def test_every_config_key_belongs_somewhere():
         f"{sorted(orphans)} — add them to em_config_sections.SECTIONS"
     )
     strays = mapped - defaults
-    assert not strays, (
-        f"section(s) reference key(s) that are not real config: {sorted(strays)}"
-    )
+    assert (
+        not strays
+    ), f"section(s) reference key(s) that are not real config: {sorted(strays)}"
 
 
 def test_state_keys_are_not_in_any_section():
@@ -64,20 +65,27 @@ def test_dashboard_section_map_matches_python():
     # The literal is JSON-compatible by construction (see the comment above
     # it in dashboard.jsx) so it can be compared rather than eyeballed.
     js = json.loads(m.group(1))
-    assert set(js) == set(cs.SECTIONS), (
-        f"section ids differ: dashboard={sorted(js)} python={sorted(cs.SECTIONS)}"
-    )
+    assert set(js) == set(
+        cs.SECTIONS
+    ), f"section ids differ: dashboard={sorted(js)} python={sorted(cs.SECTIONS)}"
     for sid, keys in js.items():
-        assert sorted(keys) == sorted(cs.SECTIONS[sid]["keys"]), (
-            f"section '{sid}' keys differ between dashboard and Python"
-        )
+        assert sorted(keys) == sorted(
+            cs.SECTIONS[sid]["keys"]
+        ), f"section '{sid}' keys differ between dashboard and Python"
 
 
 # ─── Resolution ──────────────────────────────────────────────────────────────
 
+
 def _glob():
-    return {"owwThreshold": 0.5, "ledScene": "standard", "micGainDb": 24,
-            "agcEnabled": True, "bleProxyEnabled": False, "eqLoudness": False}
+    return {
+        "owwThreshold": 0.5,
+        "ledScene": "standard",
+        "micGainDb": 24,
+        "agcEnabled": True,
+        "bleProxyEnabled": False,
+        "eqLoudness": False,
+    }
 
 
 def test_no_sections_is_pure_fleet():
@@ -90,9 +98,9 @@ def test_no_sections_is_pure_fleet():
 def test_only_the_overridden_section_wins():
     dev = {"owwThreshold": 0.9, "ledScene": "pride", "micGainDb": 40}
     out = cs.merge(_glob(), dev, ["ring"])
-    assert out["ledScene"] == "pride"       # overridden section
-    assert out["owwThreshold"] == 0.5       # fleet
-    assert out["micGainDb"] == 24           # fleet
+    assert out["ledScene"] == "pride"  # overridden section
+    assert out["owwThreshold"] == 0.5  # fleet
+    assert out["micGainDb"] == 24  # fleet
 
 
 def test_all_sections_reproduces_the_old_full_override():
@@ -131,6 +139,7 @@ def test_summarise_reads_naturally():
 
 
 # ─── Migration equivalence ───────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("use_global,expected", [(1, 0), (0, len(cs.SECTION_IDS))])
 def test_v8_backfill_is_lossless(tmp_path, use_global, expected):
@@ -208,10 +217,20 @@ def test_v11_prunes_out_of_scope_values_from_migrated_rows(tmp_path, monkeypatch
     with em_db._tx() as conn:
         conn.execute(
             "UPDATE devices SET config_sections = '[]', config = ? WHERE device_id = 'dev1'",
-            (json.dumps({"ledScene": "malevolent", "owwModel": "hey_mycroft_v0.1",
-                         "micGainDb": 40, "startupVolume": 42}),),
+            (
+                json.dumps(
+                    {
+                        "ledScene": "malevolent",
+                        "owwModel": "hey_mycroft_v0.1",
+                        "micGainDb": 40,
+                        "startupVolume": 42,
+                    }
+                ),
+            ),
         )
-        conn.execute("UPDATE system_config SET value = '10' WHERE key = 'schema_version'")
+        conn.execute(
+            "UPDATE system_config SET value = '10' WHERE key = 'schema_version'"
+        )
 
     # Replay v11 ONLY. Rewinding schema_version and re-running _migrate would
     # otherwise re-apply every migration appended after v11 to a DB that has
@@ -243,10 +262,18 @@ def test_config_form_does_not_reference_a_device_it_never_receives():
     import re
     from pathlib import Path
 
-    src = (Path(__file__).resolve().parent.parent / "static" / "dashboard.jsx").read_text()
+    src = (
+        Path(__file__).resolve().parent.parent / "static" / "dashboard.jsx"
+    ).read_text()
     lines = src.split("\n")
-    start = next(i for i, l in enumerate(lines) if l.startswith("function DeviceConfigForm("))
-    end = next(i for i, l in enumerate(lines[start + 1:], start + 1) if l.startswith("function "))
+    start = next(
+        i for i, l in enumerate(lines) if l.startswith("function DeviceConfigForm(")
+    )
+    end = next(
+        i
+        for i, l in enumerate(lines[start + 1 :], start + 1)
+        if l.startswith("function ")
+    )
 
     offenders = []
     for i in range(start, end):
@@ -281,12 +308,14 @@ def test_the_echo_reference_override_is_scoped_and_offered():
     the section map (so it is scoped with the rest of the mic settings), and
     the dashboard (so a person can change it).
     """
-    assert em_db.DEFAULT_DEVICE_CONFIG.get("aecRefSource") == "auto", \
-        "must default to detecting, never to a pin — a pinned default would " \
+    assert em_db.DEFAULT_DEVICE_CONFIG.get("aecRefSource") == "auto", (
+        "must default to detecting, never to a pin — a pinned default would "
         "disable the hardware reference on every device at once"
+    )
 
-    assert "aecRefSource" in cs.SECTIONS["microphones"]["keys"], \
-        "aecRefSource must be scoped with the other mic settings"
+    assert (
+        "aecRefSource" in cs.SECTIONS["microphones"]["keys"]
+    ), "aecRefSource must be scoped with the other mic settings"
 
     jsx = DASHBOARD.read_text()
     assert "aecRefSource" in jsx, "the dashboard must offer the control"
@@ -294,6 +323,7 @@ def test_the_echo_reference_override_is_scoped_and_offered():
 
 def test_fleet_keys_are_shown_in_a_section_but_never_overridden():
     import em_config_sections as cs
+
     for key in cs.FLEET_KEYS:
         assert any(key in s["keys"] for s in cs.SECTIONS.values())
         assert key not in cs.keys_for(cs.SECTION_IDS)
@@ -301,7 +331,10 @@ def test_fleet_keys_are_shown_in_a_section_but_never_overridden():
 
 def test_a_device_value_for_a_fleet_key_never_wins():
     import em_config_sections as cs
-    fleet = {"controllerEndpoints": [{"host": "10.0.0.1", "port": 8767, "tlsPort": 8770}]}
+
+    fleet = {
+        "controllerEndpoints": [{"host": "10.0.0.1", "port": 8767, "tlsPort": 8770}]
+    }
     device = {"controllerEndpoints": []}
     eff = cs.merge(fleet, device, list(cs.SECTION_IDS))
     assert eff["controllerEndpoints"] == fleet["controllerEndpoints"]

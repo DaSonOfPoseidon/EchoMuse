@@ -14,8 +14,9 @@ import em_db
 def _fleet(path):
     c = sqlite3.connect(path)
     try:
-        row = c.execute("SELECT value FROM system_config "
-                        "WHERE key = 'global_device_config'").fetchone()
+        row = c.execute(
+            "SELECT value FROM system_config " "WHERE key = 'global_device_config'"
+        ).fetchone()
         return json.loads(row[0])
     finally:
         c.close()
@@ -31,8 +32,10 @@ def _at_v24(path, fleet_cfg, monkeypatch):
         em_db.init(path)
     c = sqlite3.connect(path)
     try:
-        c.execute("UPDATE system_config SET value = ? WHERE key = 'global_device_config'",
-                  (json.dumps(fleet_cfg),))
+        c.execute(
+            "UPDATE system_config SET value = ? WHERE key = 'global_device_config'",
+            (json.dumps(fleet_cfg),),
+        )
         c.commit()
     finally:
         c.close()
@@ -45,9 +48,11 @@ def test_a_new_install_listens_privately(tmp_path):
     assert em_db.get_global_device_config()["owwOnDevice"] == "on"
 
 
-def test_an_existing_fleet_that_never_chose_keeps_controller_wake(tmp_path, monkeypatch):
+def test_an_existing_fleet_that_never_chose_keeps_controller_wake(
+    tmp_path, monkeypatch
+):
     p = str(tmp_path / "em.db")
-    _at_v24(p, {"owwThreshold": 0.5}, monkeypatch)   # predates the key
+    _at_v24(p, {"owwThreshold": 0.5}, monkeypatch)  # predates the key
     em_db.init(p)
     assert _fleet(p)["owwOnDevice"] == "off"
     assert em_db.get_global_device_config()["owwOnDevice"] == "off"

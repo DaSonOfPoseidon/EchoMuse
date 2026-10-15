@@ -46,10 +46,12 @@ def _run(coro):
 
 # ── The table against the spec ──────────────────────────────────────────────
 
+
 def _spec_section() -> str:
     text = SPEC.read_text()
-    return text[text.index("**Device → Controller**"):
-                text.index("**Controller → Device**")]
+    return text[
+        text.index("**Device → Controller**") : text.index("**Controller → Device**")
+    ]
 
 
 def _spec_device_to_controller() -> set[str]:
@@ -66,7 +68,9 @@ def test_every_message_in_the_spec_has_a_handler_and_nothing_else_does():
     # `register` is the handshake, handled before the loop, not by the table.
     spec = _spec_device_to_controller() - {"register"}
     table = set(em_controller.CONTROL_HANDLERS)
-    assert spec - table == set(), f"in the spec, dropped by the controller: {spec - table}"
+    assert (
+        spec - table == set()
+    ), f"in the spec, dropped by the controller: {spec - table}"
     assert table - spec == set(), f"handled, but not in the spec: {table - spec}"
 
 
@@ -79,18 +83,23 @@ def test_every_handler_takes_the_device_and_the_message():
 def test_the_spec_names_the_field_the_firmware_sends_for_ambient_light():
     # The spec said `value`; the firmware sends `lux` (device/internal/client/
     # control.go, SendAmbientLight) and the handler reads `lux`.
-    row = next(l for l in _spec_section().splitlines()
-               if l.startswith("| `ambient_light` |"))
+    row = next(
+        l for l in _spec_section().splitlines() if l.startswith("| `ambient_light` |")
+    )
     assert "`lux`" in row
 
 
 # ── ambient_light ───────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def lux_pushes(monkeypatch):
     pushed = []
-    monkeypatch.setattr(em_controller.esphome, "update_ambient_lux",
-                        lambda device_id, lux: pushed.append((device_id, lux)))
+    monkeypatch.setattr(
+        em_controller.esphome,
+        "update_ambient_lux",
+        lambda device_id, lux: pushed.append((device_id, lux)),
+    )
     return pushed
 
 
@@ -116,17 +125,25 @@ def test_a_light_change_updates_the_held_stats(lux_pushes):
 def test_a_reading_that_is_not_an_integer_is_ignored(lux_pushes, lux):
     d = _device()
     d.stats = {}
-    msg = {"type": "ambient_light"} if lux is None else {"type": "ambient_light", "lux": lux}
+    msg = (
+        {"type": "ambient_light"}
+        if lux is None
+        else {"type": "ambient_light", "lux": lux}
+    )
     _run(em_controller._on_ambient_light(d, msg))
     assert lux_pushes == [] and d.stats == {}
 
 
 # ── answers to a request the controller is waiting on ───────────────────────
 
-@pytest.mark.parametrize("handler, attr", [
-    ("_on_sendspin_token", "sendspin_token_waiter"),
-    ("_on_wifi_scan_result", "wifi_scan_future"),
-])
+
+@pytest.mark.parametrize(
+    "handler, attr",
+    [
+        ("_on_sendspin_token", "sendspin_token_waiter"),
+        ("_on_wifi_scan_result", "wifi_scan_future"),
+    ],
+)
 def test_an_answer_resolves_the_waiting_request(handler, attr):
     async def go():
         d = _device()
@@ -135,35 +152,46 @@ def test_an_answer_resolves_the_waiting_request(handler, attr):
         msg = {"type": "x", "payload": 1}
         await getattr(em_controller, handler)(d, msg)
         assert fut.result() is msg
+
     _run(go())
 
 
-@pytest.mark.parametrize("handler, attr", [
-    ("_on_sendspin_token", "sendspin_token_waiter"),
-    ("_on_wifi_scan_result", "wifi_scan_future"),
-])
+@pytest.mark.parametrize(
+    "handler, attr",
+    [
+        ("_on_sendspin_token", "sendspin_token_waiter"),
+        ("_on_wifi_scan_result", "wifi_scan_future"),
+    ],
+)
 def test_an_answer_nobody_is_waiting_for_is_dropped(handler, attr):
     async def go():
         d = _device()
         setattr(d, attr, None)
-        await getattr(em_controller, handler)(d, {"type": "x"})   # must not raise
+        await getattr(em_controller, handler)(d, {"type": "x"})  # must not raise
         done = asyncio.get_running_loop().create_future()
         done.set_result("first")
         setattr(d, attr, done)
-        await getattr(em_controller, handler)(d, {"type": "x"})   # nor here
+        await getattr(em_controller, handler)(d, {"type": "x"})  # nor here
         assert done.result() == "first"
+
     _run(go())
 
 
 # ── log, sendspin_status, pair_request ──────────────────────────────────────
+
 
 def test_a_device_log_line_is_relayed_once_with_its_level(monkeypatch):
     sent = []
 
     async def push(device_id, level, source, message):
         sent.append((device_id, level, source, message))
+
     monkeypatch.setattr(em_controller.em_events, "push_log", push)
-    _run(em_controller._on_log(_device(), {"type": "log", "level": "warn", "message": "m"}))
+    _run(
+        em_controller._on_log(
+            _device(), {"type": "log", "level": "warn", "message": "m"}
+        )
+    )
     _run(em_controller._on_log(_device(), {"type": "log"}))
     assert sent == [("dev1", "warn", "device", "m"), ("dev1", "info", "device", "")]
 
@@ -173,14 +201,27 @@ def test_sendspin_status_is_held_and_pushed(monkeypatch):
 
     async def push(event):
         events.append(event)
+
     monkeypatch.setattr(em_controller.em_events, "push", push)
     d = _device()
-    _run(em_controller._on_sendspin_status(d, {"type": "sendspin_status",
-                                               "status": {"state": "playing"}}))
+    _run(
+        em_controller._on_sendspin_status(
+            d, {"type": "sendspin_status", "status": {"state": "playing"}}
+        )
+    )
     assert d.sendspin == {"state": "playing"}
-    assert events == [{"type": "device_update", "device_id": "dev1",
-                       "state": {"sendspin": {"state": "playing"}}}]
-    _run(em_controller._on_sendspin_status(d, {"type": "sendspin_status", "status": None}))
+    assert events == [
+        {
+            "type": "device_update",
+            "device_id": "dev1",
+            "state": {"sendspin": {"state": "playing"}},
+        }
+    ]
+    _run(
+        em_controller._on_sendspin_status(
+            d, {"type": "sendspin_status", "status": None}
+        )
+    )
     assert d.sendspin is None, "null means the player stopped"
 
 
@@ -189,12 +230,14 @@ def test_a_pair_request_is_shown_to_the_admin(monkeypatch):
 
     async def notify(device_id, via):
         seen.append((device_id, via))
+
     monkeypatch.setattr(em_controller.api, "notify_pair_request", notify)
     _run(em_controller._on_pair_request(_device(), {"type": "pair_request"}))
     assert seen == [("dev1", "link")]
 
 
 # ── pong ────────────────────────────────────────────────────────────────────
+
 
 def test_a_solicited_pong_records_one_rtt_sample():
     async def go():
@@ -204,6 +247,7 @@ def test_a_solicited_pong_records_one_rtt_sample():
         await em_controller._on_pong(d, {"type": "pong", "id": 7})
         assert 7 not in d.ping_sent and 7 not in d.ping_busy
         return d.drain_rtt()
+
     window = _run(go())
     assert window["rttSamples"] == 1
     assert 50 <= window["rttMinMs"] < 1000

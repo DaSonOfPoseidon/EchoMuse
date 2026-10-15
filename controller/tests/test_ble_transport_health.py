@@ -90,11 +90,13 @@ def test_missing_counters_are_treated_as_zero_not_as_a_crash():
 # em_ble_proxy cannot be imported here (zeroconf), so the two facts that make
 # the pure logic above reach anything are checked against the file.
 
+
 def test_the_proxy_routes_its_counters_through_this_module():
     src = (CONTROLLER / "em_ble_proxy.py").read_text()
     assert "import em_ble_health" in src
-    assert re.search(r"em_ble_health\.observe\(", src), \
-        "update_stats must use the shared decision, not its own copy"
+    assert re.search(
+        r"em_ble_health\.observe\(", src
+    ), "update_stats must use the shared decision, not its own copy"
 
 
 def test_the_status_payload_surfaces_the_counters():

@@ -1,4 +1,5 @@
 """Classifying an emOS device's saved kernel log (em_crashlog)."""
+
 import em_crashlog as cl
 
 # The end of a real clean restart off EFF, 2026-09-17. MediaTek dumps a call

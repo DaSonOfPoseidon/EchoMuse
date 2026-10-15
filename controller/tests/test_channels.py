@@ -38,24 +38,40 @@ CHANNEL_OWNED_OPTIONS = {"esphome_port_base"}
 def _ea():
     assert EA_PATH.joinpath("config.yaml").is_file(), (
         "controller-ea/config.yaml is missing — run "
-        "controller/tools/sync_channels.py")
+        "controller/tools/sync_channels.py"
+    )
     return yaml.safe_load((EA_PATH / "config.yaml").read_text())
 
 
 # ── No drift ──────────────────────────────────────────────────────────────────
 
+
 def test_the_committed_channel_matches_the_generator():
     problems = sync_channels.check(sync_channels.EA)
     assert not problems, (
-        "Channel add-on is out of date:\n  " + "\n  ".join(problems) +
-        "\n\nRun: controller/tools/sync_channels.py")
+        "Channel add-on is out of date:\n  "
+        + "\n  ".join(problems)
+        + "\n\nRun: controller/tools/sync_channels.py"
+    )
 
 
-@pytest.mark.parametrize("key", [
-    "arch", "host_network", "ingress", "ingress_port", "panel_admin",
-    "panel_icon", "environment", "options", "schema",
-    "image", "init", "url",
-])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "arch",
+        "host_network",
+        "ingress",
+        "ingress_port",
+        "panel_admin",
+        "panel_icon",
+        "environment",
+        "options",
+        "schema",
+        "image",
+        "init",
+        "url",
+    ],
+)
 def test_channel_shares_every_non_identity_field_with_ga(key):
     """
     A setting reachable in one channel and not the other is the divergence
@@ -70,15 +86,15 @@ def test_channel_shares_every_non_identity_field_with_ga(key):
         # Every option's VALUE is shared except the ones that are part of a
         # channel's identity — see CHANNEL_OWNED_OPTIONS and the test below.
         # The key SET is still compared in full, two tests down.
-        ea_opts = {k: v for k, v in ea[key].items()
-                   if k not in CHANNEL_OWNED_OPTIONS}
-        ga_opts = {k: v for k, v in GA[key].items()
-                   if k not in CHANNEL_OWNED_OPTIONS}
-        assert ea_opts == ga_opts, (
-            "options differ between channels — regenerate rather than editing")
+        ea_opts = {k: v for k, v in ea[key].items() if k not in CHANNEL_OWNED_OPTIONS}
+        ga_opts = {k: v for k, v in GA[key].items() if k not in CHANNEL_OWNED_OPTIONS}
+        assert (
+            ea_opts == ga_opts
+        ), "options differ between channels — regenerate rather than editing"
         return
-    assert ea.get(key) == GA[key], (
-        f"{key} differs between channels — regenerate rather than editing")
+    assert (
+        ea.get(key) == GA[key]
+    ), f"{key} differs between channels — regenerate rather than editing"
 
 
 def test_options_and_schema_agree_key_for_key():
@@ -91,6 +107,7 @@ def test_options_and_schema_agree_key_for_key():
 
 
 # ── Identity, which must differ ───────────────────────────────────────────────
+
 
 def test_channel_has_its_own_slug():
     """
@@ -133,10 +150,12 @@ def test_channels_hand_out_satellite_ports_from_disjoint_ranges():
 
     assert ea_base != ga_base, (
         "Both channels allocate satellite ports from the same base — a Home "
-        "Assistant config entry from one will reach the other's devices")
+        "Assistant config entry from one will reach the other's devices"
+    )
     assert abs(ea_base - ga_base) >= 100, (
         f"Only {abs(ea_base - ga_base)} ports between the channel bases — a "
-        f"fleet that size would allocate into the other channel's range")
+        f"fleet that size would allocate into the other channel's range"
+    )
 
     # The type is shared even though the value is not: a channel may not
     # loosen validation the other enforces.
@@ -160,6 +179,7 @@ def test_channel_version_is_independent_of_ga():
     ea_before = (EA_PATH / "config.yaml").read_text()
     generated = sync_channels.generate(sync_channels.EA)["config.yaml"]
     import re
+
     got = re.search(r'^version:\s*"(.*)"', generated, re.M).group(1)
     want = re.search(r'^version:\s*"(.*)"', ea_before, re.M).group(1)
     assert got == want, "sync_channels must preserve the channel's own version"
@@ -214,9 +234,11 @@ def test_every_channel_documents_the_version_it_pins():
         changelog = path / "CHANGELOG.md"
         assert changelog.is_file(), (
             f"{path.name}/CHANGELOG.md is missing — Supervisor's update "
-            f"dialog will read 'No changelog found'")
+            f"dialog will read 'No changelog found'"
+        )
 
         assert version in changelog.read_text(), (
             f"{path.name}/CHANGELOG.md never mentions {version}, the version "
             f"its config.yaml pins — an update to it shows notes for some "
-            f"other release")
+            f"other release"
+        )

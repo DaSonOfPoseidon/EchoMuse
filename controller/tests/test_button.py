@@ -29,6 +29,7 @@ def decide(held_ms=0, muted=False, turn_active=False, tap_event=False):
 
 # ── The mute rule ────────────────────────────────────────────────────────────
 
+
 def test_hold_fires_while_muted():
     """A hold is not speech, so the mute has no opinion about it."""
     assert decide(held_ms=800, muted=True) == em_button.HOLD
@@ -50,6 +51,7 @@ def test_muted_tap_does_not_cancel_either():
 
 # ── Unmuted behaviour is unchanged ───────────────────────────────────────────
 
+
 def test_tap_starts_a_turn():
     assert decide(held_ms=10) == em_button.TURN
 
@@ -63,6 +65,7 @@ def test_hold_fires_long():
 
 
 # ── The hold threshold ───────────────────────────────────────────────────────
+
 
 def test_exactly_the_threshold_is_a_hold():
     assert decide(held_ms=HOLD_MS) == em_button.HOLD
@@ -83,6 +86,7 @@ def test_absent_hold_time_reads_as_a_tap():
 
 
 # ── buttonSingleTapEvent ─────────────────────────────────────────────────────
+
 
 def test_tap_event_replaces_the_turn():
     assert decide(held_ms=10, tap_event=True) == em_button.TAP_EVENT

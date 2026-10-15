@@ -1,4 +1,5 @@
 """em_labels: the 32-character device label cap, and its dashboard mirror."""
+
 import re
 from pathlib import Path
 
@@ -45,6 +46,7 @@ def test_both_label_endpoints_enforce_it():
 # ── Beyond length: what Home Assistant accepts but should not be given ──────
 # Edges from Unicode's own categories rather than from typical names.
 
+
 def test_every_control_character_is_refused():
     # All of Cc: C0 (U+0000-U+001F), DEL (U+007F), C1 (U+0080-U+009F).
     for cp in [*range(0x00, 0x20), 0x7F, *range(0x80, 0xA0)]:
@@ -74,8 +76,19 @@ def test_no_letter_or_number_is_refused():
 
 
 def test_any_script_letter_or_digit_is_enough():
-    for s in ("Kitchen", "Küche", "Кухня", "厨房", "مطبخ", "7", "٣", "🍳 Kitchen",
-              "Bob's Room", "Kids' room #2", "x" * em_labels.MAX_LABEL_LEN):
+    for s in (
+        "Kitchen",
+        "Küche",
+        "Кухня",
+        "厨房",
+        "مطبخ",
+        "7",
+        "٣",
+        "🍳 Kitchen",
+        "Bob's Room",
+        "Kids' room #2",
+        "x" * em_labels.MAX_LABEL_LEN,
+    ):
         label, err = em_labels.check_label(s)
         assert err is None and label == s, repr(s)
 
@@ -98,7 +111,7 @@ def test_the_length_cap_counts_code_points():
 def test_an_accepted_label_fits_the_mdns_txt_record():
     # RFC 6763 §6.1: each TXT string is at most 255 bytes. The widest label
     # the rules allow, in the widest UTF-8, must still fit.
-    widest = "a" + "\U0010FFFD" * (em_labels.MAX_LABEL_LEN - 1)
+    widest = "a" + "\U0010fffd" * (em_labels.MAX_LABEL_LEN - 1)
     label, err = em_labels.check_label(widest)
     assert err is None
     assert len(f"friendly_name={label} Voice Assistant".encode()) <= 255

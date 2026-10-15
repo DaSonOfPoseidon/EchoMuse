@@ -23,6 +23,7 @@ def install() -> None:
         return
     try:
         import openwakeword  # noqa: F401
+
         return
     except ImportError:
         pass

@@ -4,13 +4,25 @@ only. A GA controller offers GA firmware alone, and never offers a device a
 version older than the one it runs.
 """
 
-from version import (choose_firmware_release, firmware_key, firmware_update,
-                     offers_ea_firmware)
+from version import (
+    choose_firmware_release,
+    firmware_key,
+    firmware_update,
+    offers_ea_firmware,
+)
 
 
 def test_ordering():
-    order = ["v2.16.0", "v2.16.0-78-g08163f4", "v2.17.0-ea.1", "v2.17.0-ea.2",
-             "v2.17.0-ea.10", "v2.17.0", "v2.17.0-3-gabc1234", "v2.18.0-ea.1"]
+    order = [
+        "v2.16.0",
+        "v2.16.0-78-g08163f4",
+        "v2.17.0-ea.1",
+        "v2.17.0-ea.2",
+        "v2.17.0-ea.10",
+        "v2.17.0",
+        "v2.17.0-3-gabc1234",
+        "v2.18.0-ea.1",
+    ]
     keys = [firmware_key(v) for v in order]
     assert keys == sorted(keys) and len(set(keys)) == len(keys)
 
@@ -39,14 +51,23 @@ def test_a_dev_build_is_still_offered_a_release():
 def test_only_a_plain_release_build_is_a_ga_controller():
     assert not offers_ea_firmware("v2.25.0")
     assert not offers_ea_firmware("2.25.0")
-    for v in ("v2.25.0-ea.1", "v2.24.1-72-ge68d134", "dev",
-              "dev-controller-v2.24.1-68-g823e740", ""):
+    for v in (
+        "v2.25.0-ea.1",
+        "v2.24.1-72-ge68d134",
+        "dev",
+        "dev-controller-v2.24.1-68-g823e740",
+        "",
+    ):
         assert offers_ea_firmware(v), v
 
 
 def _rel(tag, pre=False, draft=False, binary=True):
-    return {"tag_name": tag, "prerelease": pre, "draft": draft,
-            "assets": [{"name": "server"}] if binary else []}
+    return {
+        "tag_name": tag,
+        "prerelease": pre,
+        "draft": draft,
+        "assets": [{"name": "server"}] if binary else [],
+    }
 
 
 RELEASES = [  # newest first by date, as GitHub lists them
@@ -68,7 +89,9 @@ def test_a_ga_controller_skips_an_ea_tag_even_without_the_flag():
 
 
 def test_an_ea_controller_picks_the_newest_of_both():
-    assert choose_firmware_release(RELEASES, include_ea=True)["tag_name"] == "v2.17.0-ea.2"
+    assert (
+        choose_firmware_release(RELEASES, include_ea=True)["tag_name"] == "v2.17.0-ea.2"
+    )
     rs = [_rel("v2.17.0-ea.2", pre=True), _rel("v2.17.0")]
     assert choose_firmware_release(rs, include_ea=True)["tag_name"] == "v2.17.0"
 

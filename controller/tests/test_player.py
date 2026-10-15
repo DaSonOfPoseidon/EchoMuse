@@ -55,7 +55,7 @@ class StubSession(MediaSession):
         super().__init__(device_id)
         self._periods = periods
         self._endless = endless
-        self.spawns: list[float] = []   # position_s per spawn
+        self.spawns: list[float] = []  # position_s per spawn
         self.spawn_urls: list[str | None] = []
         self.procs: list[FakeProc] = []
 
@@ -91,6 +91,7 @@ def test_play_streams_frames_then_eos():
         await s.play("http://radio/stream")
         await asyncio.wait_for(s._task, 5)
         return device, s
+
     device, s = asyncio.run(main())
     assert s.state == IDLE
     types = [f[0] for f in device.data_frames]
@@ -105,9 +106,10 @@ def test_pause_flushes_then_eos_and_bookmarks():
         _wire(device)
         s = StubSession("office", periods=2, endless=True)
         await s.play("http://radio/stream")
-        await asyncio.sleep(0.05)   # let the 2 available periods go out
+        await asyncio.sleep(0.05)  # let the 2 available periods go out
         await s.pause()
         return device, s
+
     device, s = asyncio.run(main())
     assert s.state == PAUSED
     assert {"type": "speaker_flush"} in device.control_msgs
@@ -125,12 +127,13 @@ def test_resume_restarts_decoder_at_bookmark():
         await s.play("http://radio/stream")
         await asyncio.sleep(0.05)
         await s.pause()
-        s._pos = 42.0   # pretend we were deep into the track
+        s._pos = 42.0  # pretend we were deep into the track
         await s.resume()
         assert s.state == PLAYING
-        await asyncio.sleep(0.05)   # let the feed task reach the spawn
+        await asyncio.sleep(0.05)  # let the feed task reach the spawn
         await s.stop()
         return s
+
     s = asyncio.run(main())
     assert s.spawns == [0.0, 42.0]
 
@@ -144,6 +147,7 @@ def test_stop_clears_session():
         await asyncio.sleep(0.05)
         await s.stop()
         return device, s
+
     device, s = asyncio.run(main())
     assert s.state == IDLE
     assert s.url is None and s._pos == 0.0
@@ -179,6 +183,7 @@ def test_interrupt_resume_cycle_only_touches_playing_sessions():
         await em_player.resume_interrupted("office")
         assert s.state == PAUSED
         await s.stop()
+
     asyncio.run(main())
 
 
@@ -194,6 +199,7 @@ def test_device_gone_abandons_without_wire_traffic():
         em_player.device_gone("office")
         await asyncio.sleep(0.01)
         return device, s, n_control
+
     device, s, n_control = asyncio.run(main())
     assert s.state == IDLE
     assert len(device.control_msgs) == n_control  # no flush sent
@@ -218,7 +224,7 @@ def test_unseekable_resume_rejoins_live_edge_instead_of_going_silent():
     """
     device = FakeDevice("lounge")
     _wire(device)
-    em_player.SEEK_STALL_S = 0.05   # keep the test fast
+    em_player.SEEK_STALL_S = 0.05  # keep the test fast
 
     class UnseekableSession(StubSession):
         async def _spawn_decoder(self, url, position_s):
@@ -227,7 +233,7 @@ def test_unseekable_resume_rejoins_live_edge_instead_of_going_silent():
             # Position 0 (the live edge) plays normally.
             proc = FakeProc(3, endless=(position_s > 0.5))
             if position_s > 0.5:
-                proc.stdout = asyncio.StreamReader()   # silent forever
+                proc.stdout = asyncio.StreamReader()  # silent forever
             self.procs.append(proc)
             return proc
 
@@ -264,6 +270,7 @@ def test_pausing_during_a_barge_in_stays_paused():
     The user's pause must win over our auto-resume. It is their command; ours
     is bookkeeping.
     """
+
     async def main():
         device = FakeDevice()
         _wire(device)
@@ -280,14 +287,16 @@ def test_pausing_during_a_barge_in_stays_paused():
         # "pause the music" — arrives through the module-level entry point,
         # which is what HA / Music Assistant drive.
         await em_player.pause("office")
-        assert s.pending == ("pause", None), (
-            "a user pause during a turn must be recorded as their intent"
-        )
+        assert s.pending == (
+            "pause",
+            None,
+        ), "a user pause during a turn must be recorded as their intent"
 
         # Turn ends. The music must STAY paused.
         await em_player.resume_interrupted("office")
         assert s.state == PAUSED, "the turn's end contradicted the user's pause"
         await s.stop()
+
     asyncio.run(main())
 
 
@@ -306,6 +315,7 @@ def test_barge_in_does_not_tell_home_assistant_the_music_is_paused():
     The entity was never wrong about our state machine; it was wrong about
     what the user could see, and HA acts on the latter.
     """
+
     async def main():
         device = FakeDevice()
         pushed = _recording_wire(device)
@@ -329,6 +339,7 @@ def test_barge_in_does_not_tell_home_assistant_the_music_is_paused():
         await asyncio.sleep(0.05)
         assert s.state == PLAYING, "the ordinary barge-in must still resume"
         await s.stop()
+
     asyncio.run(main())
 
 
@@ -338,6 +349,7 @@ def test_a_real_pause_during_a_turn_is_still_reported_to_home_assistant():
     without waiting for the turn to end — otherwise the fix above just moves
     the staleness rather than removing it.
     """
+
     async def main():
         device = FakeDevice()
         pushed = _recording_wire(device)
@@ -356,6 +368,7 @@ def test_a_real_pause_during_a_turn_is_still_reported_to_home_assistant():
         await em_player.resume_interrupted("office")
         assert s.state == PAUSED, "the turn's end contradicted the user's pause"
         await s.stop()
+
     asyncio.run(main())
 
 
@@ -365,6 +378,7 @@ def test_stop_during_a_barge_in_stays_stopped():
     the reason the bug was pause-only, and a later refactor could easily
     break it while "fixing" pause.
     """
+
     async def main():
         device = FakeDevice()
         _wire(device)
@@ -379,6 +393,7 @@ def test_stop_during_a_barge_in_stays_stopped():
 
         await em_player.resume_interrupted("office")
         assert s.state == IDLE
+
     asyncio.run(main())
 
 
@@ -387,6 +402,7 @@ def test_an_ordinary_barge_in_still_resumes():
     The fix must not cost the normal case: barge in, ask something unrelated,
     music comes back on its own.
     """
+
     async def main():
         device = FakeDevice()
         _wire(device)
@@ -399,6 +415,7 @@ def test_an_ordinary_barge_in_still_resumes():
         await em_player.resume_interrupted("office")
         assert s.state == PLAYING and not s.resume_after
         await s.stop()
+
     asyncio.run(main())
 
 
@@ -414,13 +431,14 @@ def test_play_during_a_turn_waits_for_the_speaker():
     old interrupt() ignored: it only paused what was ALREADY playing and did
     nothing to stop something starting.
     """
+
     async def main():
         device = FakeDevice()
         _wire(device)
         s = StubSession("office", periods=2, endless=True)
         em_player._sessions["office"] = s
 
-        await em_player.interrupt("office")          # turn starts, nothing playing
+        await em_player.interrupt("office")  # turn starts, nothing playing
         await em_player.play("office", "http://radio/jazz")
 
         assert s.state == IDLE, "music must not start while the turn owns the speaker"
@@ -432,12 +450,14 @@ def test_play_during_a_turn_waits_for_the_speaker():
         assert s.state == PLAYING
         assert s.url == "http://radio/jazz"
         await s.stop()
+
     asyncio.run(main())
 
 
 def test_resume_during_a_turn_waits_for_the_speaker():
     """The narrow case that started this: resume() used to start the feed
     immediately, mid-turn, straight into the TTS."""
+
     async def main():
         device = FakeDevice()
         _wire(device)
@@ -446,8 +466,8 @@ def test_resume_during_a_turn_waits_for_the_speaker():
 
         await s.play("http://radio/stream")
         await asyncio.sleep(0.05)
-        await s.pause()                               # user paused it earlier
-        await em_player.interrupt("office")           # then a turn starts
+        await s.pause()  # user paused it earlier
+        await em_player.interrupt("office")  # then a turn starts
 
         await em_player.resume("office")
         assert s.state == PAUSED, "resume must not start the feed mid-turn"
@@ -456,6 +476,7 @@ def test_resume_during_a_turn_waits_for_the_speaker():
         await asyncio.sleep(0.05)
         assert s.state == PLAYING
         await s.stop()
+
     asyncio.run(main())
 
 
@@ -464,6 +485,7 @@ def test_the_last_command_in_a_turn_wins():
     "Play jazz... actually, pause" — the last instruction is what was meant.
     Anything else would replay a command the user changed their mind about.
     """
+
     async def main():
         device = FakeDevice()
         _wire(device)
@@ -479,6 +501,7 @@ def test_the_last_command_in_a_turn_wins():
         await asyncio.sleep(0.05)
         assert s.state == IDLE, "the abandoned play must not start"
         assert not s.spawns
+
     asyncio.run(main())
 
 
@@ -488,6 +511,7 @@ def test_a_user_command_overrides_our_auto_resume():
     the user then said something about it. Theirs is an instruction, ours is
     bookkeeping.
     """
+
     async def main():
         device = FakeDevice()
         _wire(device)
@@ -503,6 +527,7 @@ def test_a_user_command_overrides_our_auto_resume():
         await em_player.resume_interrupted("office")
         assert s.state == IDLE, "the user's stop lost to our auto-resume"
         assert s.url is None
+
     asyncio.run(main())
 
 
@@ -512,6 +537,7 @@ def test_home_assistant_is_told_the_intent_not_left_stale():
     for the length of a turn — #53's other half is already a complaint about
     that entity being wrong.
     """
+
     async def main():
         device = FakeDevice()
         _wire(device)
@@ -519,6 +545,7 @@ def test_home_assistant_is_told_the_intent_not_left_stale():
 
         async def notify(did, state):
             pushed.append((did, state))
+
         em_player._notify_state = notify
 
         s = StubSession("office", periods=2, endless=True)
@@ -526,11 +553,14 @@ def test_home_assistant_is_told_the_intent_not_left_stale():
 
         await em_player.interrupt("office")
         await em_player.play("office", "http://radio/jazz")
-        assert ("office", PLAYING) in pushed, \
-            "HA was not told the deferred play would happen"
+        assert (
+            "office",
+            PLAYING,
+        ) in pushed, "HA was not told the deferred play would happen"
         await em_player.resume_interrupted("office")
         await asyncio.sleep(0.05)
         await s.stop()
+
     asyncio.run(main())
 
 
@@ -540,8 +570,11 @@ def _recording_wire(device):
 
     async def notify(did, state):
         pushed.append(state)
-    em_player.init(get_device=lambda did: device if did == device.device_id else None,
-                   notify_state=notify)
+
+    em_player.init(
+        get_device=lambda did: device if did == device.device_id else None,
+        notify_state=notify,
+    )
     em_player._notify_state = notify
     return pushed
 
@@ -558,6 +591,7 @@ def test_resume_tells_home_assistant_it_is_playing_again():
     This pins the announcement itself: without it there is nothing for the
     turn-end fix to be correct about.
     """
+
     async def main():
         device = FakeDevice()
         pushed = _recording_wire(device)
@@ -573,6 +607,7 @@ def test_resume_tells_home_assistant_it_is_playing_again():
         await asyncio.sleep(0.05)
         assert PLAYING in pushed, "HA was never told playback resumed"
         await s.stop()
+
     asyncio.run(main())
 
 
@@ -582,6 +617,7 @@ def test_play_tells_home_assistant_it_is_playing():
     comes from the feed, not from play() itself — worth pinning, because the
     obvious "fix" of pushing in play()/resume() duplicates it.
     """
+
     async def main():
         device = FakeDevice()
         pushed = _recording_wire(device)
@@ -592,6 +628,7 @@ def test_play_tells_home_assistant_it_is_playing():
         await asyncio.sleep(0.05)
         assert pushed[-1] == PLAYING, f"last state HA saw was {pushed[-1]!r}"
         await s.stop()
+
     asyncio.run(main())
 
 
@@ -603,6 +640,7 @@ def test_playback_state_is_pushed_once_per_start_not_per_chunk():
     Once-only is also exactly why the turn-end IDLE was able to win: there is
     no later push to correct it.
     """
+
     async def main():
         device = FakeDevice()
         pushed = _recording_wire(device)
@@ -611,7 +649,10 @@ def test_playback_state_is_pushed_once_per_start_not_per_chunk():
 
         await s.play("http://radio/stream")
         await asyncio.sleep(0.2)
-        assert pushed.count(PLAYING) == 1, f"pushed PLAYING {pushed.count(PLAYING)} times"
+        assert (
+            pushed.count(PLAYING) == 1
+        ), f"pushed PLAYING {pushed.count(PLAYING)} times"
+
     asyncio.run(main())
 
 
@@ -644,22 +685,25 @@ def test_a_starved_decoder_is_reported_as_a_source_stall(caplog):
 
                 async def slow(n):
                     calls["n"] += 1
-                    if calls["n"] == 2:          # starve once, mid-stream
+                    if calls["n"] == 2:  # starve once, mid-stream
                         await asyncio.sleep(0.6)
                     return await real_read(n)
+
                 proc.stdout.readexactly = slow
                 return proc
 
         s = StallingSession("office", periods=4)
         em_player._sessions["office"] = s
-        em_player.SOURCE_STALL_MS = 200.0        # keep the test quick
+        em_player.SOURCE_STALL_MS = 200.0  # keep the test quick
 
         with caplog.at_level(logging.WARNING, logger="echomuse.player"):
             await s.play("http://radio/stream")
             await asyncio.sleep(1.2)
 
-        assert any("SOURCE stall" in r.message for r in caplog.records), \
-            "a starved decoder must be distinguishable from a link stall"
+        assert any(
+            "SOURCE stall" in r.message for r in caplog.records
+        ), "a starved decoder must be distinguishable from a link stall"
+
     asyncio.run(main())
     em_player.SOURCE_STALL_MS = 500.0
 
@@ -673,15 +717,17 @@ def test_pacing_sleep_is_not_mistaken_for_a_source_stall():
     direction of looking like a real problem everywhere.
     """
     from pathlib import Path
+
     src = (Path(__file__).resolve().parent.parent / "em_player.py").read_text()
     # Anchored on the name and open paren only: pinning the full signature
     # made this fail with a bare ValueError when _feed took its URL as an
     # argument (#346), which reads as a broken test rather than a broken
     # invariant — the invariant here is about the timed read, not the args.
-    fn = src[src.index("    async def _feed("):]
-    read = fn[fn.index("_t0 = loop.time()"):fn.index("_read_ms = ")]
-    assert "asyncio.sleep" not in read, \
-        "the pacing sleep must sit outside the timed read"
+    fn = src[src.index("    async def _feed(") :]
+    read = fn[fn.index("_t0 = loop.time()") : fn.index("_read_ms = ")]
+    assert (
+        "asyncio.sleep" not in read
+    ), "the pacing sleep must sit outside the timed read"
 
 
 def test_an_unseekable_stream_is_only_discovered_once():
@@ -693,6 +739,7 @@ def test_an_unseekable_stream_is_only_discovered_once():
     in three times during a song and that is 15s of dead air for an answer we
     already had after the first one.
     """
+
     async def main():
         device = FakeDevice()
         _wire(device)
@@ -714,11 +761,13 @@ def test_an_unseekable_stream_is_only_discovered_once():
         await s.play("http://ma/track/def")
         assert s._seekable, "seekability must not leak across URLs"
         await s.stop()
+
     asyncio.run(main())
 
 
 class MixingDevice(FakeDevice):
     """A device announcing the audio_mix capability."""
+
     audio_mix_capable = True
 
 
@@ -727,6 +776,7 @@ def test_music_rides_its_own_plane_on_a_mixing_device():
     0x04/0x05, so the device can hold it separately from voice and mix the
     two. On 0x02 it would share the voice plane and ducking is impossible.
     """
+
     async def main():
         device = MixingDevice()
         _wire(device)
@@ -734,6 +784,7 @@ def test_music_rides_its_own_plane_on_a_mixing_device():
         await s.play("http://radio/stream")
         await asyncio.wait_for(s._task, 5)
         return device
+
     device = asyncio.run(main())
     assert [f[0] for f in device.data_frames] == [0x04, 0x04, 0x04, 0x05]
 
@@ -743,6 +794,7 @@ def test_music_stays_on_the_voice_plane_for_older_firmware():
     Degrade to the old behaviour, never to silence: firmware without the
     capability would simply never play a 0x04 frame.
     """
+
     async def main():
         device = FakeDevice()
         _wire(device)
@@ -750,6 +802,7 @@ def test_music_stays_on_the_voice_plane_for_older_firmware():
         await s.play("http://radio/stream")
         await asyncio.wait_for(s._task, 5)
         return device
+
     device = asyncio.run(main())
     assert [f[0] for f in device.data_frames] == [0x02, 0x02, 0x03]
 
@@ -760,6 +813,7 @@ def test_a_turn_ducks_instead_of_pausing_when_the_device_can_mix():
     cannot seek — so a 28s turn cost 28s of the song. Ducking keeps the music
     playing under the response and loses nothing.
     """
+
     async def main():
         device = MixingDevice()
         _wire(device)
@@ -772,13 +826,15 @@ def test_a_turn_ducks_instead_of_pausing_when_the_device_can_mix():
         await em_player.resume_interrupted("office")
         await s.stop()
         return device, s, state_during
+
     device, s, state_during = asyncio.run(main())
 
     assert state_during == PLAYING, "the music must keep playing under the turn"
     ducks = [m for m in device.control_msgs if m.get("type") == "duck"]
     assert [m["on"] for m in ducks] == [True, False]
-    assert not any(m.get("type") == "speaker_flush" for m in device.control_msgs), \
-        "ducking must not flush — that discards the buffer that makes it instant"
+    assert not any(
+        m.get("type") == "speaker_flush" for m in device.control_msgs
+    ), "ducking must not flush — that discards the buffer that makes it instant"
     assert s.spawns == [0.0], "no reseek: the stream was never interrupted"
 
 
@@ -795,10 +851,12 @@ def test_a_turn_still_pauses_on_firmware_that_cannot_mix():
         await em_player.resume_interrupted("office")
         await s.stop()
         return device, paused
+
     device, paused = asyncio.run(main())
     assert paused == PAUSED
-    assert not any(m.get("type") == "duck" for m in device.control_msgs), \
-        "a device that cannot mix must never be told to duck"
+    assert not any(
+        m.get("type") == "duck" for m in device.control_msgs
+    ), "a device that cannot mix must never be told to duck"
 
 
 def test_pausing_during_a_ducked_turn_actually_pauses():
@@ -808,6 +866,7 @@ def test_pausing_during_a_ducked_turn_actually_pauses():
     paused — so the user's pause has to actually happen at turn end, or it is
     silently dropped and the music plays on.
     """
+
     async def main():
         device = MixingDevice()
         _wire(device)
@@ -816,9 +875,10 @@ def test_pausing_during_a_ducked_turn_actually_pauses():
         await s.play("http://radio/stream")
         await asyncio.sleep(0)
         await em_player.interrupt("office")
-        await em_player.pause("office")          # user speaks: "pause the music"
+        await em_player.pause("office")  # user speaks: "pause the music"
         await em_player.resume_interrupted("office")
         return device, s
+
     device, s = asyncio.run(main())
     assert s.state == PAUSED, "the user's pause must survive a ducked turn"
 
@@ -828,6 +888,7 @@ def test_stopping_music_flushes_the_music_plane_not_the_voice_one():
     speaker_flush would cut the response and leave the music playing, which
     is exactly backwards.
     """
+
     async def main():
         device = MixingDevice()
         _wire(device)
@@ -836,6 +897,7 @@ def test_stopping_music_flushes_the_music_plane_not_the_voice_one():
         await asyncio.sleep(0)
         await s.stop()
         return device
+
     device = asyncio.run(main())
     kinds = [m.get("type") for m in device.control_msgs]
     assert "music_flush" in kinds
@@ -849,6 +911,7 @@ def test_the_music_feed_yields_the_wire_during_a_turn():
     response waited 2087ms to start and took a 3549ms gap mid-stream. The
     feed drops its lead for the turn so the response gets the wire.
     """
+
     async def main():
         device = MixingDevice()
         _wire(device)
@@ -863,6 +926,7 @@ def test_the_music_feed_yields_the_wire_during_a_turn():
         after = s.lead_s
         await s.stop()
         return before, during, after
+
     before, during, after = asyncio.run(main())
     assert before == em_player.LEAD_S
     assert during == em_player.TURN_LEAD_S, "the feed must yield during a turn"
@@ -884,6 +948,7 @@ def test_a_pausing_device_does_not_change_its_lead():
     On firmware that cannot mix, music is paused for the turn, so there is
     nothing sharing the wire and nothing to yield.
     """
+
     async def main():
         device = FakeDevice()
         _wire(device)
@@ -896,6 +961,7 @@ def test_a_pausing_device_does_not_change_its_lead():
         await em_player.resume_interrupted("office")
         await s.stop()
         return during
+
     assert asyncio.run(main()) == em_player.LEAD_S
 
 
@@ -920,21 +986,22 @@ def test_https_media_is_fetched_with_certificate_verification(monkeypatch):
             stdout = None
             stderr = None
             returncode = 0
+
         return P()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
 
-    asyncio.run(MediaSession._spawn_decoder(
-        None, "https://radio.example/stream", 0.0))
+    asyncio.run(MediaSession._spawn_decoder(None, "https://radio.example/stream", 0.0))
     args = captured["args"]
-    assert "-tls_verify" in args[:args.index("-i")], \
-        "the verify flag must be input-scoped (before -i)"
+    assert (
+        "-tls_verify" in args[: args.index("-i")]
+    ), "the verify flag must be input-scoped (before -i)"
     assert args[args.index("-tls_verify") + 1] == "1"
 
-    asyncio.run(MediaSession._spawn_decoder(
-        None, "http://radio.example/stream", 0.0))
-    assert "-tls_verify" not in captured["args"], \
-        "plain http must not carry an option it would silently ignore"
+    asyncio.run(MediaSession._spawn_decoder(None, "http://radio.example/stream", 0.0))
+    assert (
+        "-tls_verify" not in captured["args"]
+    ), "plain http must not carry an option it would silently ignore"
 
 
 class RefusedProc(FakeProc):
@@ -966,10 +1033,13 @@ def test_a_refused_decoder_explains_itself_in_the_log(caplog):
         s = StubSession("office", periods=0)
 
         async def refused(url, position_s):
-            return RefusedProc([
-                "https protocol error",
-                "Certificate verification failed",
-            ])
+            return RefusedProc(
+                [
+                    "https protocol error",
+                    "Certificate verification failed",
+                ]
+            )
+
         s._spawn_decoder = refused
 
         with caplog.at_level(logging.ERROR, logger="echomuse.player"):
@@ -977,12 +1047,14 @@ def test_a_refused_decoder_explains_itself_in_the_log(caplog):
             await asyncio.wait_for(s._task, 5)
 
         text = "\n".join(r.message for r in caplog.records)
-        assert "ffmpeg exited 1" in text, \
-            "an abnormal decoder exit must reach the log"
-        assert "Certificate verification failed" in text, \
-            "the decoder's own diagnostic must be preserved"
-        assert "EM_EXTRA_CA_CERT" in text, \
-            "a certificate failure must point at the recovery path"
+        assert "ffmpeg exited 1" in text, "an abnormal decoder exit must reach the log"
+        assert (
+            "Certificate verification failed" in text
+        ), "the decoder's own diagnostic must be preserved"
+        assert (
+            "EM_EXTRA_CA_CERT" in text
+        ), "a certificate failure must point at the recovery path"
+
     asyncio.run(main())
 
 
@@ -1002,8 +1074,10 @@ def test_expected_teardowns_stay_quiet(caplog):
             await asyncio.sleep(0.05)
             await s.pause()
             await s.stop()
-        assert not any("ffmpeg exited" in r.message for r in caplog.records), \
-            "a deliberate kill is teardown, not a decoder failure"
+        assert not any(
+            "ffmpeg exited" in r.message for r in caplog.records
+        ), "a deliberate kill is teardown, not a decoder failure"
+
     asyncio.run(main())
 
 
@@ -1024,7 +1098,7 @@ class DeadSourceProc(FakeProc):
 
         async def hang_eventually(n):
             if served["n"] >= total:
-                await asyncio.sleep(3600)     # never returns
+                await asyncio.sleep(3600)  # never returns
             served["n"] += 1
             return await real_readexactly(n)
 
@@ -1040,6 +1114,7 @@ def test_a_dead_source_ends_the_stream_and_reports_idle(caplog, monkeypatch):
     let HA report idle.
     """
     import logging
+
     monkeypatch.setattr(em_player, "SOURCE_DEAD_S", 0.2)
 
     async def main():
@@ -1060,11 +1135,13 @@ def test_a_dead_source_ends_the_stream_and_reports_idle(caplog, monkeypatch):
 
     device, s = asyncio.run(main())
     assert s.state == IDLE, "a dead source must not leave the session playing"
-    assert device.data_frames[-1][0] == 0x03, \
-        "EOS must reach the device so its ring and buffer settle"
+    assert (
+        device.data_frames[-1][0] == 0x03
+    ), "EOS must reach the device so its ring and buffer settle"
     text = "\n".join(r.message for r in caplog.records)
-    assert "produced nothing" in text, \
-        "the log must say the source died, not that the media finished"
+    assert (
+        "produced nothing" in text
+    ), "the log must say the source died, not that the media finished"
 
 
 def test_a_slow_but_recovering_source_is_not_killed(monkeypatch):
@@ -1088,14 +1165,16 @@ def test_a_slow_but_recovering_source_is_not_killed(monkeypatch):
                 async def slow(n):
                     calls["n"] += 1
                     if calls["n"] == 2:
-                        await asyncio.sleep(0.2)   # over SOURCE_STALL_MS,
-                    return await real(n)           # under SOURCE_DEAD_S
+                        await asyncio.sleep(0.2)  # over SOURCE_STALL_MS,
+                    return await real(n)  # under SOURCE_DEAD_S
+
                 self.stdout.readexactly = slow
 
         async def spawn(url, pos):
             p = SlowThenFineProc()
             s.procs.append(p)
             return p
+
         s._spawn_decoder = spawn
 
         await s.play("http://ma/flow/stream")
@@ -1105,8 +1184,9 @@ def test_a_slow_but_recovering_source_is_not_killed(monkeypatch):
     device, s = asyncio.run(main())
     assert s.state == IDLE
     types = [f[0] for f in device.data_frames]
-    assert types.count(0x02) == 3 and types[-1] == 0x03, \
-        "every period must have made it out before EOS"
+    assert (
+        types.count(0x02) == 3 and types[-1] == 0x03
+    ), "every period must have made it out before EOS"
 
 
 # ── #261: the duck is reference-counted, not boolean ─────────────────────────
@@ -1121,6 +1201,7 @@ def test_overlapping_owners_release_the_duck_only_once():
     With a depth count the wire command goes out only on the 0→1 and 1→0
     transitions.
     """
+
     async def main():
         device = FakeDevice()
         device.audio_mix_capable = True
@@ -1128,28 +1209,37 @@ def test_overlapping_owners_release_the_duck_only_once():
         s = StubSession("office", periods=0)
         em_player._sessions["office"] = s
 
-        await em_player.interrupt("office")      # owner A
-        await em_player.interrupt("office")      # owner B lands mid-turn
-        ducks_on = [m for m in device.control_msgs
-                    if m.get("type") == "duck" and m.get("on")]
+        await em_player.interrupt("office")  # owner A
+        await em_player.interrupt("office")  # owner B lands mid-turn
+        ducks_on = [
+            m for m in device.control_msgs if m.get("type") == "duck" and m.get("on")
+        ]
         assert len(ducks_on) == 1, "the second owner must not re-send duck:on"
 
-        await em_player.resume_interrupted("office")   # B finishes first
-        offs = [m for m in device.control_msgs
-                if m.get("type") == "duck" and not m.get("on")]
+        await em_player.resume_interrupted("office")  # B finishes first
+        offs = [
+            m
+            for m in device.control_msgs
+            if m.get("type") == "duck" and not m.get("on")
+        ]
         assert offs == [], "releasing one of two owners must NOT unduck"
 
-        await em_player.resume_interrupted("office")   # A finishes
-        offs = [m for m in device.control_msgs
-                if m.get("type") == "duck" and not m.get("on")]
+        await em_player.resume_interrupted("office")  # A finishes
+        offs = [
+            m
+            for m in device.control_msgs
+            if m.get("type") == "duck" and not m.get("on")
+        ]
         assert len(offs) == 1, "unduck exactly once, when the last owner leaves"
         return s
+
     s = asyncio.run(main())
     assert s.duck_depth == 0, "balanced interrupts/resumes must return to 0"
 
 
 def test_a_single_turn_still_ducks_and_releases_once():
     """The common path is unchanged by the counting."""
+
     async def main():
         device = FakeDevice()
         device.audio_mix_capable = True
@@ -1160,8 +1250,8 @@ def test_a_single_turn_still_ducks_and_releases_once():
         assert ducks == [{"type": "duck", "on": True}]
         await em_player.resume_interrupted("office")
         ducks = [m for m in device.control_msgs if m["type"] == "duck"]
-        assert ducks == [{"type": "duck", "on": True},
-                         {"type": "duck", "on": False}]
+        assert ducks == [{"type": "duck", "on": True}, {"type": "duck", "on": False}]
+
     asyncio.run(main())
 
 
@@ -1171,6 +1261,7 @@ def test_resume_keeps_turn_pacing_while_another_owner_speaks():
     restoring full pacing on the first release would let a deferred feed
     race the remaining speaker.
     """
+
     async def main():
         device = FakeDevice()
         device.audio_mix_capable = True
@@ -1180,10 +1271,12 @@ def test_resume_keeps_turn_pacing_while_another_owner_speaks():
         await em_player.interrupt("office")
         await em_player.interrupt("office")
         await em_player.resume_interrupted("office")
-        assert s.lead_s == em_player.TURN_LEAD_S, \
-            "one release must not restore full pacing while another speaks"
+        assert (
+            s.lead_s == em_player.TURN_LEAD_S
+        ), "one release must not restore full pacing while another speaks"
         await em_player.resume_interrupted("office")
         assert s.lead_s == em_player.LEAD_S
+
     asyncio.run(main())
 
 
@@ -1197,6 +1290,7 @@ def test_announcement_midturn_does_not_release_ownership():
     play_media arriving afterwards went straight to the wire, putting music
     on the response plane while the answer was still speaking.
     """
+
     async def main():
         device = FakeDevice()
         device.audio_mix_capable = True
@@ -1204,23 +1298,28 @@ def test_announcement_midturn_does_not_release_ownership():
         s = StubSession("office", periods=0)
         em_player._sessions["office"] = s
 
-        await em_player.interrupt("office")            # voice turn
-        await em_player.interrupt("office")            # announcement lands
+        await em_player.interrupt("office")  # voice turn
+        await em_player.interrupt("office")  # announcement lands
 
-        await em_player.resume_interrupted("office")   # announcement ends
-        assert s.owned_by_turn is True, \
-            "the voice turn still speaks — ownership must survive"
+        await em_player.resume_interrupted("office")  # announcement ends
+        assert (
+            s.owned_by_turn is True
+        ), "the voice turn still speaks — ownership must survive"
 
         await em_player.play("office", "http://radio/jazz")  # mid-answer!
-        assert s.pending == ("play", "http://radio/jazz"), \
-            "this command must be deferred, not put on the wire"
+        assert s.pending == (
+            "play",
+            "http://radio/jazz",
+        ), "this command must be deferred, not put on the wire"
 
-        await em_player.resume_interrupted("office")   # voice turn ends
+        await em_player.resume_interrupted("office")  # voice turn ends
         assert s.owned_by_turn is False
         return device, s
+
     device, s = asyncio.run(main())
-    offs = [m for m in device.control_msgs
-            if m.get("type") == "duck" and not m.get("on")]
+    offs = [
+        m for m in device.control_msgs if m.get("type") == "duck" and not m.get("on")
+    ]
     assert len(offs) == 1
 
 
@@ -1231,25 +1330,29 @@ def test_nested_interrupt_preserves_the_users_deferred_command():
     silently dropped because an announcement happened to land afterwards.
     Only the FIRST claim clears stale deferrals.
     """
+
     async def main():
         device = FakeDevice()
         _wire(device)
         s = StubSession("office", periods=2, endless=True)
         em_player._sessions["office"] = s
 
-        await em_player.interrupt("office")              # voice turn
+        await em_player.interrupt("office")  # voice turn
         await em_player.play("office", "http://radio/jazz")
         assert s.pending == ("play", "http://radio/jazz")
 
-        await em_player.interrupt("office")              # announcement
-        assert s.pending == ("play", "http://radio/jazz"), \
-            "a nested owner must not wipe the user's request"
+        await em_player.interrupt("office")  # announcement
+        assert s.pending == (
+            "play",
+            "http://radio/jazz",
+        ), "a nested owner must not wipe the user's request"
 
-        await em_player.resume_interrupted("office")     # announcement ends
+        await em_player.resume_interrupted("office")  # announcement ends
         assert s.pending == ("play", "http://radio/jazz")
 
-        await em_player.resume_interrupted("office")     # voice turn ends
+        await em_player.resume_interrupted("office")  # voice turn ends
         return s
+
     s = asyncio.run(main())
     assert s.pending is None, "settled by the last owner's resume"
 
@@ -1266,6 +1369,7 @@ def test_feed_uses_the_url_it_started_with_not_live_session_state():
     deterministically: play() ends on a synchronous call, so the task is
     created and has not been scheduled when play() returns.
     """
+
     async def main():
         device = FakeDevice()
         _wire(device)
@@ -1274,12 +1378,14 @@ def test_feed_uses_the_url_it_started_with_not_live_session_state():
         s.url = None
         await asyncio.wait_for(s._task, 5)
         return s
+
     s = asyncio.run(main())
     assert s.spawn_urls == ["http://radio/first.flac"]
 
 
 def test_start_feed_without_a_url_does_not_start_a_task():
     """The None guard reports rather than spawning a decoder against nothing."""
+
     async def main():
         device = FakeDevice()
         _wire(device)
@@ -1287,6 +1393,7 @@ def test_start_feed_without_a_url_does_not_start_a_task():
         s.url = None
         s._start_feed()
         return s
+
     s = asyncio.run(main())
     assert s.spawn_urls == []
     assert s.state != PLAYING
@@ -1298,12 +1405,19 @@ def test_a_music_assistant_flow_is_known_unseekable_up_front():
     rejoining the live edge: 7.2s from "resume the music" to sound, measured
     2026-09-27. The URL says what it is, so the answer is known at play().
     """
-    flow = ("http://10.10.1.81:8097/flow/2gNgkp6Q/media_player.dev_test_1/"
-            "f7c6af51508f43bdbec08d4b1e1ff139/media_player.dev_test_1.wav")
+    flow = (
+        "http://10.10.1.81:8097/flow/2gNgkp6Q/media_player.dev_test_1/"
+        "f7c6af51508f43bdbec08d4b1e1ff139/media_player.dev_test_1.wav"
+    )
     assert em_player.known_unseekable(flow)
-    for url in ("http://ma/track/def.flac", "http://radio/stream",
-                "http://host/flow/abc", "http://host/a/flow/b/c/d/e.wav",
-                "not a url", ""):
+    for url in (
+        "http://ma/track/def.flac",
+        "http://radio/stream",
+        "http://host/flow/abc",
+        "http://host/a/flow/b/c/d/e.wav",
+        "not a url",
+        "",
+    ):
         assert not em_player.known_unseekable(url), url
 
     async def main():
@@ -1319,6 +1433,7 @@ def test_a_music_assistant_flow_is_known_unseekable_up_front():
         await asyncio.sleep(0.05)
         assert s.spawns[-1] == 0.0, "a flow must resume at the live edge, not seek"
         await s.stop()
+
     asyncio.run(main())
 
 
@@ -1342,9 +1457,10 @@ def test_a_slow_read_while_well_ahead_is_not_a_stall(caplog):
 
                 async def paced(n):
                     calls["n"] += 1
-                    if calls["n"] == 40:          # slow, but ~1.7s ahead
+                    if calls["n"] == 40:  # slow, but ~1.7s ahead
                         await asyncio.sleep(0.3)
                     return await real_read(n)
+
                 proc.stdout.readexactly = paced
                 return proc
 
@@ -1356,7 +1472,9 @@ def test_a_slow_read_while_well_ahead_is_not_a_stall(caplog):
             await s.play("http://radio/stream")
             await asyncio.sleep(0.6)
 
-        assert not any("SOURCE stall" in r.message for r in caplog.records), \
-            "a read that leaves the feed ahead of real time is not a stall"
+        assert not any(
+            "SOURCE stall" in r.message for r in caplog.records
+        ), "a read that leaves the feed ahead of real time is not a stall"
+
     asyncio.run(main())
     em_player.SOURCE_STALL_MS = 500.0

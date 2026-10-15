@@ -41,12 +41,17 @@ def _sync_db_calls_in_coroutines(path: Path, allow=()) -> list[str]:
             if isinstance(child, ast.AsyncFunctionDef):
                 visit(child, child)
                 continue
-            if (fn is not None and isinstance(child, ast.Call)
-                    and isinstance(child.func, ast.Attribute)
-                    and isinstance(child.func.value, ast.Name)
-                    and child.func.value.id == "db"
-                    and child.func.attr not in allow):
-                found.append(f"{path.name}:{child.lineno} db.{child.func.attr} in {fn.name}")
+            if (
+                fn is not None
+                and isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute)
+                and isinstance(child.func.value, ast.Name)
+                and child.func.value.id == "db"
+                and child.func.attr not in allow
+            ):
+                found.append(
+                    f"{path.name}:{child.lineno} db.{child.func.attr} in {fn.name}"
+                )
             visit(child, fn)
 
     visit(tree, None)
@@ -59,12 +64,18 @@ NOT_ON_LOOP = {"em_db.py", "em_dbwriter.py"}
 
 def test_coroutines_make_no_synchronous_db_calls():
     # db.init runs once in main() before anything else is scheduled.
-    found = [x for m in _sources.MODULES if m.name not in NOT_ON_LOOP
-             for x in _sync_db_calls_in_coroutines(m, allow={"init"})]
+    found = [
+        x
+        for m in _sources.MODULES
+        if m.name not in NOT_ON_LOOP
+        for x in _sync_db_calls_in_coroutines(m, allow={"init"})
+    ]
     assert not found, (
-        "synchronous database calls on the event loop:\n  " + "\n  ".join(found)
+        "synchronous database calls on the event loop:\n  "
+        + "\n  ".join(found)
         + "\nQueue writes nothing reads back with em_dbwriter.submit; await "
-          "reads with loop.run_in_executor.")
+        "reads with loop.run_in_executor."
+    )
 
 
 def test_the_guard_sees_a_synchronous_call(tmp_path):
@@ -75,21 +86,31 @@ def test_the_guard_sees_a_synchronous_call(tmp_path):
         "    await loop.run_in_executor(None, lambda: db.get(1))\n"
         "    em_dbwriter.submit(db.log_device, 1)\n"
         "    def inner():\n"
-        "        db.write(1)\n")
+        "        db.write(1)\n"
+    )
     assert _sync_db_calls_in_coroutines(p) == ["m.py:2 db.log_device in f"]
 
 
 def test_push_log_queues_its_write():
     _, fn = _sources.find_def("push_log")
-    submits = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
-               and getattr(n.func, "attr", None) == "submit"
-               and getattr(n.func.value, "id", None) == "em_dbwriter"]
-    executors = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
-                 and getattr(n.func, "attr", None) == "run_in_executor"]
+    submits = [
+        n
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Call)
+        and getattr(n.func, "attr", None) == "submit"
+        and getattr(n.func.value, "id", None) == "em_dbwriter"
+    ]
+    executors = [
+        n
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Call)
+        and getattr(n.func, "attr", None) == "run_in_executor"
+    ]
     assert submits and not executors
 
 
 # ── em_dbwriter ─────────────────────────────────────────────────────────────
+
 
 def _drain():
     em_dbwriter.submit(lambda: None).result(timeout=5)
@@ -108,7 +129,7 @@ def test_writes_run_in_submission_order_on_one_thread():
     order, threads = [], set()
 
     def write(i):
-        time.sleep(0.001 * (i % 3))   # uneven work must not reorder
+        time.sleep(0.001 * (i % 3))  # uneven work must not reorder
         order.append(i)
         threads.add(threading.get_ident())
 
@@ -124,11 +145,11 @@ def test_a_failed_write_is_logged_not_raised(caplog):
         raise RuntimeError("FOREIGN KEY constraint failed")
 
     with caplog.at_level(logging.ERROR, logger="echomuse.dbwriter"):
-        em_dbwriter.submit(boom)      # must not raise here
+        em_dbwriter.submit(boom)  # must not raise here
         _drain()
     assert any("FOREIGN KEY" in r.getMessage() for r in caplog.records)
 
     done = []
     em_dbwriter.submit(done.append, 1)
     _drain()
-    assert done == [1]                # and the writer carries on
+    assert done == [1]  # and the writer carries on

@@ -93,7 +93,7 @@ def test_a_corrupted_entry_is_a_miss_not_a_bad_binary(cache):
     the device crash-loops into a rollback with nothing naming the cause.
     """
     em_firmware.write("v2.11.0", b"A" * 4096)
-    (cache / "server-v2.11.0").write_bytes(b"A" * 2048)   # truncated
+    (cache / "server-v2.11.0").write_bytes(b"A" * 2048)  # truncated
     assert em_firmware.read("v2.11.0") is None
 
 
@@ -133,7 +133,7 @@ def test_an_unwritable_directory_reports_false_rather_than_raising(cache, tmp_pa
     A full or read-only disk must not stop a device being updated — the caller
     goes on to use the bytes it already has in hand.
     """
-    (tmp_path / "firmware").write_bytes(b"")   # a FILE where the dir should be
+    (tmp_path / "firmware").write_bytes(b"")  # a FILE where the dir should be
     assert em_firmware.write("v2.11.0", b"A" * 4096) is False
 
 
@@ -166,7 +166,7 @@ def test_a_read_counts_as_use(cache):
     em_firmware.write("v2.0.0", b"y" * 64)
     os.utime(cache / "server-v2.0.0", (2000, 2000))
 
-    em_firmware.read("v1.0.0")          # used, so newest again
+    em_firmware.read("v1.0.0")  # used, so newest again
     em_firmware.prune(keep=1)
     assert (cache / "server-v1.0.0").exists()
     assert not (cache / "server-v2.0.0").exists()
@@ -192,9 +192,9 @@ def test_a_digest_goes_with_the_payload_it_belongs_to(cache):
     em_firmware.write("v2.0.0", b"y" * 64)
     os.utime(cache / "server-v1.0.0", (1000, 1000))
     em_firmware.prune(keep=1)
-    assert not (cache / "server-v1.0.0.md5").exists(), (
-        "an orphaned digest would make a later re-download look cached"
-    )
+    assert not (
+        cache / "server-v1.0.0.md5"
+    ).exists(), "an orphaned digest would make a later re-download look cached"
 
 
 def test_pruning_an_absent_directory_is_quiet(tmp_path, monkeypatch):

@@ -23,6 +23,7 @@ def _pcm(ms: int) -> bytes:
 
 # ─── directory resolution ────────────────────────────────────────────────────
 
+
 def test_recordings_dir_sits_beside_db(tmp_path):
     assert rec.recordings_dir(_db(tmp_path)) == tmp_path / "recordings"
 
@@ -34,6 +35,7 @@ def test_recordings_dir_is_absolute_from_env(monkeypatch, tmp_path):
 
 
 # ─── naming ──────────────────────────────────────────────────────────────────
+
 
 def test_filename_roundtrips_through_parse():
     name = rec.filename("G090LF11", 42)
@@ -56,6 +58,7 @@ def test_parse_filename_rejects_junk():
 
 # ─── encoding ────────────────────────────────────────────────────────────────
 
+
 def test_encode_wav_declares_the_wire_format(tmp_path):
     path = tmp_path / "a.wav"
     path.write_bytes(rec.encode_wav(_pcm(500)))
@@ -73,6 +76,7 @@ def test_max_bytes_matches_max_seconds():
 
 
 # ─── save / retention ────────────────────────────────────────────────────────
+
 
 def test_save_writes_a_playable_wav(tmp_path):
     name = rec.save("dev1", 7, _pcm(200), db_path=_db(tmp_path))
@@ -135,6 +139,7 @@ def test_list_for_on_missing_dir_is_empty(tmp_path):
 
 # ─── resolve (the API's ownership check) ─────────────────────────────────────
 
+
 def test_resolve_returns_an_existing_file(tmp_path):
     db = _db(tmp_path)
     name = rec.save("dev1", 3, _pcm(20), db_path=db)
@@ -161,6 +166,7 @@ def test_resolve_missing_file_is_none(tmp_path):
 
 
 # ─── deletion ────────────────────────────────────────────────────────────────
+
 
 def test_delete_device_removes_only_its_own(tmp_path):
     db = _db(tmp_path)

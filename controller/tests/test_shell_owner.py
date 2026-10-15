@@ -79,7 +79,9 @@ def test_a_non_owner_cannot_release_someone_elses_lock():
 
         # Still held. Still owned.
         assert lock.locked(), "a non-owner released a lock it did not hold"
-        assert em_shell.owners.get("dev") is owner, "a non-owner stole the ownership record"
+        assert (
+            em_shell.owners.get("dev") is owner
+        ), "a non-owner stole the ownership record"
         return lock
 
     lock = asyncio.run(main())
@@ -92,7 +94,9 @@ def test_a_non_owner_cannot_release_someone_elses_lock():
 
     asyncio.run(owner_releases())
     assert not lock.locked(), "the owner must be able to release its own lock"
-    assert "dev" not in em_shell.owners, "the ownership record must be cleared on release"
+    assert (
+        "dev" not in em_shell.owners
+    ), "the ownership record must be cleared on release"
 
 
 def test_a_non_owner_closes_nothing_sends_nothing_and_releases_nothing():
@@ -119,7 +123,9 @@ def test_a_non_owner_closes_nothing_sends_nothing_and_releases_nothing():
         await em_shell.release_ws("dev", live)
 
         assert not ws.closed, "a non-owner closed the holder's websocket"
-        assert em_shell.sockets.get("dev") is ws, "a non-owner dropped the holder's ws record"
+        assert (
+            em_shell.sockets.get("dev") is ws
+        ), "a non-owner dropped the holder's ws record"
         assert lock.locked(), "a non-owner released the holder's lock"
         assert live.sent == [], f"a non-owner sent the device a command: {live.sent}"
 
@@ -130,7 +136,9 @@ def test_a_non_owner_closes_nothing_sends_nothing_and_releases_nothing():
         await em_shell.release_ws("dev", live)
         assert ws.closed, "control: the owner must close the websocket"
         assert not lock.locked(), "control: the owner must release the lock"
-        assert live.sent == [{"type": "shell_close"}], "control: the owner must send shell_close"
+        assert live.sent == [
+            {"type": "shell_close"}
+        ], "control: the owner must send shell_close"
 
     asyncio.run(main())
 
@@ -267,8 +275,8 @@ def test_programmatic_sessions_do_not_mark_the_dashboard_flag():
         await t
 
         assert ws is em_shell.sockets["dev"], "the resolved ws must be recorded"
-        assert "dev" not in em_state.shell_dashboard, (
-            "a programmatic session must not mark the dashboard flag"
-        )
+        assert (
+            "dev" not in em_state.shell_dashboard
+        ), "a programmatic session must not mark the dashboard flag"
 
     asyncio.run(main())

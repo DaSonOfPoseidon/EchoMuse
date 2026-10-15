@@ -33,8 +33,9 @@ def _listener_src() -> str:
 
 def test_wake_and_barge_have_separate_module_caches():
     assert isinstance(em_state.oww_models, dict)
-    assert em_state.oww_models is not em_state.oww_barge_models, \
-        "wake and barge models need separate module-level caches"
+    assert (
+        em_state.oww_models is not em_state.oww_barge_models
+    ), "wake and barge models need separate module-level caches"
 
 
 def test_forget_drops_both_slots_and_only_that_device():
@@ -45,7 +46,7 @@ def test_forget_drops_both_slots_and_only_that_device():
         assert "a" not in em_state.oww_models
         assert "a" not in em_state.oww_barge_models
         assert "b" in em_state.oww_models and "b" in em_state.oww_barge_models
-        em_state.forget_oww_models("never-seen")   # must not raise
+        em_state.forget_oww_models("never-seen")  # must not raise
     finally:
         em_state.oww_models.clear()
         em_state.oww_barge_models.clear()
@@ -56,8 +57,10 @@ def test_caches_are_keyed_by_device_id_alone():
     # word's old model cached for the process's life — a smaller version of
     # the leak this fixes. The store/lookup must use device_id alone.
     src = _controller_src()
-    for store in ("em_state.oww_models[device.device_id] =",
-                  "em_state.oww_barge_models[device.device_id] ="):
+    for store in (
+        "em_state.oww_models[device.device_id] =",
+        "em_state.oww_barge_models[device.device_id] =",
+    ):
         assert store in src, f"expected a device_id-keyed write: {store}"
 
 
@@ -65,10 +68,12 @@ def test_wake_listener_acquires_from_cache_not_a_bare_constructor():
     # The whole bug was `OWWModel(...)` inline in the listener. Both the initial
     # load and the reload path must go through the cache helper instead.
     listener = _listener_src()
-    assert "_acquire_wake_model(" in listener, \
-        "the listener must acquire its model from the cache"
-    assert "OWWModel(" not in listener, \
-        "the listener must not construct OWWModel directly — that is the leak"
+    assert (
+        "_acquire_wake_model(" in listener
+    ), "the listener must acquire its model from the cache"
+    assert (
+        "OWWModel(" not in listener
+    ), "the listener must not construct OWWModel directly — that is the leak"
 
 
 def test_reused_model_is_reset_but_a_fresh_one_is_not():
@@ -78,11 +83,12 @@ def test_reused_model_is_reset_but_a_fresh_one_is_not():
     # the un-warmed WarmupGate beside it would be wrong.
     src = _controller_src()
     acq = src.index("async def _acquire_wake_model")
-    body = src[acq:src.index("async def ", acq + 1)]
+    body = src[acq : src.index("async def ", acq + 1)]
     hit = body.index("_reset_wake_model(model)")
     build = body.index("OWWModel(")
-    assert hit < build, \
-        "the cache hit must reset() before the miss path builds a new model"
+    assert (
+        hit < build
+    ), "the cache hit must reset() before the miss path builds a new model"
 
 
 def test_reset_never_runs_on_the_event_loop():
@@ -92,9 +98,12 @@ def test_reset_never_runs_on_the_event_loop():
     src = _controller_src()
     assert src.count("run_in_executor(None, model.reset)") == 1
     assert ".reset()\n" not in "".join(
-        line + "\n" for line in src.splitlines()
-        if "model" in line and not line.lstrip().startswith("#")
-        and "warmup" not in line)
+        line + "\n"
+        for line in src.splitlines()
+        if "model" in line
+        and not line.lstrip().startswith("#")
+        and "warmup" not in line
+    )
 
 
 def test_wake_routing_is_not_held_behind_the_reset():
@@ -114,26 +123,29 @@ def test_superseded_listener_stands_down_before_scoring():
     listener = _listener_src()
     guard = listener.index("if em_state.devices.get(device.device_id) is not device:")
     predict = listener.index("model.predict")
-    assert guard < predict, \
-        "the staleness guard must sit above the predict call"
+    assert guard < predict, "the staleness guard must sit above the predict call"
     # It must actually stop the loop, not just log.
     after = listener[guard:predict]
-    assert "return" in after.split("\n", 3)[1], \
-        "a superseded listener must return, not fall through to scoring"
+    assert (
+        "return" in after.split("\n", 3)[1]
+    ), "a superseded listener must return, not fall through to scoring"
 
 
 def test_delete_device_evicts_the_cached_models():
     # A deleted device must not keep its models for the life of the process.
     body = _sources.def_source("_delete_device")
-    assert "em_state.forget_oww_models(" in body, \
-        "_delete_device must evict the device's cached OWW models"
+    assert (
+        "em_state.forget_oww_models(" in body
+    ), "_delete_device must evict the device's cached OWW models"
 
 
 def test_barge_watcher_uses_the_cache():
     src = _controller_src()
-    watcher = src[src.index("async def _barge_watcher"):]
-    watcher = watcher[:watcher.index("async def ", 1)]
-    assert "_acquire_barge_model(" in watcher, \
-        "the barge watcher must acquire its model from the cache"
-    assert "OWWModel(" not in watcher, \
-        "the barge watcher must not construct OWWModel directly"
+    watcher = src[src.index("async def _barge_watcher") :]
+    watcher = watcher[: watcher.index("async def ", 1)]
+    assert (
+        "_acquire_barge_model(" in watcher
+    ), "the barge watcher must acquire its model from the cache"
+    assert (
+        "OWWModel(" not in watcher
+    ), "the barge watcher must not construct OWWModel directly"

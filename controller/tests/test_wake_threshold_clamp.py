@@ -35,8 +35,9 @@ def _db(tmp_path):
 def _stored_config(path, device_id):
     c = sqlite3.connect(path)
     try:
-        row = c.execute("SELECT config FROM devices WHERE device_id = ?",
-                        (device_id,)).fetchone()
+        row = c.execute(
+            "SELECT config FROM devices WHERE device_id = ?", (device_id,)
+        ).fetchone()
         return json.loads(row[0])
     finally:
         c.close()
@@ -50,16 +51,20 @@ def test_the_ceiling_is_below_one():
     assert em_db.OWW_THRESHOLD_MAX < 1.0
     assert em_db.OWW_THRESHOLD_MAX > 0.9, (
         "the ceiling must stay strict enough to be worth having — 0.9 was "
-        "already the strictest usable setting")
+        "already the strictest usable setting"
+    )
 
 
-@pytest.mark.parametrize("sent,expected", [
-    (1.0, 0.975),      # what the old slider's strictest notch wrote
-    (1.5, 0.975),      # anything above the ceiling
-    (0.975, 0.975),    # the ceiling itself passes through
-    (0.5, 0.5),        # the default is untouched
-    (0.1, 0.1),        # the eager end is untouched
-])
+@pytest.mark.parametrize(
+    "sent,expected",
+    [
+        (1.0, 0.975),  # what the old slider's strictest notch wrote
+        (1.5, 0.975),  # anything above the ceiling
+        (0.975, 0.975),  # the ceiling itself passes through
+        (0.5, 0.5),  # the default is untouched
+        (0.1, 0.1),  # the eager end is untouched
+    ],
+)
 def test_a_device_write_is_clamped(tmp_path, sent, expected):
     path = _db(tmp_path)
     em_db.register_new_device("D1", "10.0.0.1", "v1")

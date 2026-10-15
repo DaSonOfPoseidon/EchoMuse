@@ -17,12 +17,20 @@ GOOD = "a" * 40
 STALE = "b" * 40
 
 
-def decide(presented=None, expected=None, secure=True, require_tls=False, confirmed=False):
-    return LA.decide(presented=presented, expected=expected, confirmed=confirmed,
-                     secure=secure, require_tls=require_tls)
+def decide(
+    presented=None, expected=None, secure=True, require_tls=False, confirmed=False
+):
+    return LA.decide(
+        presented=presented,
+        expected=expected,
+        confirmed=confirmed,
+        secure=secure,
+        require_tls=require_tls,
+    )
 
 
 # ─── The case that cost a device ──────────────────────────────────────────────
+
 
 def test_a_token_for_a_device_with_none_on_record_is_admitted():
     """
@@ -44,13 +52,15 @@ def test_a_stale_token_is_no_stricter_than_no_token_at_all():
     """
     for require_tls in (False, True):
         with_token = decide(presented=STALE, expected=None, require_tls=require_tls)
-        without    = decide(presented=None,  expected=None, require_tls=require_tls)
+        without = decide(presented=None, expected=None, require_tls=require_tls)
         assert with_token.ok == without.ok, (
             f"require_tls={require_tls}: presenting an unknown token changed "
-            f"the outcome versus presenting nothing")
+            f"the outcome versus presenting nothing"
+        )
 
 
 # ─── The cases that must keep rejecting ───────────────────────────────────────
+
 
 def test_a_mismatched_token_always_rejects():
     """The only case where a credential is actually wrong."""
@@ -64,8 +74,10 @@ def test_a_mismatched_token_rejects_under_tls_too():
 
 
 def test_require_tls_refuses_a_plain_connection():
-    assert decide(presented=GOOD, expected=GOOD,
-                  secure=False, require_tls=True).ok is False
+    assert (
+        decide(presented=GOOD, expected=GOOD, secure=False, require_tls=True).ok
+        is False
+    )
 
 
 def test_require_tls_refuses_a_device_with_no_stored_token():
@@ -82,6 +94,7 @@ def test_require_tls_refuses_a_tokenless_connection():
 
 
 # ─── The rollout rule that must survive ───────────────────────────────────────
+
 
 def test_a_stored_token_with_none_presented_is_allowed_by_default():
     """
@@ -112,12 +125,14 @@ def test_comparison_is_constant_time():
     the source because timing is not observable from a unit test.
     """
     import inspect
+
     src = inspect.getsource(LA.decide)
     assert "compare_digest" in src
     assert "presented == expected" not in src
 
 
 # ─── A token once presented is required (Wil, 2026-09-26) ─────────────────────
+
 
 def test_a_confirmed_device_without_its_token_is_refused():
     """
@@ -154,15 +169,21 @@ def test_confirmation_means_nothing_without_a_stored_token():
 
 def test_confirmed_is_required_of_every_caller():
     import pytest
+
     with pytest.raises(TypeError):
         LA.decide(presented=None, expected=GOOD, secure=True, require_tls=False)
 
 
 # ─── /data and /shell follow the control connection ──────────────────────────
 
+
 def follows(control_peer, peer, control_secure=False, secure=False):
-    return LA.follows_control(control_peer=control_peer, control_secure=control_secure,
-                              peer=peer, secure=secure)
+    return LA.follows_control(
+        control_peer=control_peer,
+        control_secure=control_secure,
+        peer=peer,
+        secure=secure,
+    )
 
 
 def test_the_same_address_is_admitted():
@@ -190,11 +211,18 @@ def test_plain_is_refused_when_control_is_tls():
     assert follows("10.10.1.77", "10.10.1.77", control_secure=True, secure=False)
     assert follows("10.10.1.77", "10.10.1.77", control_secure=True, secure=True) is None
     # The other way round is an upgrade, not an impersonation.
-    assert follows("10.10.1.77", "10.10.1.77", control_secure=False, secure=True) is None
+    assert (
+        follows("10.10.1.77", "10.10.1.77", control_secure=False, secure=True) is None
+    )
 
 
 def test_an_unreadable_address_admits():
     # Behind a proxy that hides peers there is nothing to compare, and refusing
     # would take every device down.
-    for a, b in ((None, "10.0.0.1"), ("10.0.0.1", None), ("", "x"), ("garbage", "10.0.0.1")):
+    for a, b in (
+        (None, "10.0.0.1"),
+        ("10.0.0.1", None),
+        ("", "x"),
+        ("garbage", "10.0.0.1"),
+    ):
         assert follows(a, b) is None

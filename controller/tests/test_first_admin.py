@@ -48,8 +48,9 @@ def auth(monkeypatch):
     monkeypatch.setitem(sys.modules, "bcrypt", bcrypt)
     monkeypatch.setitem(sys.modules, "aiohttp", aiohttp)
     monkeypatch.setitem(sys.modules, "aiohttp.web", web)
-    monkeypatch.setitem(sys.modules, "em_ingressauth",
-                        types.ModuleType("em_ingressauth"))
+    monkeypatch.setitem(
+        sys.modules, "em_ingressauth", types.ModuleType("em_ingressauth")
+    )
     monkeypatch.delitem(sys.modules, "em_auth", raising=False)
 
     mod = importlib.import_module("em_auth")

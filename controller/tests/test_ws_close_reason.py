@@ -42,6 +42,7 @@ class _Exc:
 # it was: we gave up on the device, the device went first, or the TCP
 # connection died with nobody saying anything.
 
+
 def test_a_close_we_sent_is_attributed_to_us():
     out = wsc.describe(1011, "keepalive ping timeout", None, None)
     assert "we closed" in out
@@ -73,6 +74,7 @@ def test_both_frames_are_reported_when_both_exist():
 
 # ── Severity ─────────────────────────────────────────────────────────────────
 
+
 def test_an_ordinary_close_is_routine():
     assert wsc.is_routine(1000, 1000)
     assert wsc.is_routine(None, 1001)
@@ -95,9 +97,11 @@ def test_a_missing_code_is_not_routine():
 
 # ── Extraction ───────────────────────────────────────────────────────────────
 
+
 def test_the_frames_are_read_off_the_exception():
     parts = wsc.from_exception(
-        _Exc(sent=_Close(1011, "keepalive ping timeout"), rcvd=None))
+        _Exc(sent=_Close(1011, "keepalive ping timeout"), rcvd=None)
+    )
     assert parts == (1011, "keepalive ping timeout", None, None)
     assert wsc.describe(*parts).startswith("we closed it")
 
@@ -120,15 +124,18 @@ def test_an_unknown_code_is_rendered_not_guessed():
 
 # ── The wiring, asserted on source ───────────────────────────────────────────
 
+
 def test_both_device_planes_report_the_reason():
     src = (CONTROLLER / "em_controller.py").read_text()
     assert "import em_wsclose" in src
     # The bug was `except ConnectionClosed: pass` — two of them, one per
     # plane. Neither may come back.
-    assert not re.search(r"except websockets\.exceptions\.ConnectionClosed:\s*\n\s*pass",
-                         src), "a plane is discarding the close reason again"
-    assert len(re.findall(r"em_wsclose\.from_exception\(", src)) >= 2, \
-        "both the control and data planes must capture the close frames"
+    assert not re.search(
+        r"except websockets\.exceptions\.ConnectionClosed:\s*\n\s*pass", src
+    ), "a plane is discarding the close reason again"
+    assert (
+        len(re.findall(r"em_wsclose\.from_exception\(", src)) >= 2
+    ), "both the control and data planes must capture the close frames"
 
 
 def test_the_data_plane_cannot_report_an_unset_reason():
@@ -137,7 +144,8 @@ def test_the_data_plane_cannot_report_an_unset_reason():
     raise ConnectionClosed, so the tuple has to exist before the try.
     """
     src = (CONTROLLER / "em_controller.py").read_text()
-    handler = src[src.index("async def handle_data("):]
-    handler = handler[:handler.index("\n    try:")]
-    assert "_close_why = (None, None, None, None)" in handler, \
-        "_close_why must be initialised before the try, or the finally NameErrors"
+    handler = src[src.index("async def handle_data(") :]
+    handler = handler[: handler.index("\n    try:")]
+    assert (
+        "_close_why = (None, None, None, None)" in handler
+    ), "_close_why must be initialised before the try, or the finally NameErrors"

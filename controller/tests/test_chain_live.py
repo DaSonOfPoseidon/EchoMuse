@@ -34,6 +34,7 @@ def _pcm(samples):
 
 # ── Limiter ───────────────────────────────────────────────────────────────────
 
+
 def test_a_bypassed_limiter_passes_audio_through_untouched():
     """
     Bypass must be unity gain, not a gentler limiter. The signal here is well
@@ -96,6 +97,7 @@ def test_toggling_the_limiter_does_not_reset_its_gain():
 
 # ── Bass guard ────────────────────────────────────────────────────────────────
 
+
 def test_bypass_is_zero_depth_on_the_same_path_not_a_skipped_filter():
     """
     Bypass runs the crossover and sums it, rather than returning the input.
@@ -111,8 +113,9 @@ def test_bypass_is_zero_depth_on_the_same_path_not_a_skipped_filter():
 
     bypassed = em_mbc.BassGuard(FS, bass_guard_db=-40.0, enabled=False)
     zero_depth = em_mbc.BassGuard(FS, bass_guard_db=0.0, enabled=True)
-    assert np.allclose(bypassed.process(x.copy()),
-                       zero_depth.process(x.copy()), atol=1e-9)
+    assert np.allclose(
+        bypassed.process(x.copy()), zero_depth.process(x.copy()), atol=1e-9
+    )
 
     # Magnitude-flat, by the module's own measure rather than a noisy FFT.
     assert abs(em_mbc.crossover_flatness_db()) < 0.01
@@ -168,22 +171,32 @@ def test_toggling_the_guard_keeps_the_crossover_running():
 
 # ── The chain, as the feed drives it ──────────────────────────────────────────
 
+
 def _eq():
     return em_eq.StreamingEQ(
-        FS, [0.0] * em_eq.NUM_BANDS, False,
+        FS,
+        [0.0] * em_eq.NUM_BANDS,
+        False,
         limiter=em_limiter.Limiter(FS),
-        guard=em_mbc.BassGuard(FS))
+        guard=em_mbc.BassGuard(FS),
+    )
 
 
-ARGS = dict(bands=[0.0] * em_eq.NUM_BANDS, loudness=False,
-            limiter_enabled=True, limiter_threshold=-1.0,
-            limiter_release=150.0, guard_enabled=True, guard_db=-20.0)
+ARGS = dict(
+    bands=[0.0] * em_eq.NUM_BANDS,
+    loudness=False,
+    limiter_enabled=True,
+    limiter_threshold=-1.0,
+    limiter_release=150.0,
+    guard_enabled=True,
+    guard_db=-20.0,
+)
 
 
 def test_update_reports_whether_anything_moved():
     eq = _eq()
-    assert eq.update(**ARGS) is True          # first call always lands
-    assert eq.update(**ARGS) is False         # nothing changed
+    assert eq.update(**ARGS) is True  # first call always lands
+    assert eq.update(**ARGS) is False  # nothing changed
     assert eq.update(**{**ARGS, "guard_db": -12.0}) is True
 
 
@@ -197,8 +210,14 @@ def test_update_does_not_rebuild_the_eq_for_an_unrelated_change():
     sos = eq._sos
     zi = eq._zi
 
-    eq.update(**{**ARGS, "bands": [3.0] + [0.0] * (em_eq.NUM_BANDS - 1),
-                 "guard_db": -30.0, "limiter_threshold": -6.0})
+    eq.update(
+        **{
+            **ARGS,
+            "bands": [3.0] + [0.0] * (em_eq.NUM_BANDS - 1),
+            "guard_db": -30.0,
+            "limiter_threshold": -6.0,
+        }
+    )
     assert eq._sos is sos, "EQ rebuilt for a change that was not the EQ"
     assert eq._zi is zi
 
@@ -229,7 +248,7 @@ def test_going_flat_and_back_is_handled():
     eq.update(**{**ARGS, "bands": [6.0] + [0.0] * (em_eq.NUM_BANDS - 1)})
     assert eq._sos is not None
 
-    eq.update(**ARGS)                      # back to flat
+    eq.update(**ARGS)  # back to flat
     assert eq._sos is None
 
     eq.update(**{**ARGS, "bands": [4.0] + [0.0] * (em_eq.NUM_BANDS - 1)})
@@ -251,8 +270,7 @@ def test_the_chain_keeps_working_across_a_live_change():
     sizes = []
     for i in range(8):
         if i == 4:
-            eq.update(**{**ARGS, "guard_enabled": False,
-                         "limiter_enabled": False})
+            eq.update(**{**ARGS, "guard_enabled": False, "limiter_enabled": False})
         sizes.append(len(eq.process(chunk)))
 
     assert sizes[1:] == [len(chunk)] * 7

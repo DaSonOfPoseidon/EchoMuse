@@ -43,7 +43,7 @@ def test_threshold_is_inclusive():
 
 
 def test_hold_is_bounded_and_keeps_the_newest():
-    g = sg.SpeechGate(threshold=0.5, max_hold_s=0.4)   # 5 frames
+    g = sg.SpeechGate(threshold=0.5, max_hold_s=0.4)  # 5 frames
     fs = _frames(8)
     for f in fs[:7]:
         g.push(f, 0.0)
@@ -69,7 +69,7 @@ class _Session:
         x = feeds["input"]
         assert x.shape == (1, sg.CHUNK)
         self.calls.append(float(feeds["h"][0, 0, 0]))
-        h = feeds["h"] + 1.0     # state must be carried from call to call
+        h = feeds["h"] + 1.0  # state must be carried from call to call
         return [np.array([[float(np.abs(x).mean())]]), h, feeds["c"]]
 
 

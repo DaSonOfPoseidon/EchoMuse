@@ -3,6 +3,7 @@
 Control ids are positional and the FireOS 6 kernel shifts them from ~161 on,
 so a numbered write can land on a different control and still succeed.
 """
+
 import re
 from pathlib import Path
 
@@ -21,5 +22,9 @@ def test_start_script_names_every_mixer_control():
 def test_start_script_still_sets_the_mixer():
     # The guard above passes vacuously if the writes disappear altogether.
     text = SCRIPT.read_text()
-    for name in ("PCM Playback Volume", "Ext_Speaker_Amp_Switch", "Digital Volume Control"):
+    for name in (
+        "PCM Playback Volume",
+        "Ext_Speaker_Amp_Switch",
+        "Digital Volume Control",
+    ):
         assert 'tinymix -D 0 "' in text and name in text, name

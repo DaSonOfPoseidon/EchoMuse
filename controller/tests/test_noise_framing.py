@@ -19,12 +19,17 @@ pytest.importorskip("cryptography")
 
 from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.x25519 import (  # noqa: E402
-    X25519PrivateKey, X25519PublicKey)
+    X25519PrivateKey,
+    X25519PublicKey,
+)
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305  # noqa: E402
 
 from esphome import noise  # noqa: E402
 from esphome.frame_protocol import (  # noqa: E402
-    FrameProtocolError, PlaintextFrameProtocol, encode_frame)
+    FrameProtocolError,
+    PlaintextFrameProtocol,
+    encode_frame,
+)
 
 KEY = bytes(range(32))
 NAME, MAC = "echomuse-test-bt", "02ec0000abcd"
@@ -72,8 +77,8 @@ def frames(raw: bytes) -> list:
     while raw:
         assert raw[0] == 0x01
         n = struct.unpack(">H", raw[1:3])[0]
-        out.append(raw[3:3 + n])
-        raw = raw[3 + n:]
+        out.append(raw[3 : 3 + n])
+        raw = raw[3 + n :]
     return out
 
 
@@ -103,7 +108,8 @@ class Initiator:
         self.ck, temp_h, self.k = noise._hkdf(self.ck, self.psk, 3)
         self._mix_hash(temp_h)
         pub = self.e.public_key().public_bytes(
-            serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
         self._mix_hash(pub)
         self._mix_key(pub)
         tag = ChaCha20Poly1305(self.k).encrypt(self._nonce(), b"", self.h)
@@ -117,15 +123,19 @@ class Initiator:
         self._mix_key(self.e.exchange(X25519PublicKey.from_public_bytes(re)))
         ChaCha20Poly1305(self.k).decrypt(self._nonce(), msg[32:], self.h)
         to_server, to_client = noise._hkdf(self.ck, b"", 2)
-        self.send, self.recv = noise.CipherState(to_server), noise.CipherState(to_client)
+        self.send, self.recv = noise.CipherState(to_server), noise.CipherState(
+            to_client
+        )
 
     def data(self, msg_type: int, payload: bytes) -> bytes:
-        return frame(self.send.encrypt(struct.pack(">HH", msg_type, len(payload)) + payload))
+        return frame(
+            self.send.encrypt(struct.pack(">HH", msg_type, len(payload)) + payload)
+        )
 
     def open(self, data: bytes):
         plain = self.recv.decrypt(data)
         msg_type, n = struct.unpack(">HH", plain[:4])
-        return msg_type, plain[4:4 + n]
+        return msg_type, plain[4 : 4 + n]
 
 
 def connect(proto, transport, psk=KEY, hello=b""):
@@ -144,14 +154,14 @@ def test_session_delivered_one_byte_at_a_time():
     opening = frame(b"") + frame(b"\x00" + client.message_1())
     for i in range(len(opening)):
         assert not proto.encrypted
-        proto.data_received(opening[i:i + 1])
+        proto.data_received(opening[i : i + 1])
     assert proto.encrypted
     _, handshake = frames(transport.take())
     client.read_message_2(handshake[1:])
 
     wire = client.data(7, b"ping") + client.data(9, b"")
     for i in range(len(wire)):
-        proto.data_received(wire[i:i + 1])
+        proto.data_received(wire[i : i + 1])
     assert packets == [(7, b"ping"), (9, b"")]
 
     proto.send_packets([(8, b"pong"), (10, b"x" * 300)])
@@ -179,12 +189,15 @@ def test_wrong_key_gets_the_reason_home_assistant_keys_on():
     assert transport.closed and packets == [] and not proto.encrypted
 
 
-@pytest.mark.parametrize("handshake,reason", [
-    (b"", b"Bad handshake packet len"),
-    (b"\x01" + bytes(48), b"Bad handshake error byte"),
-    (b"\x00" + bytes(47), b"Handshake MAC failure"),      # too short to verify
-    (b"\x00" + bytes(48), b"Handshake MAC failure"),
-])
+@pytest.mark.parametrize(
+    "handshake,reason",
+    [
+        (b"", b"Bad handshake packet len"),
+        (b"\x01" + bytes(48), b"Bad handshake error byte"),
+        (b"\x00" + bytes(47), b"Handshake MAC failure"),  # too short to verify
+        (b"\x00" + bytes(48), b"Handshake MAC failure"),
+    ],
+)
 def test_bad_handshake_frames(handshake, reason):
     proto, transport, packets = listener()
     proto.data_received(frame(b"") + frame(handshake))
@@ -197,7 +210,7 @@ def test_nothing_is_sent_before_the_handshake_finishes():
     proto.send_packet(1, b"device info")
     assert transport.written == b""
     proto.data_received(frame(b""))
-    transport.take()                      # the server hello
+    transport.take()  # the server hello
     proto.send_packet(1, b"device info")
     assert transport.written == b""
 
@@ -231,11 +244,14 @@ def test_tampered_or_replayed_data_closes_the_connection():
         assert transport.closed
 
 
-@pytest.mark.parametrize("plain", [
-    b"",                                         # no header at all
-    b"\x00\x07\x00",                             # header cut short
-    struct.pack(">HH", 7, 5) + b"ping",          # says 5, carries 4
-])
+@pytest.mark.parametrize(
+    "plain",
+    [
+        b"",  # no header at all
+        b"\x00\x07\x00",  # header cut short
+        struct.pack(">HH", 7, 5) + b"ping",  # says 5, carries 4
+    ],
+)
 def test_malformed_inner_frame_closes_the_connection(plain):
     proto, transport, packets = listener()
     client = connect(proto, transport)

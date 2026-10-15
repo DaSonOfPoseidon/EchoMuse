@@ -28,14 +28,17 @@ def _extract():
     return em_ota.extract_binary_version
 
 
-@pytest.mark.parametrize("embedded,expected", [
-    # git describe — what compile.sh produces from a clean tree today
-    (b"junk\x00v2.12.0-63-g99628d3\x00junk", "v2.12.0-63-g99628d3"),
-    (b"\x00v3.0.0-1-gabcdef0\x00",           "v3.0.0-1-gabcdef0"),
-    # date scheme — dirty tree, and every binary predating the change
-    (b"junk 20260614-1152-dev junk",         "20260614-1152-dev"),
-    (b"20260614-0513-release",               "20260614-0513-release"),
-])
+@pytest.mark.parametrize(
+    "embedded,expected",
+    [
+        # git describe — what compile.sh produces from a clean tree today
+        (b"junk\x00v2.12.0-63-g99628d3\x00junk", "v2.12.0-63-g99628d3"),
+        (b"\x00v3.0.0-1-gabcdef0\x00", "v3.0.0-1-gabcdef0"),
+        # date scheme — dirty tree, and every binary predating the change
+        (b"junk 20260614-1152-dev junk", "20260614-1152-dev"),
+        (b"20260614-0513-release", "20260614-0513-release"),
+    ],
+)
 def test_both_version_schemes_are_recognised(embedded, expected):
     assert _extract()(embedded) == expected
 
@@ -94,23 +97,28 @@ def test_the_dashboard_only_claims_a_rollback_when_it_can_prove_one():
     """
     src = (CONTROLLER / "static" / "dashboard.jsx").read_text()
 
-    assert "function _pollReconnect(targetVersion, priorVersion)" in src, \
-        "the poll must know what the device was running before the push"
+    assert (
+        "function _pollReconnect(targetVersion, priorVersion)" in src
+    ), "the poll must know what the device was running before the push"
 
-    body = src[src.index("function _pollReconnect("):]
-    body = body[:body.index("\n  async function ")] if "\n  async function " in body \
+    body = src[src.index("function _pollReconnect(") :]
+    body = (
+        body[: body.index("\n  async function ")]
+        if "\n  async function " in body
         else body[:4000]
+    )
     assert "auto-rolled back" in body
-    claim = body[:body.index("auto-rolled back")]
+    claim = body[: body.index("auto-rolled back")]
     # The COMPARISON, not merely the identifier. Asserting that
     # "priorVersion" appears anywhere before the wording passes even when
     # the gate is replaced by a constant, because the parameter is still
     # named in the signature and the comments — verified by reintroducing
     # exactly that, which the looser assertion missed.
-    assert re.search(r"firmware_ver\s*===\s*priorVersion", claim), \
-        "the rollback wording must be gated on the device having come back " \
-        "on the version it was running BEFORE the push, not on a bare " \
+    assert re.search(r"firmware_ver\s*===\s*priorVersion", claim), (
+        "the rollback wording must be gated on the device having come back "
+        "on the version it was running BEFORE the push, not on a bare "
         "mismatch with the target"
+    )
 
     # Every caller has to supply it, or the gate silently reads undefined
     # and the claim quietly becomes unreachable instead of wrong.

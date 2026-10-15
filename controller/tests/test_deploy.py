@@ -38,9 +38,9 @@ def test_ci_runs_every_dashboard_test():
     ci = (CONTROLLER.parent / ".github" / "workflows" / "ci.yml").read_text()
     listed = set(re.findall(r"node\s+controller/tests/(\S+\.test\.mjs)", ci))
     on_disk = {p.name for p in (CONTROLLER / "tests").glob("*.test.mjs")}
-    assert on_disk <= listed, (
-        f"dashboard tests on disk but never run by CI: {sorted(on_disk - listed)}"
-    )
+    assert (
+        on_disk <= listed
+    ), f"dashboard tests on disk but never run by CI: {sorted(on_disk - listed)}"
 
 
 def test_dashboard_bundle_is_cache_busted():
@@ -58,10 +58,12 @@ def test_dashboard_bundle_is_cache_busted():
 
     handler = _sources.def_source("_serve_dashboard")
 
-    assert "dashboard.js?v=" in handler, \
-        "the bundle URL must carry a cache-busting token"
-    assert "no-cache" in handler, \
-        "dashboard.html itself must be revalidated, or the new URL is never seen"
+    assert (
+        "dashboard.js?v=" in handler
+    ), "the bundle URL must carry a cache-busting token"
+    assert (
+        "no-cache" in handler
+    ), "dashboard.html itself must be revalidated, or the new URL is never seen"
     # A version-string token would not change between two local "dev" builds;
     # mtime changes on every rebuild.
     # The token must be an mtime, not a version string: `version.py` reports
@@ -70,11 +72,13 @@ def test_dashboard_bundle_is_cache_busted():
     # started publishing it for stale-tab detection, so the requirement is now
     # that the handler uses that ONE definition and that the definition is an
     # mtime — see test_the_bundle_stamp_has_exactly_one_definition.
-    assert "bundle_version()" in handler, \
-        "the handler must take its token from bundle_version()"
+    assert (
+        "bundle_version()" in handler
+    ), "the handler must take its token from bundle_version()"
     helper = _sources.def_source("bundle_version")
-    assert "st_mtime" in helper, \
-        "cache-bust on the bundle's mtime, not on a version string"
+    assert (
+        "st_mtime" in helper
+    ), "cache-bust on the bundle's mtime, not on a version string"
 
 
 def test_dashboard_paths_are_ingress_safe():
@@ -100,32 +104,44 @@ def test_dashboard_paths_are_ingress_safe():
         assert 'src="/static/' not in html, f"{name} has an absolute /static src"
         assert "url('/static/" not in html, f"{name} has an absolute /static url()"
 
-    assert "'/api/" not in index, \
-        "index.html must fetch relative api/... paths, not /api/..."
-    assert "location.replace('/dashboard')" not in index, \
-        "index.html must redirect to a relative dashboard path"
+    assert (
+        "'/api/" not in index
+    ), "index.html must fetch relative api/... paths, not /api/..."
+    assert (
+        "location.replace('/dashboard')" not in index
+    ), "index.html must redirect to a relative dashboard path"
 
-    assert "function ingressPath(path)" in jsx, \
-        "dashboard.jsx must relativize absolute paths for ingress"
-    assert "function ingressWebSocketUrl(path)" in jsx, \
-        "dashboard.jsx must build ingress-relative WebSocket URLs"
-    assert "document.baseURI" in jsx, \
-        "the WebSocket URL must resolve against the injected <base href>"
-    assert "fetch(ingressPath(path)" in jsx, \
-        "the shared API helpers must route through ingressPath"
-    assert "location.replace('/')" not in jsx, \
-        "an absolute root redirect bypasses the ingress path"
+    assert (
+        "function ingressPath(path)" in jsx
+    ), "dashboard.jsx must relativize absolute paths for ingress"
+    assert (
+        "function ingressWebSocketUrl(path)" in jsx
+    ), "dashboard.jsx must build ingress-relative WebSocket URLs"
+    assert (
+        "document.baseURI" in jsx
+    ), "the WebSocket URL must resolve against the injected <base href>"
+    assert (
+        "fetch(ingressPath(path)" in jsx
+    ), "the shared API helpers must route through ingressPath"
+    assert (
+        "location.replace('/')" not in jsx
+    ), "an absolute root redirect bypasses the ingress path"
 
-    assert '"static/dashboard.js"' in api, \
-        "the cache-bust replace must target the relative asset URL"
-    assert 'web.HTTPFound(".")' in api, \
-        "/setup must redirect relatively, or it bounces out of the ingress path"
-    assert "_with_ingress_base" in api, \
-        "index.html and dashboard.html must get a <base href> injected"
-    assert 'request.headers.get("X-Ingress-Path"' in api, \
-        "the base path must come from Home Assistant's ingress header"
-    assert "ECHOMUSE_HOME_ASSISTANT_INGRESS" in config, \
-        "config.yaml must set the env var that gates ingress-only mode"
+    assert (
+        '"static/dashboard.js"' in api
+    ), "the cache-bust replace must target the relative asset URL"
+    assert (
+        'web.HTTPFound(".")' in api
+    ), "/setup must redirect relatively, or it bounces out of the ingress path"
+    assert (
+        "_with_ingress_base" in api
+    ), "index.html and dashboard.html must get a <base href> injected"
+    assert (
+        'request.headers.get("X-Ingress-Path"' in api
+    ), "the base path must come from Home Assistant's ingress header"
+    assert (
+        "ECHOMUSE_HOME_ASSISTANT_INGRESS" in config
+    ), "config.yaml must set the env var that gates ingress-only mode"
 
 
 def test_addon_default_threshold_matches_the_controller():
@@ -141,6 +157,7 @@ def test_addon_default_threshold_matches_the_controller():
     only, so there is no yaml module here.
     """
     import sys
+
     sys.path.insert(0, str(CONTROLLER))
     from em_db import DEFAULT_DEVICE_CONFIG
 
@@ -168,6 +185,7 @@ def test_addon_default_reply_wait_matches_the_controller():
     `TTS_WAIT_MAX`.
     """
     import sys
+
     sys.path.insert(0, str(CONTROLLER))
     import em_turnclock
 
@@ -180,8 +198,7 @@ def test_addon_default_reply_wait_matches_the_controller():
         f"em_turnclock.TTS_WAIT_DEFAULT is {em_turnclock.TTS_WAIT_DEFAULT}"
     )
 
-    rng = re.search(r'^\s*tts_wait_timeout:\s*"int\((\d+),(\d+)\)"',
-                    config, re.M)
+    rng = re.search(r'^\s*tts_wait_timeout:\s*"int\((\d+),(\d+)\)"', config, re.M)
     assert rng, "schema has no tts_wait_timeout range"
     assert float(rng.group(2)) == em_turnclock.TTS_WAIT_MAX, (
         f"schema caps tts_wait_timeout at {rng.group(2)} but "
@@ -199,10 +216,13 @@ def test_addon_image_is_published_not_built_on_the_user_machine():
     what controller-release.yml actually publishes.
     """
     config = (CONTROLLER / "config.yaml").read_text()
-    assert re.search(r"^image:\s*\S+", config, re.M), \
-        "config.yaml must pull the published image, not build on the user's machine"
+    assert re.search(
+        r"^image:\s*\S+", config, re.M
+    ), "config.yaml must pull the published image, not build on the user's machine"
 
-    workflow = (CONTROLLER.parent / ".github/workflows/controller-release.yml").read_text()
+    workflow = (
+        CONTROLLER.parent / ".github/workflows/controller-release.yml"
+    ).read_text()
     platforms = re.search(r"platforms:\s*(\S+)", workflow)
     assert platforms, "controller-release.yml no longer declares platforms"
     published = platforms.group(1)
@@ -231,16 +251,21 @@ def test_release_notes_survive_the_whole_relay():
     one.
     """
     from pathlib import Path
+
     fetch = _sources.def_source("fetch_firmware")
-    assert 'release.get("body")' in fetch or '.get("body")' in fetch, \
-        "the GitHub release body must be captured"
+    assert (
+        'release.get("body")' in fetch or '.get("body")' in fetch
+    ), "the GitHub release body must be captured"
     assert 'set_config("latest_notes"' in fetch, "notes must be persisted"
 
     cached = _sources.def_source("cached_firmware")
-    assert '"latest_notes"' in cached and 'stored["latest_notes"]' in cached, \
-        "the DB-cache path must restore notes, or they vanish on restart"
+    assert (
+        '"latest_notes"' in cached and 'stored["latest_notes"]' in cached
+    ), "the DB-cache path must restore notes, or they vanish on restart"
 
-    jsx = (Path(__file__).resolve().parent.parent / "static" / "dashboard.jsx").read_text()
+    jsx = (
+        Path(__file__).resolve().parent.parent / "static" / "dashboard.jsx"
+    ).read_text()
     assert "release.notes" in jsx, "the dashboard must render the notes"
 
 
@@ -252,8 +277,13 @@ def test_release_workflow_publishes_the_tag_annotation():
     whoever is deciding whether to update.
     """
     from pathlib import Path
-    wf = (Path(__file__).resolve().parent.parent.parent
-          / ".github" / "workflows" / "release.yml").read_text()
+
+    wf = (
+        Path(__file__).resolve().parent.parent.parent
+        / ".github"
+        / "workflows"
+        / "release.yml"
+    ).read_text()
     assert "body_path:" in wf, "the release must publish notes from a file"
     assert "%(contents)" in wf, "notes must come from the tag annotation"
 
@@ -270,11 +300,14 @@ def test_every_device_payload_has_an_update_path():
     fourth payload is added without one.
     """
     from pathlib import Path
+
     root = Path(__file__).resolve().parent.parent
     # The sync module, not em_api: the provisioning routes there name every
     # payload too, and "installed only by the wizard" is the case this catches.
     syncs = (root / "em_payloads.py").read_text()
-    payloads = sorted(p.name for p in (root / "device_payloads").iterdir() if p.is_file())
+    payloads = sorted(
+        p.name for p in (root / "device_payloads").iterdir() if p.is_file()
+    )
     assert payloads, "device_payloads/ is empty — has it moved?"
 
     for name in payloads:
@@ -297,8 +330,9 @@ def test_debloat_sync_reconciles_both_halves():
     assert "debloat_packages()" in fn, "the pm-hide half must be reconciled"
     assert "pm hide" in fn, "drifted packages must actually be hidden"
     # Rename-based replacement: the running shell keeps the old inode.
-    assert "mv " in fn and ".new" in fn, \
-        "the script must be replaced by rename, not written in place"
+    assert (
+        "mv " in fn and ".new" in fn
+    ), "the script must be replaced by rename, not written in place"
     # md5 both before (skip when in sync) and after (verify the transfer).
     assert fn.count("md5") >= 2, "sync must md5-compare and md5-verify"
 
@@ -310,8 +344,9 @@ def test_debloat_reachable_without_an_ota():
     not a nicety.
     """
     # all_code() is unparsed, which writes every string single-quoted.
-    assert "'/api/devices/{id}/debloat'" in _sources.all_code(), \
-        "no manual debloat endpoint registered"
+    assert (
+        "'/api/devices/{id}/debloat'" in _sources.all_code()
+    ), "no manual debloat endpoint registered"
     jsx = (CONTROLLER / "static" / "dashboard.jsx").read_text()
     assert "/debloat`" in jsx, "the dashboard must be able to trigger it"
 
@@ -328,25 +363,31 @@ def test_stale_release_cache_is_not_returned_when_it_has_aged_out():
     """
     fn = _sources.def_source("cached_firmware")
 
-    assert "await fetch_firmware()" in fn, \
-        "an aged-out cache must be refreshed synchronously, not in the background"
-    assert "create_task(fetch_firmware())" not in fn and "spawn(fetch_firmware())" not in fn, \
-        "fire-and-forget refresh returns the stale value to this caller"
+    assert (
+        "await fetch_firmware()" in fn
+    ), "an aged-out cache must be refreshed synchronously, not in the background"
+    assert (
+        "create_task(fetch_firmware())" not in fn
+        and "spawn(fetch_firmware())" not in fn
+    ), "fire-and-forget refresh returns the stale value to this caller"
 
 
 def test_release_change_is_pushed_to_open_dashboards():
     """A tab already showing the Updates panel should not sit on the old
     version until someone reloads."""
     from pathlib import Path
+
     root = Path(__file__).resolve().parent.parent
     api = _sources.all_source()
-    assert '"type":         "release_update"' in api or '"release_update"' in api, \
-        "a release change must be broadcast on the event stream"
+    assert (
+        '"type":         "release_update"' in api or '"release_update"' in api
+    ), "a release change must be broadcast on the event stream"
     jsx = (root / "static" / "dashboard.jsx").read_text()
     # And the tab must keep asking, as a fallback for a missed event.
-    upd = jsx[jsx.index("if (tab !== 'updates') return;"):]
-    assert "setInterval" in upd[:600], \
-        "the Updates tab must refresh while open, not fetch once on entry"
+    upd = jsx[jsx.index("if (tab !== 'updates') return;") :]
+    assert (
+        "setInterval" in upd[:600]
+    ), "the Updates tab must refresh while open, not fetch once on entry"
 
 
 def test_streamed_playback_waits_for_the_device_not_a_computed_sleep():
@@ -362,23 +403,26 @@ def test_streamed_playback_waits_for_the_device_not_a_computed_sleep():
     audioChanDepth.
     """
     from pathlib import Path
+
     src = (Path(__file__).resolve().parent.parent / "em_controller.py").read_text()
-    fn = src[src.index("async def _run_streaming_post_turn_playback"):]
-    fn = fn[:fn.index("\nasync def ", 1)]
+    fn = src[src.index("async def _run_streaming_post_turn_playback") :]
+    fn = fn[: fn.index("\nasync def ", 1)]
 
     # Named on the API rather than on a variable: `playback_done` was a single
     # Event on the Device and became a queue of per-playback waiters (#373), so
     # the thing to assert is that this path registers one and waits on it, not
     # what the old attribute was called.
-    assert "begin_playback()" in fn, \
-        "streamed playback must register a playback waiter"
-    assert "playback_ev.wait()" in fn, \
-        "streamed playback must await the device's playback_stats"
-    assert "end_playback(" in fn, \
-        ("the waiter must be retired in a finally, or a cancelled playback "
-         "takes the next one's report and desynchronises every one after it")
-    assert "asyncio.sleep(remaining)" not in fn, \
-        "the computed drain estimate was removed on 2026-07-24 — do not restore it"
+    assert "begin_playback()" in fn, "streamed playback must register a playback waiter"
+    assert (
+        "playback_ev.wait()" in fn
+    ), "streamed playback must await the device's playback_stats"
+    assert "end_playback(" in fn, (
+        "the waiter must be retired in a finally, or a cancelled playback "
+        "takes the next one's report and desynchronises every one after it"
+    )
+    assert (
+        "asyncio.sleep(remaining)" not in fn
+    ), "the computed drain estimate was removed on 2026-07-24 — do not restore it"
 
 
 def test_send_ms_stays_socket_write_time():
@@ -389,16 +433,21 @@ def test_send_ms_stays_socket_write_time():
     folds HA's synthesis time in and makes it read exactly like delivery.
     """
     from pathlib import Path
-    src = (Path(__file__).resolve().parent.parent / "em_controller.py").read_text()
-    fn = src[src.index("async def stream_speaker_chunks"):]
-    fn = fn[:fn.index("\n    async def ", 1) if "\n    async def " in fn[1:] else len(fn)]
-    assert "send_seconds" in fn, \
-        "socket-write time must be accumulated around the send calls"
 
-    caller = src[src.index("async def _run_streaming_post_turn_playback"):]
-    caller = caller[:caller.index("\nasync def ", 1)]
-    assert "device.playback_send_ms = send_ms" in caller, \
-        "send_ms must come from accumulated write time, not the loop duration"
+    src = (Path(__file__).resolve().parent.parent / "em_controller.py").read_text()
+    fn = src[src.index("async def stream_speaker_chunks") :]
+    fn = fn[
+        : fn.index("\n    async def ", 1) if "\n    async def " in fn[1:] else len(fn)
+    ]
+    assert (
+        "send_seconds" in fn
+    ), "socket-write time must be accumulated around the send calls"
+
+    caller = src[src.index("async def _run_streaming_post_turn_playback") :]
+    caller = caller[: caller.index("\nasync def ", 1)]
+    assert (
+        "device.playback_send_ms = send_ms" in caller
+    ), "send_ms must come from accumulated write time, not the loop duration"
 
 
 def test_meter_ring_is_raised_when_audio_starts_not_at_playback_setup():
@@ -416,20 +465,23 @@ def test_meter_ring_is_raised_when_audio_starts_not_at_playback_setup():
     The spinner must therefore stay up until the meter has something to show.
     """
     from pathlib import Path
-    src = (Path(__file__).resolve().parent.parent / "em_controller.py").read_text()
-    fn = src[src.index("async def post_turn_play_esphome"):]
-    fn = fn[:fn.index("\n            # P0-1")]
 
-    assert "_meter_at_playback_start(pcm_chunks" in fn, \
-        "the meter must be gated on the first audio reaching the device"
+    src = (Path(__file__).resolve().parent.parent / "em_controller.py").read_text()
+    fn = src[src.index("async def post_turn_play_esphome") :]
+    fn = fn[: fn.index("\n            # P0-1")]
+
+    assert (
+        "_meter_at_playback_start(pcm_chunks" in fn
+    ), "the meter must be gated on the first audio reaching the device"
 
     # A meter send is legitimate inside the nested helpers (_meter_on, and the
     # dead-man refresher). What must not exist is one in the function's OWN
     # body — that runs at setup, before any audio. Nested bodies are indented
     # deeper, so indentation is the discriminator.
-    assert "\n" + " " * 20 + "await device.send_led_anim(meter)" not in fn, \
-        ("the meter is being raised at playback setup — on the streaming path "
-         "that is before HA has returned any audio, leaving the ring dark")
+    assert "\n" + " " * 20 + "await device.send_led_anim(meter)" not in fn, (
+        "the meter is being raised at playback setup — on the streaming path "
+        "that is before HA has returned any audio, leaving the ring dark"
+    )
 
 
 def test_meter_gate_fires_for_responses_shorter_than_the_prime_window():
@@ -439,15 +491,18 @@ def test_meter_gate_fires_for_responses_shorter_than_the_prime_window():
     fire the callback too, or short answers play with no ring at all.
     """
     from pathlib import Path
+
     src = (Path(__file__).resolve().parent.parent / "em_controller.py").read_text()
-    fn = src[src.index("async def _meter_at_playback_start"):]
-    fn = fn[:fn.index("\nasync def ", 1)]
+    fn = src[src.index("async def _meter_at_playback_start") :]
+    fn = fn[: fn.index("\nasync def ", 1)]
 
     body = fn.split("async for")[1]
-    assert "if not fired:" in body.rsplit("\n", 4)[-4:][0] or "if not fired" in body, \
-        "the generator must fire on exhaustion for sub-prime-length responses"
-    assert "SPEAKER_PRIME_SECONDS" in fn, \
-        "the threshold must track the device's actual prime window"
+    assert (
+        "if not fired:" in body.rsplit("\n", 4)[-4:][0] or "if not fired" in body
+    ), "the generator must fire on exhaustion for sub-prime-length responses"
+    assert (
+        "SPEAKER_PRIME_SECONDS" in fn
+    ), "the threshold must track the device's actual prime window"
 
 
 def test_controller_update_is_advisory_only():
@@ -463,11 +518,12 @@ def test_controller_update_is_advisory_only():
     elsewhere.
     """
     from pathlib import Path
+
     root = Path(__file__).resolve().parent.parent
 
     jsx = (root / "static" / "dashboard.jsx").read_text()
     start = jsx.index("{/* Controller update notice.")
-    banner = jsx[start:jsx.index("{/* Summary */}", start)]
+    banner = jsx[start : jsx.index("{/* Summary */}", start)]
     for forbidden in ("API.post", "API.put", "API.delete", "onClick={doUpdate"):
         assert forbidden not in banner, (
             f"the controller update notice must not perform actions, found "
@@ -475,11 +531,13 @@ def test_controller_update_is_advisory_only():
         )
 
     api = _sources.all_source()
-    assert 'add_get("/api/releases/controller"' in api, \
-        "the controller release endpoint must be read-only (GET)"
+    assert (
+        'add_get("/api/releases/controller"' in api
+    ), "the controller release endpoint must be read-only (GET)"
     for verb in ("add_post", "add_put", "add_delete", "add_patch", "add_route"):
-        assert f'{verb}("/api/releases/controller' not in api, \
-            f"{verb} on /api/releases/controller would make the update actionable"
+        assert (
+            f'{verb}("/api/releases/controller' not in api
+        ), f"{verb} on /api/releases/controller would make the update actionable"
 
 
 def test_controller_notes_come_from_the_tag_annotation():
@@ -490,10 +548,12 @@ def test_controller_notes_come_from_the_tag_annotation():
     DEVICE firmware release instead — right shape, wrong product.
     """
     fn = _sources.def_source("fetch_controller")
-    assert "GITHUB_TAGS_URL" in fn and "GITHUB_TAG_OBJECT_URL" in fn, \
-        "controller notes must come from the tag annotation, not /releases"
-    assert "GITHUB_API_URL" not in fn, \
-        "that is the device firmware release feed, not the controller's"
+    assert (
+        "GITHUB_TAGS_URL" in fn and "GITHUB_TAG_OBJECT_URL" in fn
+    ), "controller notes must come from the tag annotation, not /releases"
+    assert (
+        "GITHUB_API_URL" not in fn
+    ), "that is the device firmware release feed, not the controller's"
 
 
 def test_every_db_call_exists():
@@ -508,31 +568,46 @@ def test_every_db_call_exists():
     """
     import ast
     from pathlib import Path
+
     root = Path(__file__).resolve().parent.parent
 
     # Every module that imports em_db as `db`, not only em_api: a function
     # moved out of em_api keeps its db calls.
     used = {
-        n.attr for path in _sources.MODULES for n in ast.walk(_sources.tree(path))
+        n.attr
+        for path in _sources.MODULES
+        for n in ast.walk(_sources.tree(path))
         if isinstance(n, ast.Attribute)
-        and isinstance(n.value, ast.Name) and n.value.id == "db"
+        and isinstance(n.value, ast.Name)
+        and n.value.id == "db"
     }
     db_tree = ast.parse((root / "em_db.py").read_text())
-    defined = {
-        n.name for n in db_tree.body
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-    } | {
-        t.id for n in db_tree.body if isinstance(n, ast.Assign)
-        for t in n.targets if isinstance(t, ast.Name)
-    } | {
-        # Annotated module constants, e.g. `MIGRATIONS: list[str] = [...]`.
-        # Missing these produced a false positive on db.MIGRATIONS, which is
-        # the failure mode that gets a guard disabled rather than fixed.
-        n.target.id for n in db_tree.body
-        if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)
-    }
+    defined = (
+        {
+            n.name
+            for n in db_tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        | {
+            t.id
+            for n in db_tree.body
+            if isinstance(n, ast.Assign)
+            for t in n.targets
+            if isinstance(t, ast.Name)
+        }
+        | {
+            # Annotated module constants, e.g. `MIGRATIONS: list[str] = [...]`.
+            # Missing these produced a false positive on db.MIGRATIONS, which is
+            # the failure mode that gets a guard disabled rather than fixed.
+            n.target.id
+            for n in db_tree.body
+            if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)
+        }
+    )
     missing = sorted(used - defined)
-    assert not missing, f"db.{{{', '.join(missing)}}} is called but em_db.py does not define it"
+    assert (
+        not missing
+    ), f"db.{{{', '.join(missing)}}} is called but em_db.py does not define it"
 
 
 def test_the_wake_word_asset_wizard_step_is_mandatory():
@@ -546,36 +621,42 @@ def test_the_wake_word_asset_wizard_step_is_mandatory():
     auto-runs: a button someone can leave unpressed is not mandatory.
     """
     from pathlib import Path
-    jsx = (Path(__file__).resolve().parent.parent / "static" / "dashboard.jsx").read_text()
+
+    jsx = (
+        Path(__file__).resolve().parent.parent / "static" / "dashboard.jsx"
+    ).read_text()
 
     # Checked for BOTH flows. The wizard gained an emOS path whose steps are
     # numbered differently, and an invariant that only held for the flow that
     # happens to be second in the file is not an invariant.
-    auto_line = jsx[jsx.index("const autoSteps ="):]
-    auto_line = auto_line[:auto_line.index("\n")]
+    auto_line = jsx[jsx.index("const autoSteps =") :]
+    auto_line = auto_line[: auto_line.index("\n")]
     sets = re.findall(r"new Set\(\[([^\]]*)\]\)", auto_line)
-    assert len(sets) == 2, (
-        f"expected an autoSteps set per flow, found {len(sets)} in {auto_line!r}")
-    emos_auto, fireos_auto = [
-        {int(n) for n in re.findall(r"\d+", s)} for s in sets
-    ]
+    assert (
+        len(sets) == 2
+    ), f"expected an autoSteps set per flow, found {len(sets)} in {auto_line!r}"
+    emos_auto, fireos_auto = [{int(n) for n in re.findall(r"\d+", s)} for s in sets]
 
-    for table, auto, flow in (("_WIZARD_STEPS", fireos_auto, "FireOS"),
-                              ("_EMOS_STEPS", emos_auto, "emOS")):
-        steps = jsx[jsx.index(f"const {table} = ["):]
-        steps = steps[:steps.index("\n];")]
-        assert "'install_oww'" in steps, \
-            f"the wake word asset step is missing from the {flow} wizard"
+    for table, auto, flow in (
+        ("_WIZARD_STEPS", fireos_auto, "FireOS"),
+        ("_EMOS_STEPS", emos_auto, "emOS"),
+    ):
+        steps = jsx[jsx.index(f"const {table} = [") :]
+        steps = steps[: steps.index("\n];")]
+        assert (
+            "'install_oww'" in steps
+        ), f"the wake word asset step is missing from the {flow} wizard"
         idx = steps.count("{ id:", 0, steps.index("'install_oww'")) - 1
         assert idx in auto, (
             f"{flow} step {idx} (install_oww) must auto-run — a step that "
             f"needs a click is one a user can skip"
         )
 
-    runner = jsx[jsx.index("async function runInstallOwwAssets"):]
-    runner = runner[:runner.index("\n  async function ", 1)]
-    assert "a.md5" in runner and "throw new Error" in runner, \
-        "the push must verify md5 and fail loudly — a truncated file fails later at dlopen"
+    runner = jsx[jsx.index("async function runInstallOwwAssets") :]
+    runner = runner[: runner.index("\n  async function ", 1)]
+    assert (
+        "a.md5" in runner and "throw new Error" in runner
+    ), "the push must verify md5 and fail loudly — a truncated file fails later at dlopen"
 
 
 def test_turn_end_reports_real_media_state_not_a_hardcoded_idle():
@@ -593,13 +674,19 @@ def test_turn_end_reports_real_media_state_not_a_hardcoded_idle():
     as HA should see it — em_player truth") and was being bypassed.
     """
     from pathlib import Path
+
     src = (Path(__file__).resolve().parent.parent / "em_esphome.py").read_text()
 
-    fn = src[src.index("        finally:\n            # Signal HA that the satellite has finished"):]
-    fn = fn[:fn.index("self._turn_active    = False")]
+    fn = src[
+        src.index(
+            "        finally:\n            # Signal HA that the satellite has finished"
+        ) :
+    ]
+    fn = fn[: fn.index("self._turn_active    = False")]
 
-    assert "self._media_state_msg()" in fn, \
-        "the turn must report the real media state at the end"
+    assert (
+        "self._media_state_msg()" in fn
+    ), "the turn must report the real media state at the end"
     assert "state=MediaPlayerState.IDLE" not in fn, (
         "a hardcoded IDLE at turn end overwrites the feed's PLAYING and "
         "leaves HA showing idle over audible music"
@@ -638,9 +725,7 @@ def test_no_unjustified_hardcoded_media_state():
     # Every module: a state message built outside em_esphome reaches HA too.
     src = _sources.all_source()
 
-    code = "\n".join(
-        l for l in src.splitlines() if not l.lstrip().startswith("#")
-    )
+    code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
     assert "MediaPlayerState.ANNOUNCING" not in code, (
         "HA cannot map ANNOUNCING — it raises KeyError in the entity state "
         "write on every announcement"
@@ -648,14 +733,9 @@ def test_no_unjustified_hardcoded_media_state():
 
     allowed = {"MediaPlayerState.PLAYING"}
     found = [
-        line.strip()
-        for line in src.splitlines()
-        if "state=MediaPlayerState." in line
+        line.strip() for line in src.splitlines() if "state=MediaPlayerState." in line
     ]
-    offenders = [
-        ln for ln in found
-        if not any(a in ln for a in allowed)
-    ]
+    offenders = [ln for ln in found if not any(a in ln for a in allowed)]
     assert not offenders, (
         f"hardcoded media state(s) {offenders} — use _media_state_msg() so the "
         f"entity reflects what em_player is actually doing"
@@ -679,6 +759,7 @@ def test_every_deliberate_cancel_also_flushes_the_speaker():
     one survived the first.
     """
     from pathlib import Path
+
     src = (Path(__file__).resolve().parent.parent / "em_controller.py").read_text()
 
     # Each deliberate cancel site, identified by its log line / guard, paired
@@ -690,7 +771,7 @@ def test_every_deliberate_cancel_also_flushes_the_speaker():
     for marker, window in sites.items():
         i = src.find(marker)
         assert i != -1, f"cancel site {marker!r} not found — has it been renamed?"
-        block = src[i:i + window]
+        block = src[i : i + window]
         assert "cancel_event.set()" in block, f"{marker}: no cancel"
         assert "speaker_flush" in block, (
             f"{marker}: cancels the turn but never flushes the device speaker — "
@@ -706,12 +787,14 @@ def test_supervisor_log_path_matches_between_script_and_controller():
     unexplained, which is the exact failure this feature exists to remove.
     """
     from pathlib import Path
+
     root = Path(__file__).resolve().parent.parent
 
     script = (root / "device_payloads" / "start_server.sh").read_text()
     api = (root / "em_api.py").read_text()
 
     import re
+
     m = re.search(r"^SUP_LOG=(\S+)", script, re.M)
     assert m, "start_server.sh no longer defines SUP_LOG"
     script_path = m.group(1)
@@ -737,19 +820,23 @@ def test_supervisor_log_is_persistent_and_bounded():
     """
     from pathlib import Path
     import re
-    script = (Path(__file__).resolve().parent.parent
-              / "device_payloads" / "start_server.sh").read_text()
+
+    script = (
+        Path(__file__).resolve().parent.parent / "device_payloads" / "start_server.sh"
+    ).read_text()
 
     m = re.search(r"^SUP_LOG=(\S+)", script, re.M)
-    assert m.group(1).startswith("/data/"), \
-        "the supervisor log must live on persistent storage, not /tmp"
+    assert m.group(1).startswith(
+        "/data/"
+    ), "the supervisor log must live on persistent storage, not /tmp"
 
-    fn = script[script.index("sup_log() {"):]
-    fn = fn[:fn.index("\n}")]
+    fn = script[script.index("sup_log() {") :]
+    fn = fn[: fn.index("\n}")]
     trim = fn.index("SUP_MAX")
     append = fn.index('>> "$SUP_LOG"')
-    assert trim < append, \
-        "the size check must run before the append, or a crash-loop outruns it"
+    assert (
+        trim < append
+    ), "the size check must run before the append, or a crash-loop outruns it"
 
 
 def test_a_failed_update_asks_for_the_supervisor_log():
@@ -759,6 +846,7 @@ def test_a_failed_update_asks_for_the_supervisor_log():
     and the connect path must collect it.
     """
     from pathlib import Path
+
     api = (Path(__file__).resolve().parent.parent / "em_api.py").read_text()
 
     # The failure paths live in _run_update_locked, which is what awaits
@@ -770,10 +858,11 @@ def test_a_failed_update_asks_for_the_supervisor_log():
         "the supervisor log"
     )
 
-    connect = api[api.index("async def notify_device_connected"):]
-    connect = connect[:connect.index("\nasync def ", 1)]
-    assert "_collect_supervisor_log" in connect, \
-        "nothing collects the supervisor log when the device comes back"
+    connect = api[api.index("async def notify_device_connected") :]
+    connect = connect[: connect.index("\nasync def ", 1)]
+    assert (
+        "_collect_supervisor_log" in connect
+    ), "nothing collects the supervisor log when the device comes back"
 
 
 def test_data_reconnect_grace_is_per_stream_not_per_frame():
@@ -790,26 +879,31 @@ def test_data_reconnect_grace_is_per_stream_not_per_frame():
     is why the shape is pinned rather than the constant.
     """
     from pathlib import Path
+
     src = (Path(__file__).resolve().parent.parent / "em_controller.py").read_text()
 
-    fn = src[src.index("    async def send_data(self, data: bytes):"):]
-    fn = fn[:fn.index("\n    async def ", 1)]
+    fn = src[src.index("    async def send_data(self, data: bytes):") :]
+    fn = fn[: fn.index("\n    async def ", 1)]
 
     assert "_data_grace_left -=" in fn, (
         "the reconnect grace must be spent down across the stream; a wait that "
         "does not decrement is a per-frame stall"
     )
-    assert "_data_grace_left > 0" in fn, \
-        "send_data must stop waiting once the stream's budget is exhausted"
+    assert (
+        "_data_grace_left > 0" in fn
+    ), "send_data must stop waiting once the stream's budget is exhausted"
 
     # Every path that streams audio has to arm it, or the budget is stale from
     # whatever ran last.
-    for stream_fn in ("async def stream_speaker(self",
-                      "async def stream_speaker_chunks(self"):
-        body = src[src.index(stream_fn):]
-        body = body[:body.index("\n    async def ", 1)]
-        assert "begin_data_stream()" in body, \
-            f"{stream_fn} does not arm the reconnect grace"
+    for stream_fn in (
+        "async def stream_speaker(self",
+        "async def stream_speaker_chunks(self",
+    ):
+        body = src[src.index(stream_fn) :]
+        body = body[: body.index("\n    async def ", 1)]
+        assert (
+            "begin_data_stream()" in body
+        ), f"{stream_fn} does not arm the reconnect grace"
 
 
 def test_support_bundle_attributes_metrics_to_a_device():
@@ -856,10 +950,11 @@ def test_the_music_feed_reads_its_lead_per_chunk():
     a no-op with every test still passing.
     """
     feed = _sources.def_source("em_player._feed")
-    pacing = re.search(r"ahead = sent / BYTES_PER_SEC.*?await asyncio\.sleep\(([^)]*)\)",
-                       feed, re.S)
+    pacing = re.search(
+        r"ahead = sent / BYTES_PER_SEC.*?await asyncio\.sleep\(([^)]*)\)", feed, re.S
+    )
     assert pacing, "could not find the feed's pacing sleep"
-    window = feed[:pacing.end()]
+    window = feed[: pacing.end()]
     assert "self.lead_s" in window, (
         "the pacing loop must read self.lead_s, not the LEAD_S constant — "
         "otherwise lowering the lead for a voice turn does nothing"
@@ -873,9 +968,11 @@ def _fn_body(src: str, name: str) -> str:
     after, and grew when the next function moved to another module: a guard
     on _fetch_emos_payload passed on a check that lived in the function after
     it (#921)."""
-    found = [n for n in ast.parse(src).body
-             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-             and n.name == name]
+    found = [
+        n
+        for n in ast.parse(src).body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name
+    ]
     assert len(found) == 1, f"{name}: {len(found)} top-level definitions"
     return ast.get_source_segment(src, found[0])
 
@@ -903,7 +1000,7 @@ def _js_fn_body(src: str, name: str) -> str:
         elif src[i] == "}":
             depth -= 1
             if depth == 0:
-                return src[start:i + 1]
+                return src[start : i + 1]
     raise AssertionError(f"function {name} is never closed")
 
 
@@ -917,7 +1014,7 @@ def test_firmware_transfer_is_verified_by_md5_not_by_an_exit_status():
     its old version. Shipping an unverified binary therefore costs a reboot and
     a rollback to learn nothing at all.
     """
-    fn  = _sources.def_source("stream_file")
+    fn = _sources.def_source("stream_file")
 
     assert "hashlib.md5(data).hexdigest()" in fn, (
         "the transfer must hash what it actually sent — hashing anything else "
@@ -928,16 +1025,16 @@ def test_firmware_transfer_is_verified_by_md5_not_by_an_exit_status():
         "transfer leaves the destination as it was"
     )
     # The rename must be conditional on the comparison, not merely nearby.
-    assert re.search(r"case .*GOT.*in .*want.*mv ", fn, re.S), (
-        "the rename must be guarded by the md5 comparison"
-    )
+    assert re.search(
+        r"case .*GOT.*in .*want.*mv ", fn, re.S
+    ), "the rename must be guarded by the md5 comparison"
     assert "rm -f" in fn, "a failed verification must remove the .part"
 
     # Anchored on the CALL, not the function body: the docstring explains why
     # require_verify is set, so a body-wide search passes on the prose alone
     # while the argument is gone (caught by reintroducing exactly that).
     slot = _sources.def_source("_stream_binary_to_slot")
-    call = slot[slot.index("return await em_shell.stream_file"):]
+    call = slot[slot.index("return await em_shell.stream_file") :]
     assert "require_verify=True" in call, (
         "firmware is the payload where an unverifiable transfer must fail "
         "rather than proceed — it is the one we are about to boot"
@@ -951,14 +1048,12 @@ def test_a_corrupt_binary_never_reaches_the_symlink_flip():
     after it has taken a reboot and a rollback to tell us the same thing.
     """
     src = (CONTROLLER / "em_ota.py").read_text()
-    ota = src[src.index("_stream_binary_to_slot(live, binary"):]
-    ota = ota[:ota.index("_monitor_reconnect")]
+    ota = src[src.index("_stream_binary_to_slot(live, binary") :]
+    ota = ota[: ota.index("_monitor_reconnect")]
 
     guard = ota.index("if not ok:")
-    flip  = ota.index("ln -sf")
-    assert guard < flip, (
-        "the transfer result must be checked BEFORE the symlink flip"
-    )
+    flip = ota.index("ln -sf")
+    assert guard < flip, "the transfer result must be checked BEFORE the symlink flip"
     assert "return" in ota[guard:flip], (
         "a failed transfer must return, not fall through to the flip — "
         "otherwise verification changes the log message and nothing else"
@@ -977,19 +1072,21 @@ def test_ota_checks_free_space_before_writing_anything():
     df we have not seen.
     """
     src = (CONTROLLER / "em_ota.py").read_text()
-    ota = src[src.index("inactive_slot = "):src.index("_stream_binary_to_slot(live, binary")]
+    ota = src[
+        src.index("inactive_slot = ") : src.index("_stream_binary_to_slot(live, binary")
+    ]
 
-    assert "parse_free_mb" in ota, (
-        "free space must be read with parse_free_mb, never an awk field index"
-    )
+    assert (
+        "parse_free_mb" in ota
+    ), "free space must be read with parse_free_mb, never an awk field index"
     # Comments are stripped first: the trap is worth explaining in a comment,
     # and a test that reads its own warning as the bug is a test that can only
     # be silenced by deleting the explanation.
     code = "\n".join(l for l in ota.splitlines() if not l.lstrip().startswith("#"))
     assert "awk" not in code, "an awk field index reads the percentage on these devices"
-    assert "free_mb is not None and free_mb <" in ota, (
-        "an unknown reading must not be compared as if it were a number"
-    )
+    assert (
+        "free_mb is not None and free_mb <" in ota
+    ), "an unknown reading must not be compared as if it were a number"
 
 
 def test_a_transfer_never_deletes_the_destination_before_sending():
@@ -1003,7 +1100,7 @@ def test_a_transfer_never_deletes_the_destination_before_sending():
     The `.part` discipline only protects `dest` from a CORRUPT transfer. It
     cannot protect it from being removed before the transfer starts.
     """
-    fn  = _sources.def_source("stream_file")
+    fn = _sources.def_source("stream_file")
     code = "\n".join(l for l in fn.splitlines() if not l.lstrip().startswith("#"))
 
     assert "rm -f {dest}" not in code, (
@@ -1011,9 +1108,9 @@ def test_a_transfer_never_deletes_the_destination_before_sending():
         "transfer that fails early"
     )
     # The .part cleanup on a bad md5 must survive — that one is load-bearing.
-    assert "rm -f {landing}" in code or "rm -f {landing};" in code, (
-        "a failed verification must still remove the .part"
-    )
+    assert (
+        "rm -f {landing}" in code or "rm -f {landing};" in code
+    ), "a failed verification must still remove the .part"
 
 
 def test_a_failed_transfer_says_which_stage_it_failed_at():
@@ -1037,28 +1134,28 @@ def test_a_failed_transfer_says_which_stage_it_failed_at():
 
     fn = _sources.def_source("stream_file")
     for stage in ("shell", "decoder", "send", "verify", "corrupt"):
-        assert f'_transfer_failed("{stage}"' in fn, (
-            f"the {stage} failure must be distinguishable from the others"
-        )
+        assert (
+            f'_transfer_failed("{stage}"' in fn
+        ), f"the {stage} failure must be distinguishable from the others"
 
-    assert "if DETECT_MARKER not in detect_buf" in fn, (
-        "a silent shell must report as a link problem, not a missing decoder"
-    )
+    assert (
+        "if DETECT_MARKER not in detect_buf" in fn
+    ), "a silent shell must report as a link problem, not a missing decoder"
 
     # The OTA message must carry the stage through rather than re-flattening it.
     api = (CONTROLLER / "em_ota.py").read_text()
-    ota = api[api.index("_stream_binary_to_slot(live, binary"):]
-    ota = ota[:ota.index("_monitor_reconnect")]
-    assert "{ok}" in ota, (
-        "the update failure message must name the stage the transfer reached"
-    )
+    ota = api[api.index("_stream_binary_to_slot(live, binary") :]
+    ota = ota[: ota.index("_monitor_reconnect")]
+    assert (
+        "{ok}" in ota
+    ), "the update failure message must name the stage the transfer reached"
     # Comments stripped first, for the reason the free-space test gives: the
     # old wording is worth naming in a comment, and a test that reads its own
     # explanation as the bug can only be silenced by deleting the explanation.
     ota_code = "\n".join(l for l in ota.splitlines() if not l.lstrip().startswith("#"))
-    assert "failed or did not verify" not in ota_code, (
-        "the flattened message is what made #121 unreadable"
-    )
+    assert (
+        "failed or did not verify" not in ota_code
+    ), "the flattened message is what made #121 unreadable"
 
 
 def test_push_log_callers_do_not_also_persist():
@@ -1087,7 +1184,7 @@ def test_push_log_callers_do_not_also_persist():
             if "em_events.push_log(" not in line or "async def" in line:
                 continue
             # The persist would sit just above the push, in the same block.
-            window = lines[max(0, i - 6):i]
+            window = lines[max(0, i - 6) : i]
             offenders = [w.strip() for w in window if "db.log_device(" in w]
             assert not offenders, (
                 f"{name}:{i+1} calls em_events.push_log, which already persists, "
@@ -1104,6 +1201,7 @@ def test_push_log_callers_do_not_also_persist():
 # collect and a reboot clears. Diagnosing it needed a shell session on their
 # hardware. These pin the three links in the chain that fixes it, because
 # each fails silently — a missing field just looks like an old device.
+
 
 def test_register_handler_stores_ambient_light_status():
     """The controller must keep what the device reported at registration."""
@@ -1142,20 +1240,25 @@ def test_ingress_login_passes_the_real_deployment_flag_and_peer_address():
     inputs.
     """
     src = _sources.def_source("_post_ingress_login")
-    call = re.search(
-        r"em_ingressauth\.decide\((.*?)\)\s*\n", src, re.S)
+    call = re.search(r"em_ingressauth\.decide\((.*?)\)\s*\n", src, re.S)
     assert call, "_post_ingress_login no longer calls em_ingressauth.decide"
     args = call.group(1)
 
-    assert "ingress_only=em_ingressauth.INGRESS_ONLY" in args, (
-        "ingress_only must be em_ingressauth.INGRESS_ONLY, never a literal")
+    assert (
+        "ingress_only=em_ingressauth.INGRESS_ONLY" in args
+    ), "ingress_only must be em_ingressauth.INGRESS_ONLY, never a literal"
     # ...and that flag is the deployment's, read from the environment once.
-    flag = re.search(r"^INGRESS_ONLY = (.*)$",
-                     _sources.source(CONTROLLER / "em_ingressauth.py"), re.M)
-    assert flag and "ECHOMUSE_HOME_ASSISTANT_INGRESS" in flag.group(1), (
-        "INGRESS_ONLY must come from the add-on's environment")
-    assert "remote=request.remote" in args, (
-        "remote must be the live peer address, never a literal")
+    flag = re.search(
+        r"^INGRESS_ONLY = (.*)$",
+        _sources.source(CONTROLLER / "em_ingressauth.py"),
+        re.M,
+    )
+    assert flag and "ECHOMUSE_HOME_ASSISTANT_INGRESS" in flag.group(
+        1
+    ), "INGRESS_ONLY must come from the add-on's environment"
+    assert (
+        "remote=request.remote" in args
+    ), "remote must be the live peer address, never a literal"
     for literal in ("ingress_only=True", "remote=em_ingressauth.INGRESS_GATEWAY_IP"):
         assert literal not in args, f"{literal} defeats the check entirely"
 
@@ -1174,8 +1277,9 @@ def test_ingress_login_is_the_only_reader_of_the_remote_user_headers():
         text = path.read_text()
         if re.search(r'headers(?:\.get\(|\[)\s*["\']X-Remote-User', text):
             readers.append(path.name)
-    assert readers == ["em_routes_auth.py"], (
-        f"X-Remote-User headers read in {readers} — expected em_routes_auth.py only")
+    assert readers == [
+        "em_routes_auth.py"
+    ], f"X-Remote-User headers read in {readers} — expected em_routes_auth.py only"
 
 
 def test_addon_panel_stays_admin_only():
@@ -1185,8 +1289,9 @@ def test_addon_panel_stays_admin_only():
     config.yaml has to be deliberate.
     """
     cfg = (CONTROLLER / "config.yaml").read_text()
-    assert re.search(r"^panel_admin:\s*true\s*$", cfg, re.M), (
-        "config.yaml must set panel_admin: true explicitly")
+    assert re.search(
+        r"^panel_admin:\s*true\s*$", cfg, re.M
+    ), "config.yaml must set panel_admin: true explicitly"
 
 
 def test_recordings_and_transcripts_are_admin_only():
@@ -1205,16 +1310,17 @@ def test_recordings_and_transcripts_are_admin_only():
     anyone who opens the network tab.
     """
     _, audio = _sources.find_def("_get_turn_audio")
-    assert [ast.unparse(d) for d in audio.decorator_list] == ["auth.require_admin"], (
-        "the utterance audio route must be admin-only")
+    assert [ast.unparse(d) for d in audio.decorator_list] == [
+        "auth.require_admin"
+    ], "the utterance audio route must be admin-only"
 
     turns = _sources.def_source("_get_device_turns")
-    assert "_redact_turns_for" in turns, (
-        "_get_device_turns must strip transcripts for non-admin sessions")
+    assert (
+        "_redact_turns_for" in turns
+    ), "_get_device_turns must strip transcripts for non-admin sessions"
 
     redact = _sources.def_source("_redact_turns_for")
-    assert '"stt_text"' in redact, (
-        "_redact_turns_for must remove stt_text")
+    assert '"stt_text"' in redact, "_redact_turns_for must remove stt_text"
 
 
 def test_role_changes_refuse_to_strand_the_install():
@@ -1229,7 +1335,6 @@ def test_role_changes_refuse_to_strand_the_install():
 
     assert "admin_count" in body, "must count admins before demoting one"
     assert "last_admin" in body, "must refuse to remove the final admin"
-
 
 
 def test_addon_options_are_wired_end_to_end():
@@ -1256,8 +1361,7 @@ def test_addon_options_are_wired_end_to_end():
     import yaml
 
     config = yaml.safe_load((CONTROLLER / "config.yaml").read_text())
-    translations = yaml.safe_load(
-        (CONTROLLER / "translations/en.yaml").read_text())
+    translations = yaml.safe_load((CONTROLLER / "translations/en.yaml").read_text())
 
     options = set(config["options"])
     schema = set(config["schema"])
@@ -1268,19 +1372,23 @@ def test_addon_options_are_wired_end_to_end():
     assert block, "em_start.py no longer defines OPTION_ENV_VARS"
     mapped = set(re.findall(r'"(\w+)"\s*:', block.group(1)))
 
-    assert not options - schema, \
-        f"options with no schema entry: {sorted(options - schema)}"
-    assert not schema - options, \
-        f"schema entries with no default: {sorted(schema - options)}"
-    assert not options - translated, \
-        f"options with no translation: {sorted(options - translated)}"
+    assert (
+        not options - schema
+    ), f"options with no schema entry: {sorted(options - schema)}"
+    assert (
+        not schema - options
+    ), f"schema entries with no default: {sorted(schema - options)}"
+    assert (
+        not options - translated
+    ), f"options with no translation: {sorted(options - translated)}"
     assert not options - mapped, (
         f"options not in em_start.py's OPTION_ENV_VARS: "
         f"{sorted(options - mapped)} — Supervisor would accept and store "
-        f"these and the controller would never see them")
+        f"these and the controller would never see them"
+    )
     assert not mapped - options, (
-        f"OPTION_ENV_VARS entries with no add-on option: "
-        f"{sorted(mapped - options)}")
+        f"OPTION_ENV_VARS entries with no add-on option: " f"{sorted(mapped - options)}"
+    )
 
 
 def test_debug_env_var_is_not_truthy_for_zero():
@@ -1297,14 +1405,18 @@ def test_debug_env_var_is_not_truthy_for_zero():
     """
     src = (CONTROLLER / "em_controller.py").read_text()
     assert not re.search(r'if\s+os\.environ\.get\(\s*"DEBUG"\s*\)\s*else', src), (
-        "DEBUG is being read as a bare truthiness test — the string \"0\" "
-        "that em_start.py writes for a false option is truthy")
+        'DEBUG is being read as a bare truthiness test — the string "0" '
+        "that em_start.py writes for a false option is truthy"
+    )
 
-    match = re.search(r'^DEBUG\s*=\s*(.+)$', src, re.M)
+    match = re.search(r"^DEBUG\s*=\s*(.+)$", src, re.M)
     assert match, "em_controller.py no longer defines a DEBUG flag"
     assert '"0"' in match.group(1) and '"1"' in match.group(1), (
-        "DEBUG must default to \"0\" and test for \"1\", the convention "
-        "REQUIRE_DEVICE_TLS already uses")
+        'DEBUG must default to "0" and test for "1", the convention '
+        "REQUIRE_DEVICE_TLS already uses"
+    )
+
+
 def test_wake_word_phrase_is_sent_and_matches_what_we_advertise():
     """
     Home Assistant's voice satellite setup arms an interceptor for the next
@@ -1329,17 +1441,20 @@ def test_wake_word_phrase_is_sent_and_matches_what_we_advertise():
     assert start, "the pipeline-start VoiceAssistantRequest was not found"
     assert "wake_word_phrase" in start.group(1), (
         "VoiceAssistantRequest must carry wake_word_phrase — without it HA "
-        "refuses the run and the satellite setup dialog never advances")
+        "refuses the run and the satellite setup dialog never advances"
+    )
 
     advertised = re.search(r"api_pb2\.VoiceAssistantWakeWord\((.*?)\)", src, re.S)
     assert advertised, "VoiceAssistantWakeWord advertisement not found"
     assert "self.oww_model_info.name" in advertised.group(1), (
         "the advertised wake_word must come from the connection metadata, "
-        "the same source as the phrase we send")
+        "the same source as the phrase we send"
+    )
 
-    assert 'satellite.oww_model_info.name' in src, (
+    assert "satellite.oww_model_info.name" in src, (
         "the phrase must use the same connection metadata — a second spelling "
-        "is how it drifts from what we advertised")
+        "is how it drifts from what we advertised"
+    )
 
 
 def test_button_turns_claim_no_wake_word():
@@ -1354,7 +1469,8 @@ def test_button_turns_claim_no_wake_word():
     assert gate, "the wake_word_phrase gate was not found"
     assert 'trigger_label.startswith("wakeword")' in gate.group(1), (
         "the phrase must be gated on the trigger being a wake word, so button "
-        "turns send \"\"")
+        'turns send ""'
+    )
 
 
 def test_a_run_ha_never_started_ends_the_turn():
@@ -1383,27 +1499,31 @@ def test_a_run_ha_never_started_ends_the_turn():
 
     assert "VOICE_ASSISTANT_RUN_START" in src, (
         "RUN_START must be handled — its absence is what identifies a "
-        "RUN_END that HA emitted without running a pipeline")
-    assert "_run_started" in src and "_ha_never_started" in src, \
-        "no state tracks whether HA ever started the run it just ended"
-    assert '"pipeline_refused"' in src, \
-        "an HA run that never started must not be recorded as no_speech"
+        "RUN_END that HA emitted without running a pipeline"
+    )
+    assert (
+        "_run_started" in src and "_ha_never_started" in src
+    ), "no state tracks whether HA ever started the run it just ended"
+    assert (
+        '"pipeline_refused"' in src
+    ), "an HA run that never started must not be recorded as no_speech"
 
-    handler = re.search(
-        r"VOICE_ASSISTANT_RUN_END:(.*?)elif event_type", src, re.S)
+    handler = re.search(r"VOICE_ASSISTANT_RUN_END:(.*?)elif event_type", src, re.S)
     assert handler, "RUN_END handler not found"
     body = handler.group(1)
 
     assert "if not self._run_started:" in body, (
         "RUN_END must check whether a RUN_START was ever seen before "
-        "treating itself as terminal")
+        "treating itself as terminal"
+    )
 
     # The premature/duplicate branch must stay gated on INTENT_END — acting
     # on a mid-turn RUN_END would cut genuine turns short.
     premature = body.split("if not self._run_started:")[1]
     assert "self._intent_ended or self._turn_cancelled" in premature, (
         "a RUN_END that DID follow a RUN_START must stay non-terminal until "
-        "INTENT_END — this is the guard against cutting genuine turns")
+        "INTENT_END — this is the guard against cutting genuine turns"
+    )
 
 
 def test_entity_names_do_not_repeat_the_device_label():
@@ -1427,16 +1547,17 @@ def test_entity_names_do_not_repeat_the_device_label():
     """
     src = (CONTROLLER / "em_esphome.py").read_text()
 
-    block = re.search(r"ListEntitiesMediaPlayerResponse\((.*?)ListEntitiesDoneResponse",
-                      src, re.S)
+    block = re.search(
+        r"ListEntitiesMediaPlayerResponse\((.*?)ListEntitiesDoneResponse", src, re.S
+    )
     assert block, "the ListEntities block was not found"
     body = block.group(1)
 
     assert "self.label" not in body, (
         "an entity name must not include the device label — HA already "
-        "prefixes the device name, so it renders twice")
-    assert 'name=""' in body, \
-        "the media player should take the device's own name"
+        "prefixes the device name, so it renders twice"
+    )
+    assert 'name=""' in body, "the media player should take the device's own name"
 
 
 def test_asset_sync_does_not_shadow_its_accumulator():
@@ -1461,7 +1582,8 @@ def test_asset_sync_does_not_shadow_its_accumulator():
     assert "pushed.append(" in body, "nothing accumulates installed names"
     assert not re.search(r"pushed\s*=\s*await\s+(em_shell\.)?stream_file", body), (
         "the transfer result must not be assigned to `pushed` — that shadows "
-        "the accumulator and the append raises AttributeError")
+        "the accumulator and the append raises AttributeError"
+    )
 
 
 def test_a_new_wake_word_is_installed_before_the_device_is_told_about_it():
@@ -1490,7 +1612,9 @@ def test_a_new_wake_word_is_installed_before_the_device_is_told_about_it():
         "the model must be held back BEFORE the config is pushed, or the "
         "device is told to use a model it does not have"
     )
-    assert "em_oww_sync.install_then_switch" in body, "nothing installs the pending model"
+    assert (
+        "em_oww_sync.install_then_switch" in body
+    ), "nothing installs the pending model"
 
 
 def test_only_devices_that_score_locally_are_held_back():
@@ -1505,12 +1629,12 @@ def test_only_devices_that_score_locally_are_held_back():
     """
     body = _sources.def_source("hold_back_model")
 
-    assert "oww_shadow_capable" in body, (
-        "a device that cannot score locally must not be held back"
-    )
-    assert body.count("MODE_OFF") >= 2, (
-        "both the current and the incoming mode must be consulted"
-    )
+    assert (
+        "oww_shadow_capable" in body
+    ), "a device that cannot score locally must not be held back"
+    assert (
+        body.count("MODE_OFF") >= 2
+    ), "both the current and the incoming mode must be consulted"
     assert 'effective.get("owwOnDevice"' in body, (
         "the incoming mode is not read — a save that turns on-device scoring "
         "on while changing the wake word would slip through"
@@ -1528,14 +1652,14 @@ def test_a_failed_install_leaves_the_device_on_its_old_wake_word():
     # The failure BRANCH itself, not the span up to the switch — that span
     # contains other returns, which is how the first version of this test
     # passed against a branch that fell straight through.
-    branch = re.search(r'\n    if not result\.get\("ok"\):\n(.*?)\n    (?=\S)',
-                       body, re.S)
+    branch = re.search(
+        r'\n    if not result\.get\("ok"\):\n(.*?)\n    (?=\S)', body, re.S
+    )
     assert branch, "the failure branch is gone"
     assert re.search(r"^        return\s*$", branch.group(1), re.M), (
         "a failed install must return, not fall through into switching the "
         "device onto a model it does not have"
     )
-
 
 
 def test_an_announcement_clears_the_cancel_flag_before_playing():
@@ -1555,8 +1679,9 @@ def test_an_announcement_clears_the_cancel_flag_before_playing():
     claim on it.
     """
     src = (CONTROLLER / "em_controller.py").read_text()
-    fn = re.search(r"async def _standalone_play\(.*?\n(?=        async def )",
-                   src, re.S)
+    fn = re.search(
+        r"async def _standalone_play\(.*?\n(?=        async def )", src, re.S
+    )
     assert fn, "_standalone_play not found"
     body = fn.group(0)
 
@@ -1578,13 +1703,14 @@ def test_an_announcement_reports_whether_it_actually_played():
     would make the reply decorative.
     """
     src = (CONTROLLER / "em_controller.py").read_text()
-    fn = re.search(r"async def _standalone_play\(.*?\n(?=        async def )",
-                   src, re.S)
+    fn = re.search(
+        r"async def _standalone_play\(.*?\n(?=        async def )", src, re.S
+    )
     body = fn.group(0)
     assert "-> bool" in body, "_standalone_play must report whether it played"
-    assert re.search(r"return not .*cancel_event\.is_set\(\)", body), (
-        "the return value must reflect whether playback was cancelled"
-    )
+    assert re.search(
+        r"return not .*cancel_event\.is_set\(\)", body
+    ), "the return value must reflect whether playback was cancelled"
 
 
 def test_the_speaking_flag_and_its_dashboard_push_cannot_drift():
@@ -1601,12 +1727,13 @@ def test_the_speaking_flag_and_its_dashboard_push_cannot_drift():
     """
     src = (CONTROLLER / "em_controller.py").read_text()
 
-    setter = re.search(r"async def _set_speaking\(.*?\n(?=    async def |    def )",
-                       src, re.S)
-    assert setter, "_set_speaking not found"
-    assert "_push_device_state(self)" in setter.group(0), (
-        "the setter must push — that is the whole reason it exists"
+    setter = re.search(
+        r"async def _set_speaking\(.*?\n(?=    async def |    def )", src, re.S
     )
+    assert setter, "_set_speaking not found"
+    assert "_push_device_state(self)" in setter.group(
+        0
+    ), "the setter must push — that is the whole reason it exists"
 
     # Every other write is a bug. __init__'s default and the setter's own
     # assignment are the two legitimate ones.
@@ -1633,8 +1760,9 @@ def test_speaking_clears_on_device_confirmation_not_on_the_socket_write():
     src = (CONTROLLER / "em_controller.py").read_text()
 
     for fn_name in ("stream_speaker", "stream_speaker_chunks"):
-        fn = re.search(rf"async def {fn_name}\(.*?\n(?=    async def |    def )",
-                       src, re.S)
+        fn = re.search(
+            rf"async def {fn_name}\(.*?\n(?=    async def |    def )", src, re.S
+        )
         assert fn, f"{fn_name} not found"
         assert "_set_speaking(False)" not in fn.group(0), (
             f"{fn_name} clears speaking when the socket write finishes, not "
@@ -1656,8 +1784,9 @@ def test_speaking_and_thinking_are_mutually_exclusive():
     reads as if the device started thinking again mid-response.
     """
     src = (CONTROLLER / "em_controller.py").read_text()
-    setter = re.search(r"async def _set_speaking\(.*?\n(?=    async def |    def )",
-                       src, re.S).group(0)
+    setter = re.search(
+        r"async def _set_speaking\(.*?\n(?=    async def |    def )", src, re.S
+    ).group(0)
     assert "self.thinking = False" in setter, (
         "starting to speak must clear thinking, or the tile falls back to "
         "Thinking when speaking ends"
@@ -1672,8 +1801,9 @@ def test_the_speaking_push_cannot_fail_a_speaker_stream():
     later. The flag assignment is synchronous and happens either way.
     """
     src = (CONTROLLER / "em_controller.py").read_text()
-    setter = re.search(r"async def _set_speaking\(.*?\n(?=    async def |    def )",
-                       src, re.S).group(0)
+    setter = re.search(
+        r"async def _set_speaking\(.*?\n(?=    async def |    def )", src, re.S
+    ).group(0)
     assign = setter.find("self.speaking = value")
     push = setter.find("_push_device_state(self)")
     assert assign < push, "the flag must be set before the push is attempted"
@@ -1693,6 +1823,7 @@ def test_the_speaking_push_cannot_fail_a_speaker_stream():
 # asyncio never even logs "Task exception was never retrieved". The device
 # meanwhile scores wake words and reports them into a dead loop, so it looks
 # healthy from every side.
+
 
 def test_the_wake_listener_is_started_through_its_supervisor():
     """
@@ -1718,8 +1849,8 @@ def test_the_wake_listener_is_started_through_its_supervisor():
 def test_the_supervisor_attaches_a_done_callback():
     """Without one the task ends and no code ever learns that it did."""
     src = (CONTROLLER / "em_controller.py").read_text()
-    body = src[src.index("def _supervise_wake_listener"):]
-    body = body[:body.index("async def wake_word_listener")]
+    body = src[src.index("def _supervise_wake_listener") :]
+    body = body[: body.index("async def wake_word_listener")]
     assert "add_done_callback" in body
     # A restart that ignores cancellation would fight ordinary teardown.
     assert "cancelled()" in body
@@ -1750,8 +1881,11 @@ def test_a_stuck_pause_can_be_recovered():
     src = (CONTROLLER / "em_controller.py").read_text()
     assert "OWW_PAUSE_STUCK_S" in src
     assert "oww_paused_since" in src
-    stuck = src[src.index("oww_paused stuck for") - 2000:
-                src.index("oww_paused stuck for") + 500]
+    stuck = src[
+        src.index("oww_paused stuck for")
+        - 2000 : src.index("oww_paused stuck for")
+        + 500
+    ]
     assert "voice_lock.locked()" in stuck, (
         "the stuck-pause recovery must check that no turn holds the lock — "
         "time alone would cut a long but healthy turn"
@@ -1770,7 +1904,7 @@ def test_deleting_a_device_bounces_its_link():
     (`control.go` Run), and a close issued first races that redial against
     the delete — it re-registers into the row being deleted and survives.
     """
-    fn  = _sources.def_source("_delete_device")
+    fn = _sources.def_source("_delete_device")
     # Comments stripped: this one explains the ordering it is pinning, and a
     # test that reads its own explanation as the code can be satisfied by
     # prose alone.
@@ -1800,7 +1934,7 @@ def test_deleting_a_device_drops_its_satellite():
     The BT proxy already had this (`em_ble_proxy.reconcile`); the satellite
     did not.
     """
-    fn  = _sources.def_source("_delete_device")
+    fn = _sources.def_source("_delete_device")
     code = "\n".join(l for l in fn.splitlines() if not l.lstrip().startswith("#"))
 
     assert "em_esphome.device_deleted(device_id)" in code, (
@@ -1825,6 +1959,7 @@ def test_deleting_a_device_drops_its_satellite():
 # the ESPHome port-collision incident presented as ("the wake word stopped
 # working", while every part of it worked).
 
+
 def test_a_dropped_turn_surfaces_its_outcome_to_the_ring():
     """
     `last_turn_outcome` is what `_leds_turn_end` reads. A completed turn sets
@@ -1832,7 +1967,7 @@ def test_a_dropped_turn_surfaces_its_outcome_to_the_ring():
     and blacks the ring with no signal at all.
     """
     src = (CONTROLLER / "em_esphome.py").read_text()
-    fn  = _fn_body(src, "_record_dropped_turn")
+    fn = _fn_body(src, "_record_dropped_turn")
     assert "device.last_turn_outcome" in fn, (
         "a turn dropped for no HA must tell the ring cleanup why, or the "
         "user gets a ring that flashes and clears"
@@ -1853,17 +1988,17 @@ def test_a_device_with_no_ha_stands_down_before_it_can_claim():
     the claim taken.
     """
     src = (CONTROLLER / "em_controller.py").read_text()
-    body = src[src.index("async def wake_word_listener"):]
+    body = src[src.index("async def wake_word_listener") :]
     serves = body.index("can_serve_turn")
-    claim  = body.index("await _claim_wake(")
+    claim = body.index("await _claim_wake(")
     assert serves < claim, (
         "the capability check must come BEFORE the arbitration claim — "
         "after it, the unlinked device has already taken the window"
     )
     guard = body[serves:claim]
-    assert "if serves and" in guard, (
-        "the claim itself must be gated on it, not merely preceded by it"
-    )
+    assert (
+        "if serves and" in guard
+    ), "the claim itself must be gated on it, not merely preceded by it"
 
 
 def test_the_button_path_stands_down_the_same_way():
@@ -1886,9 +2021,9 @@ def test_the_no_ha_cue_does_not_depend_on_another_device_losing():
     the multi-device fleets where the confusion is worst.
     """
     src = (CONTROLLER / "em_controller.py").read_text()
-    body = src[src.index("async def wake_word_listener"):]
+    body = src[src.index("async def wake_word_listener") :]
     stand = body.index("if not serves:")
-    tail  = body[stand:stand + 2000]
+    tail = body[stand : stand + 2000]
     assert "_leds_turn_end(device)" in tail, "no cue on the stand-down path"
     assert "record_dropped_wake" in tail, (
         "the wake must still reach the activity history, or an HA outage is "
@@ -1924,15 +2059,15 @@ def test_a_barge_that_stands_down_for_no_ha_leaves_the_same_trace_as_a_wake():
             f"{name} has the decision inlined again — two copies of a "
             f"stand-down rule can disagree about what leaves a record"
         )
-        tail = fn[fn.index("em_barge.cede("):]
+        tail = fn[fn.index("em_barge.cede(") :]
         assert "verdict.no_ha:" in tail, (
             f"{name} must branch on the no-HA reason separately from losing "
             f"arbitration"
         )
-        no_ha = tail[tail.index("verdict.no_ha:"):]
-        assert "device.barge_no_ha" in no_ha, (
-            f"{name}: the no-HA reason must reach the turn loop's ceded branch"
-        )
+        no_ha = tail[tail.index("verdict.no_ha:") :]
+        assert (
+            "device.barge_no_ha" in no_ha
+        ), f"{name}: the no-HA reason must reach the turn loop's ceded branch"
         assert "record_dropped_wake" not in no_ha, (
             f"{name}: recorded here, the row is overwritten by the interrupted "
             f"turn's _persist_turn before _leds_turn_end can read it"
@@ -1950,9 +2085,10 @@ def test_every_outcome_cue_names_a_scene_key_that_exists():
     that is already the unusual one.
     """
     import em_scenes
+
     src = (CONTROLLER / "em_controller.py").read_text()
-    block = src[src.index("_OUTCOME_ANIM = {"):]
-    block = block[:block.index("\n}")]
+    block = src[src.index("_OUTCOME_ANIM = {") :]
+    block = block[: block.index("\n}")]
     keys = re.findall(r':\s*"(\w+_anim)"', block)
     assert keys, "no cue mappings found — did _OUTCOME_ANIM move?"
     scene = em_scenes.resolve({})
@@ -1998,14 +2134,12 @@ def test_firmware_updates_are_serialised_across_the_whole_controller():
     # is decorative: the transfer is the expensive part, and it all lives
     # inside _run_update_locked.
     acquire = body.index("queue.acquire()")
-    work    = body.index("_run_update_locked")
-    assert acquire < work, (
-        "the lock must be acquired BEFORE the update work starts"
-    )
+    work = body.index("_run_update_locked")
+    assert acquire < work, "the lock must be acquired BEFORE the update work starts"
     inner = _strip_prose(_sources.def_source("em_ota._run_update_locked"))
-    assert "_stream_binary_to_slot" in inner, (
-        "the transfer must live inside the locked half"
-    )
+    assert (
+        "_stream_binary_to_slot" in inner
+    ), "the transfer must live inside the locked half"
     assert not re.search(r"\bqueue\b", inner), (
         "the locked half must not touch the lock — one owner, or a release "
         "on a path that never acquired frees somebody else's turn"
@@ -2021,7 +2155,7 @@ def test_firmware_updates_are_serialised_across_the_whole_controller():
     # Released in the finally, not on the success path — an update that raises
     # would otherwise hold the lock for the life of the process and no device
     # could ever be updated again without a restart.
-    tail = body[body.rindex("finally:"):]
+    tail = body[body.rindex("finally:") :]
     assert "queue.release()" in tail, (
         "release the lock in the finally — a failed update must not strand "
         "every later one behind it"
@@ -2041,7 +2175,7 @@ def test_a_queued_update_is_reported_as_queued_not_as_in_progress():
     )
 
     body = _strip_prose(_sources.def_source("em_ota.run_update"))
-    add     = body.index("queued.add")
+    add = body.index("queued.add")
     acquire = body.index("queue.acquire()")
     assert add < acquire, "a device must be marked queued BEFORE it waits"
     assert "queued.discard" in body, (
@@ -2050,9 +2184,9 @@ def test_a_queued_update_is_reported_as_queued_not_as_in_progress():
     )
 
     jsx = (CONTROLLER / "static" / "dashboard.jsx").read_text()
-    assert "update_queued" in jsx, (
-        "the fleet deploy modal must render the queued state it is sent"
-    )
+    assert (
+        "update_queued" in jsx
+    ), "the fleet deploy modal must render the queued state it is sent"
 
 
 def test_ble_adverts_leave_the_control_plane_only_when_negotiated():
@@ -2080,13 +2214,13 @@ def test_ble_adverts_leave_the_control_plane_only_when_negotiated():
     # the field itself is gone.
     ack = re.search(r"send_control\(\{[^}]*\"type\": \"ack\"[^}]*\}", src, re.S)
     assert ack, "could not find the ack send_control call — did it move?"
-    assert "CONTROLLER_FEATURES" in ack.group(0), (
-        "the ack must carry the controller's feature list"
-    )
+    assert "CONTROLLER_FEATURES" in ack.group(
+        0
+    ), "the ack must carry the controller's feature list"
 
     # The advert branch must precede the mic guards, which would otherwise
     # drop a 0x06 frame on the mic header-length test and lose it silently.
-    handler = src[src.index("async def handle_data"):]
+    handler = src[src.index("async def handle_data") :]
     ble = handler.index("BLE_ADVERTS_TYPE")
     mic = handler.index("!= MIC_FRAME_TYPE")
     assert ble < mic, (
@@ -2103,8 +2237,8 @@ def test_the_control_plane_advert_message_is_still_handled():
     never to a wrong answer.
     """
     src = (CONTROLLER / "em_controller.py").read_text()
-    table = src[src.index("CONTROL_HANDLERS = {"):]
-    table = table[:table.index("}")]
+    table = src[src.index("CONTROL_HANDLERS = {") :]
+    table = table[: table.index("}")]
     assert '"ble_adverts":' in table, (
         "the control-plane ble_adverts message must stay handled for firmware "
         "that cannot use the data plane"
@@ -2123,9 +2257,9 @@ def test_a_barge_in_is_arbitrated_like_any_other_wake():
     `window_s` (300-700ms), not held until `release()`, so it expired seconds
     before anyone talked over the answer.
     """
-    src  = (CONTROLLER / "em_controller.py").read_text()
-    body = src[src.index("async def _barge_watcher"):]
-    body = body[:body.index("\nasync def ", 1)]
+    src = (CONTROLLER / "em_controller.py").read_text()
+    body = src[src.index("async def _barge_watcher") :]
+    body = body[: body.index("\nasync def ", 1)]
 
     assert "await _claim_wake(" in body, (
         "the barge watcher must arbitrate — without it a second Echo answers "
@@ -2134,7 +2268,7 @@ def test_a_barge_in_is_arbitrated_like_any_other_wake():
     # Same ordering rule as the wake path: a device that cannot finish a turn
     # must not take the window first.
     serves = body.index("can_serve_turn")
-    claim  = body.index("await _claim_wake(")
+    claim = body.index("await _claim_wake(")
     assert serves < claim, (
         "can_serve_turn must precede the claim, or an unlinked device takes "
         "the window and then dies no_ha"
@@ -2157,9 +2291,9 @@ def test_a_ceded_barge_still_stops_playback_but_takes_no_turn():
     # decoration.
     ceded = src.index("device.barge_detected and device.barge_ceded")
     start = src.index("Barge-in: starting interrupting turn")
-    assert ceded < start, (
-        "the ceded branch must come before the one that starts the turn"
-    )
+    assert (
+        ceded < start
+    ), "the ceded branch must come before the one that starts the turn"
     branch = src[ceded:start]
     assert "break" in branch, (
         "a ceded barge must leave the turn loop rather than fall through "
@@ -2180,11 +2314,15 @@ def test_the_no_ha_barge_records_where_nothing_overwrites_it():
     ceded = src.index("device.barge_detected and device.barge_ceded")
     start = src.index("Barge-in: starting interrupting turn")
     branch = src[ceded:start]
-    for call in ("leds_listening(device)", "record_dropped_wake(",
-                 "_leds_turn_end(device)"):
+    for call in (
+        "leds_listening(device)",
+        "record_dropped_wake(",
+        "_leds_turn_end(device)",
+    ):
         assert call in branch, f"the no-HA stand-down needs {call}"
-    assert branch.index("device.barge_detected = False") < \
-           branch.index("record_dropped_wake("), (
+    assert branch.index("device.barge_detected = False") < branch.index(
+        "record_dropped_wake("
+    ), (
         "the flag must be clear before the cue is painted, or "
         "_leds_turn_end suppresses it"
     )
@@ -2204,6 +2342,7 @@ def test_the_no_ha_barge_records_where_nothing_overwrites_it():
 # never received a payload change. Office sat without three of the four stock
 # classifiers from 17 August with every panel reporting it healthy.
 
+
 def test_the_connect_handler_reconciles_all_three_payloads():
     """
     The handler must call the umbrella, not one payload's reconcile. Calling
@@ -2211,11 +2350,14 @@ def test_the_connect_handler_reconciles_all_three_payloads():
     that reaches a device on current firmware.
     """
     src = _strip_prose((CONTROLLER / "em_controller.py").read_text())
-    assert "em_reconcile.on_connect(" in src, (
-        "the connect handler must call em_reconcile.on_connect"
+    assert (
+        "em_reconcile.on_connect(" in src
+    ), "the connect handler must call em_reconcile.on_connect"
+    elsewhere = "\n".join(
+        _sources.code_only(_sources.source(m))
+        for m in _sources.MODULES
+        if m.name != "em_reconcile.py"
     )
-    elsewhere = "\n".join(_sources.code_only(_sources.source(m))
-                          for m in _sources.MODULES if m.name != "em_reconcile.py")
     assert "em_oww_sync.reconcile(" not in elsewhere, (
         "call the umbrella, not one payload — the other two then have no "
         "trigger that reaches a device already on the latest firmware"
@@ -2229,11 +2371,15 @@ def test_the_reconcile_runs_the_three_payloads_sequentially():
     """
     fn = _strip_prose(_sources.def_source("em_reconcile.on_connect"))
 
-    for step in ("em_oww_sync.reconcile", "em_payloads.sync_start_script", "em_payloads.sync_debloat"):
+    for step in (
+        "em_oww_sync.reconcile",
+        "em_payloads.sync_start_script",
+        "em_payloads.sync_debloat",
+    ):
         assert step in fn, f"{step} must run on connect"
-    assert "asyncio.gather" not in fn, (
-        "the three payloads share one shell plane — run them in order"
-    )
+    assert (
+        "asyncio.gather" not in fn
+    ), "the three payloads share one shell plane — run them in order"
 
 
 def test_one_failing_payload_does_not_skip_the_others():
@@ -2243,10 +2389,10 @@ def test_one_failing_payload_does_not_skip_the_others():
     being wrapped in one try.
     """
     fn = _strip_prose(_sources.def_source("em_reconcile.on_connect"))
-    body = fn[fn.index("for name"):]
-    assert "try:" in body and "except Exception" in body, (
-        "each step must be caught inside the loop, not around it"
-    )
+    body = fn[fn.index("for name") :]
+    assert (
+        "try:" in body and "except Exception" in body
+    ), "each step must be caught inside the loop, not around it"
 
 
 def test_the_reconcile_is_debounced_and_claimed_before_the_work():
@@ -2256,12 +2402,12 @@ def test_the_reconcile_is_debounced_and_claimed_before_the_work():
     multi-megabyte push, and a device that reconnects mid-run must not start a
     second one against the same shell plane.
     """
-    fn  = _strip_prose(_sources.def_source("em_reconcile.on_connect"))
+    fn = _strip_prose(_sources.def_source("em_reconcile.on_connect"))
     assert "_due(" in fn, "the reconcile must be debounced per device"
 
     decide = _strip_prose(_sources.def_source("em_reconcile._due"))
-    stamp  = decide.index("stamps[device_id] = now")
-    ret    = decide.index("return True")
+    stamp = decide.index("stamps[device_id] = now")
+    ret = decide.index("return True")
     assert stamp < ret, "claim the debounce before returning, not after the work"
 
 
@@ -2275,7 +2421,7 @@ def test_emos_crash_logs_are_checked_on_connect_before_the_debounce():
     fn = _strip_prose(_sources.def_source("em_reconcile.on_connect"))
     assert "_collect_crash_log(" in fn
     assert fn.index("_collect_crash_log(") < fn.index("_due(")
-    gate = fn[:fn.index("_collect_crash_log(")]
+    gate = fn[: fn.index("_collect_crash_log(")]
     assert "not live.android_userspace" in gate
 
 
@@ -2310,13 +2456,13 @@ def test_the_payload_syncs_tell_a_missing_file_from_a_silent_device():
     """
     for name in ("sync_start_script", "sync_debloat"):
         fn = _strip_prose(_sources.def_source(name))
-        assert "em_shell.OK_MARK" in fn, (
-            f"{name} must be able to tell a missing file from a silent device"
-        )
+        assert (
+            "em_shell.OK_MARK" in fn
+        ), f"{name} must be able to tell a missing file from a silent device"
         # The guard has to precede the push decision, or it guards nothing.
-        assert fn.index("em_shell.OK_MARK not in out") < fn.index("em_shell.stream_file"), (
-            f"{name} must check the device answered BEFORE deciding to push"
-        )
+        assert fn.index("em_shell.OK_MARK not in out") < fn.index(
+            "em_shell.stream_file"
+        ), f"{name} must check the device answered BEFORE deciding to push"
 
 
 # ─── Installing what a device already runs ────────────────────────────────────
@@ -2328,6 +2474,7 @@ def test_the_payload_syncs_tell_a_missing_file_from_a_silent_device():
 # binary was labelled `local-<timestamp>` rather than being read for its
 # version. So the case most likely to happen by accident was the one case
 # nothing guarded.
+
 
 def test_the_update_endpoint_refuses_a_version_the_device_already_runs():
     fn = _strip_prose(_sources.def_source("_post_device_update"))
@@ -2351,9 +2498,9 @@ def test_a_refused_update_does_not_consume_the_uploaded_binary():
     """
     fn = _strip_prose(_sources.def_source("_post_device_update"))
 
-    assert "_pending_uploads.get(upload_token)" in fn, (
-        "peek the token — every refusal below it must leave it usable"
-    )
+    assert (
+        "_pending_uploads.get(upload_token)" in fn
+    ), "peek the token — every refusal below it must leave it usable"
     pop = fn.index("_pending_uploads.pop")
     run = fn.index("em_ota.run_update(")
     refuse = fn.index("already_running")
@@ -2367,14 +2514,14 @@ def test_the_fleet_endpoint_reads_the_version_out_of_an_uploaded_binary():
     no device had ever run — so `already_current` could never fire for one and
     a fleet push re-flashed every device with what it was already running.
     """
-    fn  = _strip_prose(_sources.def_source("_post_deploy_all"))
+    fn = _strip_prose(_sources.def_source("_post_deploy_all"))
 
-    assert "em_ota.extract_binary_version(binary_override)" in fn, (
-        "the fleet path must read the uploaded binary's own version"
-    )
-    assert "not upload_token and" not in fn, (
-        "the already_current skip must no longer exclude uploads"
-    )
+    assert (
+        "em_ota.extract_binary_version(binary_override)" in fn
+    ), "the fleet path must read the uploaded binary's own version"
+    assert (
+        "not upload_token and" not in fn
+    ), "the already_current skip must no longer exclude uploads"
 
 
 def test_the_upload_endpoint_reports_what_was_uploaded():
@@ -2394,14 +2541,15 @@ def test_the_upload_endpoint_reports_what_was_uploaded():
 # file: the dashboard compiles to one classic script with no module boundary,
 # so there is nothing to import.
 
+
 def _jsx():
     return (CONTROLLER / "static" / "dashboard.jsx").read_text()
 
 
 def _step_ids(table):
     steps = _jsx()
-    steps = steps[steps.index(f"const {table} = ["):]
-    steps = steps[:steps.index("\n];")]
+    steps = steps[steps.index(f"const {table} = [") :]
+    steps = steps[: steps.index("\n];")]
     return re.findall(r"\{ id: '([a-z_]+)'", steps)
 
 
@@ -2418,10 +2566,17 @@ def test_the_emos_flow_drops_every_android_only_step():
     unlock payload.
     """
     ids = set(_step_ids("_EMOS_STEPS"))
-    for gone in ("patch_boot", "install_magisk", "preseed_db", "verify_root",
-                 "disable_alexa", "debloat"):
-        assert gone not in ids, (
-            f"'{gone}' is an Android-only step and must not be in the emOS flow")
+    for gone in (
+        "patch_boot",
+        "install_magisk",
+        "preseed_db",
+        "verify_root",
+        "disable_alexa",
+        "debloat",
+    ):
+        assert (
+            gone not in ids
+        ), f"'{gone}' is an Android-only step and must not be in the emOS flow"
     assert len(ids) == 9, f"the emOS flow is nine steps, found {len(ids)}: {ids}"
 
 
@@ -2432,8 +2587,9 @@ def test_the_emos_flow_escrows_before_it_flashes():
     a flash before an escrow is a device with no way back.
     """
     ids = _step_ids("_EMOS_STEPS")
-    assert ids.index("escrow_boot") < ids.index("build_emos") < ids.index("flash_emos"), \
-        f"escrow must precede build must precede flash, got {ids}"
+    assert (
+        ids.index("escrow_boot") < ids.index("build_emos") < ids.index("flash_emos")
+    ), f"escrow must precede build must precede flash, got {ids}"
     # And the install lands on /data before the partition write, which is what
     # lets it survive the flash.
     assert ids.index("install_em") < ids.index("flash_emos")
@@ -2449,10 +2605,13 @@ def test_the_fireos_flow_escrows_before_it_patches():
     "of=", for the reason the flash test gives.
     """
     src = _jsx()
-    fn = src[src.index("async function runPatchBoot"):]
-    fn = fn[:fn.index("\n  async function runInstallMagisk")]
-    writes = [i for i, line in enumerate(fn.splitlines())
-              if "c.shell(" in line and "of=${boot.target}" in line]
+    fn = src[src.index("async function runPatchBoot") :]
+    fn = fn[: fn.index("\n  async function runInstallMagisk")]
+    writes = [
+        i
+        for i, line in enumerate(fn.splitlines())
+        if "c.shell(" in line and "of=${boot.target}" in line
+    ]
     assert writes, "runPatchBoot's flash was not found; update this test"
     lines = fn.splitlines()
     for marker in ("setEmosRef(", "setEmosTarget(", "_downloadBytes("):
@@ -2461,8 +2620,9 @@ def test_the_fireos_flow_escrows_before_it_patches():
         assert at < writes[0], f"{marker} must come before the partition write"
 
     # And the restore is offered on the TWRP steps that follow the escrow.
-    assert "(isEmos ? (step === 6 || step === 7) : (step >= 2 && step <= 4))" in src, (
-        "the FireOS flow must offer the restore on a failed TWRP step")
+    assert (
+        "(isEmos ? (step === 6 || step === 7) : (step >= 2 && step <= 4))" in src
+    ), "the FireOS flow must offer the restore on a failed TWRP step"
 
 
 def test_base_os_survives_the_device_going_offline():
@@ -2474,9 +2634,11 @@ def test_base_os_survives_the_device_going_offline():
     """
     src = _sources.def_source("merge_device")
     at = src.index('"baseOs":')
-    line = src[at:src.index("\n", src.index("\n", at) + 1)]
+    line = src[at : src.index("\n", src.index("\n", at) + 1)]
     assert 'getattr(live, "base_os", None)' in line, "a live report must come first"
-    assert 'row["base_os"]' in line, "offline, baseOs must fall back to the stored value"
+    assert (
+        'row["base_os"]' in line
+    ), "offline, baseOs must fall back to the stored value"
 
 
 def test_only_a_registered_device_blocks_the_wizard():
@@ -2494,9 +2656,10 @@ def test_only_a_registered_device_blocks_the_wizard():
     """
     src = _jsx()
     at = src.index("function duplicateVerdict")
-    body = src[at:src.index("\n  }", at)]
-    assert "knownDevices" in body and "d.firmware_ver" in body, (
-        "the already-registered check must ignore rows that never registered")
+    body = src[at : src.index("\n  }", at)]
+    assert (
+        "knownDevices" in body and "d.firmware_ver" in body
+    ), "the already-registered check must ignore rows that never registered"
 
 
 def test_a_restore_ends_the_wizard_run():
@@ -2508,16 +2671,21 @@ def test_a_restore_ends_the_wizard_run():
     controls go, nothing auto-runs, and the operator is told to start again.
     """
     src = _jsx()
-    fn = src[src.index("async function restoreEscrowedBoot"):]
-    fn = fn[:fn.index("\n  async function ", 1)]
+    fn = src[src.index("async function restoreEscrowedBoot") :]
+    fn = fn[: fn.index("\n  async function ", 1)]
     ok = fn.index("Escrowed image restored and verified")
-    assert "setRestored(true)" in fn[ok:], (
-        "setRestored(true) must follow the verified restore, never precede it")
-    assert fn.index("setRestored(true)") > fn.index("_writeBootPartition"), (
-        "the run may only end once the restore has been written and verified")
-    assert "{!restored && (<>" in src, "the step controls must be hidden after a restore"
-    assert "|| running || restored || stepState[step] !== 'pending') return;" in src, (
-        "no step may auto-run after a restore")
+    assert (
+        "setRestored(true)" in fn[ok:]
+    ), "setRestored(true) must follow the verified restore, never precede it"
+    assert fn.index("setRestored(true)") > fn.index(
+        "_writeBootPartition"
+    ), "the run may only end once the restore has been written and verified"
+    assert (
+        "{!restored && (<>" in src
+    ), "the step controls must be hidden after a restore"
+    assert (
+        "|| running || restored || stepState[step] !== 'pending') return;" in src
+    ), "no step may auto-run after a restore"
 
 
 def test_the_flash_step_verifies_against_the_partition():
@@ -2533,8 +2701,8 @@ def test_the_flash_step_verifies_against_the_partition():
     # the wizard that can leave a device unbootable, and a second copy is one
     # that drifts from the checks this one carries — so pin that both callers
     # go through it and that neither grew a dd of its own.
-    write = src[src.index("async function _writeBootPartition"):]
-    write = write[:write.index("\n  async function runFlashEmos")]
+    write = src[src.index("async function _writeBootPartition") :]
+    write = write[: write.index("\n  async function runFlashEmos")]
     assert "conv=fsync" in write, "the write must be fsync'd"
 
     # The read-back must cover exactly what was written. It used to read whole
@@ -2545,29 +2713,40 @@ def test_the_flash_step_verifies_against_the_partition():
     # the whole 16MB partition and therefore an exact number of blocks.
     assert "bs=2048" in write, (
         "the read-back must use page-sized blocks so it can cover exactly the "
-        "bytes written, not round up to the next megabyte")
-    assert "bytes.length / 2048" in write, (
-        "the read-back block count must come from the image length")
+        "bytes written, not round up to the next megabyte"
+    )
+    assert (
+        "bytes.length / 2048" in write
+    ), "the read-back block count must come from the image length"
     assert "% 2048 === 0" in write, (
         "an image that is not page-aligned must be detected rather than "
-        "silently read short")
+        "silently read short"
+    )
     assert "drop_caches" in write, (
         "the page cache must be dropped before the read-back, or the read-back "
-        "confirms the cache rather than the partition")
-    assert write.index("drop_caches") < write.index("Reading it back"), \
-        "the caches must be dropped BEFORE the read-back, not after"
+        "confirms the cache rather than the partition"
+    )
+    assert write.index("drop_caches") < write.index(
+        "Reading it back"
+    ), "the caches must be dropped BEFORE the read-back, not after"
 
-    fn = src[src.index("async function runFlashEmos"):]
-    fn = fn[:fn.index("\n  // ── Steps 7 and 8")]
-    assert "DO NOT REBOOT" in fn, (
-        "a verification failure must tell the operator not to reboot")
+    fn = src[src.index("async function runFlashEmos") :]
+    fn = fn[: fn.index("\n  // ── Steps 7 and 8")]
+    assert (
+        "DO NOT REBOOT" in fn
+    ), "a verification failure must tell the operator not to reboot"
     # Both callers write through the shared path, and neither writes a
     # partition any other way.
     for caller in ("runFlashEmos", "restoreEscrowedBoot"):
-        body = fn[fn.index(f"async function {caller}"):]
-        body = body[:body.index("\n  async function ", 1)] if "\n  async function " in body[1:] else body
-        assert "_writeBootPartition" in body, (
-            f"{caller} must write through _writeBootPartition, not its own dd")
+        body = fn[fn.index(f"async function {caller}") :]
+        body = (
+            body[: body.index("\n  async function ", 1)]
+            if "\n  async function " in body[1:]
+            else body
+        )
+        assert (
+            "_writeBootPartition" in body
+        ), f"{caller} must write through _writeBootPartition, not its own dd"
     # Matched against shell CALLS, not against the text "of=" — the restore's
     # failure message quotes a dd command for the operator to run by hand, and
     # a guard that greps for the thing it forbids finds the prose explaining it
@@ -2575,7 +2754,8 @@ def test_the_flash_step_verifies_against_the_partition():
     for line in fn.splitlines():
         assert not ("c.shell(" in line and "of=" in line), (
             "no caller may issue its own partition write — the one dd that "
-            f"does lives in _writeBootPartition: {line.strip()}")
+            f"does lives in _writeBootPartition: {line.strip()}"
+        )
 
 
 def test_the_serial_console_disables_echo_before_anything_else():
@@ -2590,15 +2770,16 @@ def test_the_serial_console_disables_echo_before_anything_else():
     reverted commit.
     """
     src = _jsx()
-    cls = src[src.index("class _EmosConsole"):]
-    cls = cls[:cls.index("\n}")]
+    cls = src[src.index("class _EmosConsole") :]
+    cls = cls[: cls.index("\n}")]
     assert "stty -echo" in cls, "the console client must disable echo"
 
-    watch = src[src.index("async function _watchFirstBoot"):]
-    watch = watch[:watch.index("\n  async function ", 1)]
+    watch = src[src.index("async function _watchFirstBoot") :]
+    watch = watch[: watch.index("\n  async function ", 1)]
     assert "disableEcho" in watch, "the reboot step must disable echo"
-    assert watch.index("disableEcho") < watch.index("con.run("), \
-        "echo must be disabled BEFORE the first command, or its reply is garbled"
+    assert watch.index("disableEcho") < watch.index(
+        "con.run("
+    ), "echo must be disabled BEFORE the first command, or its reply is garbled"
 
     # Disabling echo is not enough on its own, and 2026-09-06 is how we know:
     # stty is not guaranteed present and the shell is not guaranteed up, so
@@ -2607,25 +2788,29 @@ def test_the_serial_console_disables_echo_before_anything_else():
     # the shell's echo of the command that asks for it.
     assert "; echo ${mark}" not in cls and "; echo ${mark}`" not in cls, (
         "the completion marker must not be sent whole — with echo on it "
-        "arrives before the command runs and run() answers with its own request")
+        "arrives before the command runs and run() answers with its own request"
+    )
     assert "__a=__EM" in cls, (
         "the marker must be assembled on the device from parts that do not "
-        "spell it in the echoed command")
+        "spell it in the echoed command"
+    )
 
     # Two markers, so the echo is discarded by POSITION. Recognising it
     # textually does not work — the terminal wraps at 80 columns, so the
     # request arrives split across lines and no line holds the whole command.
     assert "S__" in cls and "lastIndexOf(start)" in cls, (
         "run() must bracket the answer between a start and an end marker, or "
-        "the console's echo of the request is returned as part of the answer")
+        "the console's echo of the request is returned as part of the answer"
+    )
 
     # A failed attempt must release the serial port. The browser refuses to
     # reopen one that is already open, and no amount of retrying clears it.
-    step = src[src.index("async function runRebootAndWatch"):]
-    step = step[:step.index("\n  async function ", 1)]
+    step = src[src.index("async function runRebootAndWatch") :]
+    step = step[: step.index("\n  async function ", 1)]
     assert "con.close()" in step, (
         "a failed first-boot watch must close the port, or every retry fails "
-        "with 'The port is already open'")
+        "with 'The port is already open'"
+    )
 
 
 def test_the_wizard_reads_the_device_list_the_way_the_api_returns_it():
@@ -2646,12 +2831,14 @@ def test_the_wizard_reads_the_device_list_the_way_the_api_returns_it():
     src = _jsx()
     assert "(await API.get('/api/devices')).devices" not in src, (
         "/api/devices returns an array; reading .devices off it is silently "
-        "undefined")
+        "undefined"
+    )
 
     handler = _sources.def_source("_get_devices")
     assert "em_http.ok([" in handler, (
         "this test assumes /api/devices returns a bare list — if that changed, "
-        "every caller in dashboard.jsx has to change with it")
+        "every caller in dashboard.jsx has to change with it"
+    )
 
 
 def test_emos_wpa_cli_calls_carry_the_control_socket_path():
@@ -2670,11 +2857,12 @@ def test_emos_wpa_cli_calls_carry_the_control_socket_path():
     """
     src = _jsx()
     body = re.sub(r"^\s*//.*$", "", src, flags=re.M)
-    bare = [ln.strip() for ln in body.splitlines()
-            if "wpa_cli -i " in ln]
-    assert not bare, (
-        "every wpa_cli invocation must pass -p /data/misc/wifi/sockets: "
-        + "; ".join(bare))
+    bare = [ln.strip() for ln in body.splitlines() if "wpa_cli -i " in ln]
+    assert (
+        not bare
+    ), "every wpa_cli invocation must pass -p /data/misc/wifi/sockets: " + "; ".join(
+        bare
+    )
 
 
 def test_the_emos_build_endpoint_stores_nothing():
@@ -2685,8 +2873,9 @@ def test_the_emos_build_endpoint_stores_nothing():
     """
     fn = _strip_prose(_sources.def_source("_post_provision_emos_image"))
     for writer in ("open(", "write_bytes", "Path(", "tempfile"):
-        assert writer not in fn, (
-            f"the emOS build endpoint must not persist anything (found {writer!r})")
+        assert (
+            writer not in fn
+        ), f"the emOS build endpoint must not persist anything (found {writer!r})"
 
 
 def test_the_emos_and_firmware_release_namespaces_cannot_select_each_other():
@@ -2702,22 +2891,34 @@ def test_the_emos_and_firmware_release_namespaces_cannot_select_each_other():
     of armv7a devices as a firmware update.
     """
     fw = _strip_prose(_sources.def_source("fetch_firmware"))
-    assert "_choose_firmware_release(" in fw, \
-        "the firmware poll must select through version.choose_firmware_release"
+    assert (
+        "_choose_firmware_release(" in fw
+    ), "the firmware poll must select through version.choose_firmware_release"
     vsrc = (CONTROLLER / "version.py").read_text()
-    node = next(n for n in ast.parse(vsrc).body
-                if isinstance(n, ast.FunctionDef) and n.name == "choose_firmware_release")
+    node = next(
+        n
+        for n in ast.parse(vsrc).body
+        if isinstance(n, ast.FunctionDef) and n.name == "choose_firmware_release"
+    )
     chooser = _strip_prose(ast.get_source_segment(vsrc, node))
-    assert 'startswith("v")' in chooser and '"server"' in chooser, \
-        "the firmware poll must select on a v* tag AND a server asset"
+    assert (
+        'startswith("v")' in chooser and '"server"' in chooser
+    ), "the firmware poll must select on a v* tag AND a server asset"
 
     emos = _strip_prose(_sources.def_source("fetch_emos"))
-    assert 'startswith("emos-v")' in emos and '"init"' in emos, \
-        "the emOS poll must select on an emos-v* tag AND an init asset"
+    assert (
+        'startswith("emos-v")' in emos and '"init"' in emos
+    ), "the emOS poll must select on an emos-v* tag AND an init asset"
 
-    workflow = (CONTROLLER.parent / ".github" / "workflows" / "emos-release.yml").read_text()
-    assert "'emos-v*'" in workflow, "the emOS release workflow must fire on emos-v* tags"
-    fw_workflow = (CONTROLLER.parent / ".github" / "workflows" / "release.yml").read_text()
+    workflow = (
+        CONTROLLER.parent / ".github" / "workflows" / "emos-release.yml"
+    ).read_text()
+    assert (
+        "'emos-v*'" in workflow
+    ), "the emOS release workflow must fire on emos-v* tags"
+    fw_workflow = (
+        CONTROLLER.parent / ".github" / "workflows" / "release.yml"
+    ).read_text()
     assert "'v*'" in fw_workflow
 
 
@@ -2729,21 +2930,27 @@ def test_the_emos_init_is_verified_before_it_is_served():
     verify.
     """
     resolver = _strip_prose(_sources.def_source("em_emos_ota._fetch_one_init"))
-    assert "init_binary_problems" in resolver, (
-        "the init must be checked for architecture/static before it is served")
+    assert (
+        "init_binary_problems" in resolver
+    ), "the init must be checked for architecture/static before it is served"
     assert "bad_release_asset" in resolver
     # The architecture asked for is what it is checked against, not a constant.
-    assert "init_binary_problems(binary, arch)" in resolver, (
-        "the init must be verified against the architecture that was requested")
+    assert (
+        "init_binary_problems(binary, arch)" in resolver
+    ), "the init must be verified against the architecture that was requested"
 
     # Every route to an init goes through that one function, so none of them can
     # serve an unchecked one.
-    assert "_fetch_one_init" in _strip_prose(_sources.def_source("em_emos_ota.fetch_init")), \
-        "the download endpoint's resolver must go through _fetch_one_init"
-    assert "_fetch_one_init" in _strip_prose(_sources.def_source("em_emos_ota.fetch_payload")), \
-        "the image endpoint's resolver must go through _fetch_one_init"
-    for name, want in (("_get_provision_emos_init", "em_emos_ota.fetch_init"),
-                       ("_post_provision_emos_image", "em_emos_ota.fetch_payload")):
+    assert "_fetch_one_init" in _strip_prose(
+        _sources.def_source("em_emos_ota.fetch_init")
+    ), "the download endpoint's resolver must go through _fetch_one_init"
+    assert "_fetch_one_init" in _strip_prose(
+        _sources.def_source("em_emos_ota.fetch_payload")
+    ), "the image endpoint's resolver must go through _fetch_one_init"
+    for name, want in (
+        ("_get_provision_emos_init", "em_emos_ota.fetch_init"),
+        ("_post_provision_emos_image", "em_emos_ota.fetch_payload"),
+    ):
         fn = _strip_prose(_sources.def_source(name))
         assert want in fn, f"{name} must resolve through {want}"
 
@@ -2759,8 +2966,9 @@ def test_the_busybox_build_can_satisfy_the_gpl_obligation():
     by the comment explaining them.
     """
     script = (CONTROLLER.parent / "emos" / "tools" / "build-busybox.sh").read_text()
-    body = "\n".join(l for l in script.splitlines()
-                     if l.strip() and not l.lstrip().startswith("#"))
+    body = "\n".join(
+        l for l in script.splitlines() if l.strip() and not l.lstrip().startswith("#")
+    )
 
     # The tarball is pinned, and checked on EVERY run rather than only after a
     # download — a cached or pre-seeded one is no less likely to be wrong.
@@ -2769,24 +2977,27 @@ def test_the_busybox_build_can_satisfy_the_gpl_obligation():
 
     # Both artifacts reach the output directory, which is what the release
     # publishes. Without these the binary ships with no corresponding source.
-    assert '"$OUT/busybox-$BB_VER.tar.bz2"' in body, \
-        "the source tarball must be installed into the output directory"
-    assert '"$OUT/busybox-LICENSE"' in body, \
-        "the licence text must be installed into the output directory"
+    assert (
+        '"$OUT/busybox-$BB_VER.tar.bz2"' in body
+    ), "the source tarball must be installed into the output directory"
+    assert (
+        '"$OUT/busybox-LICENSE"' in body
+    ), "the licence text must be installed into the output directory"
 
     # And the tarball must actually BE the source of the binary. The build diffs
     # the tree it compiled against a fresh extraction and refuses on any
     # modified or missing upstream file — the supplicant build beside this one
     # patches its sources with inline python, so "we do not patch busybox" has
     # to be enforced rather than assumed.
-    assert "diff -rq" in body, \
-        "the build must prove the tree it compiled matches the published tarball"
+    assert (
+        "diff -rq" in body
+    ), "the build must prove the tree it compiled matches the published tarball"
 
     # The release gate, which fails the publish rather than the build.
-    wf = (CONTROLLER.parent / ".github" / "workflows"
-          / "emos-release.yml").read_text()
-    assert "busybox-LICENSE" in wf and "busybox-$BB_VER.tar.bz2" in wf, \
-        "the release must verify both GPL assets exist before publishing"
+    wf = (CONTROLLER.parent / ".github" / "workflows" / "emos-release.yml").read_text()
+    assert (
+        "busybox-LICENSE" in wf and "busybox-$BB_VER.tar.bz2" in wf
+    ), "the release must verify both GPL assets exist before publishing"
 
 
 def test_the_emos_release_workflow_asserts_what_it_publishes():
@@ -2798,21 +3009,27 @@ def test_the_emos_release_workflow_asserts_what_it_publishes():
     one-item list, so adding an asset broke a test with no opinion about it.
     """
     import yaml
+
     path = CONTROLLER.parent / ".github" / "workflows" / "emos-release.yml"
     wf = path.read_text()
     assert "ARM aarch64" in wf, "the release must assert the init is aarch64"
-    assert "32-bit LSB executable, ARM" in wf, \
-        "the release must assert init32 is a 32-bit ARM binary"
+    assert (
+        "32-bit LSB executable, ARM" in wf
+    ), "the release must assert init32 is a 32-bit ARM binary"
     assert "statically linked" in wf, "the release must assert the inits are static"
     # All four off-target checks run against the source being published. Each
     # one drives a parser or an invariant whose failure is silent on hardware.
-    for check in ("ringsim --check", "pwcheck", "tmoutcheck", "wpacheck",
-                  "cmdlinecheck"):
+    for check in (
+        "ringsim --check",
+        "pwcheck",
+        "tmoutcheck",
+        "wpacheck",
+        "cmdlinecheck",
+    ):
         assert check in wf, f"the release must run {check}"
     # The bundle is what carries everything but the compat init, so a release
     # that skipped building it would publish an empty-handed payload.
-    assert "make-payload-bundle.py" in wf, \
-        "the release must build the payload bundle"
+    assert "make-payload-bundle.py" in wf, "the release must build the payload bundle"
     for f in ("init32", "wpa_supplicant", "wpa_cli", "em-wifi"):
         assert f in wf, f"{f} must go into the bundle"
 
@@ -2839,31 +3056,37 @@ def test_the_emos_release_workflow_asserts_what_it_publishes():
     # A BOOT IMAGE MUST NEVER APPEAR. It carries the device's own kernel and
     # DTBs, so publishing one would redistribute Amazon's code — the image is
     # assembled on the user's side from the partition they read off their device.
-    assert published == {"emos/build/init", "emos/build/emos-payload.zip",
-                         "emos/build/bb/busybox-*.tar.bz2",
-                         "emos/build/bb/busybox-LICENSE"}, (
+    assert published == {
+        "emos/build/init",
+        "emos/build/emos-payload.zip",
+        "emos/build/bb/busybox-*.tar.bz2",
+        "emos/build/bb/busybox-LICENSE",
+    }, (
         f"the published set changed — got {sorted(published)}. Everything here "
         f"must be redistributable by us, and a boot image must never be among "
         f"it. The loose `init` is not redundant: _fetch_latest_emos_release "
         f"matches it by exact name, so dropping it strands every fielded "
-        f"controller. The busybox source and licence are a GPL-2.0 obligation.")
-    assert not any(".img" in f or "boot" in f.rsplit("/", 1)[-1]
-                   for f in published), (
+        f"controller. The busybox source and licence are a GPL-2.0 obligation."
+    )
+    assert not any(".img" in f or "boot" in f.rsplit("/", 1)[-1] for f in published), (
         "an image or boot partition must never be a release asset — it carries "
-        "the device's own kernel and DTBs")
+        "the device's own kernel and DTBs"
+    )
     # `init` keeps that exact name. The controller selects release assets by
     # exact name, so renaming it strands every controller already in the field
     # looking for it — which is why the second init was ADDED as `init32`
     # rather than the pair being renamed to `init-arm64`/`init-arm`.
     ota = (CONTROLLER / "em_emos_ota.py").read_text()
-    mapping = ota[ota.index("INIT_ASSETS = {"):]
-    mapping = mapping[:mapping.index("}") + 1]
-    assert '"init"' in mapping and '"init32"' in mapping, (
-        f"the arch-to-asset map must name the published assets, got: {mapping}")
+    mapping = ota[ota.index("INIT_ASSETS = {") :]
+    mapping = mapping[: mapping.index("}") + 1]
+    assert (
+        '"init"' in mapping and '"init32"' in mapping
+    ), f"the arch-to-asset map must name the published assets, got: {mapping}"
     # init32 is not a published asset any more — it travels inside the bundle,
     # which the step check above pins.
-    assert "emos/build/init" in published, \
-        "the compat init must still be published loose"
+    assert (
+        "emos/build/init" in published
+    ), "the compat init must still be published loose"
 
 
 def test_the_init_architecture_is_decided_where_the_reference_is():
@@ -2881,25 +3104,30 @@ def test_the_init_architecture_is_decided_where_the_reference_is():
     # hand, which is the guess this whole path removes.
     assert "use_latest_init" in build, (
         "the wizard must ask the controller to resolve the init, so the "
-        "architecture is read off the reference rather than guessed")
+        "architecture is read off the reference rather than guessed"
+    )
     assert "/api/provision/emos_init" not in build, (
         "the build step must not fetch an init — that endpoint cannot know "
-        "which architecture this image needs")
+        "which architecture this image needs"
+    )
 
     # Neither the sniffer nor its magic numbers may be reimplemented here.
     for magic in ("016f2818", "ARM\\x64", "0x24", "reference_kernel_arch"):
         assert magic not in build, (
             f"{magic!r} in the wizard means a second copy of the architecture "
-            f"sniffer — it lives in em_emos_build.reference_kernel_arch")
+            f"sniffer — it lives in em_emos_build.reference_kernel_arch"
+        )
 
     # The endpoint reads it off the reference, and refuses rather than
     # defaulting when it cannot: an init chosen by guess is the one failure with
     # no symptom on the device.
     handler = _sources.def_source("_post_provision_emos_image")
-    assert "reference_kernel_arch" in handler, (
-        "the image endpoint must read the architecture off the reference")
-    assert "unknown_reference_arch" in handler, (
-        "an unreadable reference must refuse, not fall back to an architecture")
+    assert (
+        "reference_kernel_arch" in handler
+    ), "the image endpoint must read the architecture off the reference"
+    assert (
+        "unknown_reference_arch" in handler
+    ), "an unreadable reference must refuse, not fall back to an architecture"
 
 
 def test_the_wifi_tools_go_only_into_a_32_bit_image():
@@ -2915,26 +3143,31 @@ def test_the_wifi_tools_go_only_into_a_32_bit_image():
     ota = (CONTROLLER / "em_emos_ota.py").read_text()
     # The gate is in select_payload, which fetch_payload hands the release to.
     assert "select_payload(" in _strip_prose(
-        _sources.def_source("em_emos_ota.fetch_payload"))
+        _sources.def_source("em_emos_ota.fetch_payload")
+    )
     fn = _strip_prose(_sources.def_source("em_emos_ota.select_payload"))
-    assert "ARCH_ARM" in fn, (
-        "the WiFi tools must be gated on the reference's kernel architecture")
+    assert (
+        "ARCH_ARM" in fn
+    ), "the WiFi tools must be gated on the reference's kernel architecture"
     assert "no_wifi_tools_for_arch" in fn, (
         "a 32-bit image with no WiFi tools available must refuse, not build "
-        "something with no network")
+        "something with no network"
+    )
 
     # The gate must test for the 32-bit kernel specifically. `ARCH_ARM64` is a
     # prefix-free constant but `ARCH_ARM` is not a substring test anyone should
     # rely on, so the comparison is pinned literally.
-    assert "arch == em_emos_build.ARCH_ARM" in fn, (
-        "the gate must be an equality against ARCH_ARM, so arm64 cannot satisfy it")
+    assert (
+        "arch == em_emos_build.ARCH_ARM" in fn
+    ), "the gate must be an equality against ARCH_ARM, so arm64 cannot satisfy it"
 
     # And all three travel together: em-wifi is useless without the two binaries
     # it drives, and wpa_cli alone would change which binary init's nudge uses.
-    assert "SBIN_ASSETS" in fn, \
-        "the tools must come from the one list, so they cannot diverge"
-    tools = ota[ota.index("\nSBIN_ASSETS = ("):]
-    tools = tools[:tools.index(")") + 1]
+    assert (
+        "SBIN_ASSETS" in fn
+    ), "the tools must come from the one list, so they cannot diverge"
+    tools = ota[ota.index("\nSBIN_ASSETS = (") :]
+    tools = tools[: tools.index(")") + 1]
     for name in ("wpa_supplicant", "wpa_cli", "em-wifi", "busybox"):
         assert f'"{name}"' in tools, f"{name} missing from SBIN_ASSETS"
 
@@ -2954,23 +3187,27 @@ def test_a_v2_device_is_refused_by_the_fireos_flow_and_accepted_by_emos():
 
     assert "unlock.v2 && !isEmos" in fn, (
         "the hard refusal must be gated on NOT being the emOS flow — emOS "
-        "supports the FireOS 6 kernel a v2 device has")
+        "supports the FireOS 6 kernel a v2 device has"
+    )
     # The FireOS refusal still closes the connection and writes nothing.
     assert "setAdb(null)" in fn and "hard-bricked" in fn, (
         "the FireOS refusal must still stop the flow and warn against flashing "
-        "bootloaders by hand")
+        "bootloaders by hand"
+    )
     # And a v2 device reaching the emOS flow is told so, loudly, while it can
     # still be stopped — the escrow is what makes the write recoverable.
     assert "Escrow Boot Image step is the way back" in fn, (
         "a v2 device on the emOS flow must be told the escrow is the way back, "
-        "before anything is written")
+        "before anything is written"
+    )
 
     # The release gate is flow-aware too, and names what it accepts rather than
     # accepting everything that is not 5.x: an unexpected release is still a
     # wrong device, which is the whole point of the check.
     assert "isEmos ? ['5.', '7.'] : ['5.']" in fn, (
         "the emOS flow must accept Android 5.x and 7.x (FireOS 6 is 7.1) and "
-        "the FireOS flow only 5.x")
+        "the FireOS flow only 5.x"
+    )
 
 
 def test_every_debloat_push_asks_which_userspace_the_device_booted():
@@ -2995,6 +3232,7 @@ def test_every_debloat_push_asks_which_userspace_the_device_booted():
     Asserted per call site rather than by counting, so a fourth one has to
     answer the question too.
     """
+
     # Parsed, not grepped, so _strip_prose is neither needed nor wanted: an
     # AST contains no comments at all, and stripping them first breaks the
     # parse on any line whose prose was load-bearing to the syntax. Every
@@ -3014,7 +3252,8 @@ def test_every_debloat_push_asks_which_userspace_the_device_booted():
             for child in ast.iter_child_nodes(parent):
                 ancestors[child] = (parent,) + ancestors.get(parent, ())
         calls += [
-            n for n in ast.walk(tree)
+            n
+            for n in ast.walk(tree)
             if isinstance(n, ast.Call)
             and getattr(n.func, "attr", getattr(n.func, "id", None)) == "sync_debloat"
         ]
@@ -3028,8 +3267,11 @@ def test_every_debloat_push_asks_which_userspace_the_device_booted():
     # so its call site has no enclosing `if` and is exempt by name.
     enclosing = {
         n.lineno: next(
-            (a.name for a in ancestors.get(n, ())
-             if isinstance(a, (ast.AsyncFunctionDef, ast.FunctionDef))),
+            (
+                a.name
+                for a in ancestors.get(n, ())
+                if isinstance(a, (ast.AsyncFunctionDef, ast.FunctionDef))
+            ),
             "?",
         )
         for n in calls
@@ -3039,7 +3281,7 @@ def test_every_debloat_push_asks_which_userspace_the_device_booted():
         "these sync_debloat call sites do not check android_userspace: "
         + ", ".join(f"line {ln} in {enclosing[ln]}()" for ln in ungated)
         + " — an emOS device has no package manager to hide packages from and "
-          "no Magisk daemon to have created the service.d directory."
+        "no Magisk daemon to have created the service.d directory."
     )
 
 
@@ -3061,20 +3303,23 @@ def test_the_bundle_stamp_has_exactly_one_definition():
     from the API — so the one number somebody checks to rule this out was the
     number lying to them (2026-09-10).
     """
-    _sources.find_def("bundle_version")   # exactly one, in any module
+    _sources.find_def("bundle_version")  # exactly one, in any module
     status = _sources.def_source("_get_system_status")
     assert '"bundle_version": em_routes_static.bundle_version()' in status, (
         "/api/system/status must publish the stamp via bundle_version(), so "
-        "the page can compare what it loaded against what is being served")
+        "the page can compare what it loaded against what is being served"
+    )
 
     # The URL stamp must come from the same call, not a second stat().
     serve = _sources.def_source("_serve_dashboard")
     assert "bundle_version()" in serve, (
         "_serve_dashboard must stamp the URL from bundle_version() rather "
-        "than re-deriving the mtime")
+        "than re-deriving the mtime"
+    )
     assert "st_mtime" not in serve, (
         "_serve_dashboard re-derives the bundle mtime — that is the drift "
-        "this test exists to prevent; use bundle_version()")
+        "this test exists to prevent; use bundle_version()"
+    )
 
 
 def test_the_stale_bundle_check_does_not_refresh_the_displayed_version():
@@ -3086,15 +3331,17 @@ def test_the_stale_bundle_check_does_not_refresh_the_displayed_version():
     stale page — and it is exactly the misleading behaviour being fixed, just
     arrived at from the other side.
     """
-    jsx = (Path(__file__).resolve().parent.parent
-           / "static" / "dashboard.jsx").read_text()
+    jsx = (
+        Path(__file__).resolve().parent.parent / "static" / "dashboard.jsx"
+    ).read_text()
 
     start = jsx.index("const stale = setInterval(")
-    block = jsx[start:jsx.index("return () => {", start)]
+    block = jsx[start : jsx.index("return () => {", start)]
     assert "bundle_version" in block, "the staleness poll must compare bundle_version"
     assert "setStatus" not in block, (
         "the staleness poll must not call setStatus — the header's version "
-        "has to keep naming the controller this page was loaded against")
+        "has to keep naming the controller this page was loaded against"
+    )
 
 
 def test_the_fireos_flow_refuses_an_emos_boot_image_before_it_writes():
@@ -3109,12 +3356,14 @@ def test_the_fireos_flow_refuses_an_emos_boot_image_before_it_writes():
     device's boot slot.
     """
     src = _jsx()
-    fn = src[src.index("async function runPatchBoot"):]
-    fn = fn[:fn.index("\n  async function ", 1)]
-    assert "isOurBootImage(" in fn, (
-        "runPatchBoot must check whose image is in the slot before patching it")
-    assert fn.index("isOurBootImage(") < fn.index("of=/tmp/work/boot.img"), (
-        "the emOS check must precede the pull, or the refusal comes too late")
+    fn = src[src.index("async function runPatchBoot") :]
+    fn = fn[: fn.index("\n  async function ", 1)]
+    assert (
+        "isOurBootImage(" in fn
+    ), "runPatchBoot must check whose image is in the slot before patching it"
+    assert fn.index("isOurBootImage(") < fn.index(
+        "of=/tmp/work/boot.img"
+    ), "the emOS check must precede the pull, or the refusal comes too late"
 
 
 def test_asset_installs_queue_behind_the_ota_lock():
@@ -3125,16 +3374,24 @@ def test_asset_installs_queue_behind_the_ota_lock():
     take the same global lock, and only the wrapper may reach the unlocked body.
     """
     import ast
+
     # Every module: a caller of the unlocked body is a caller wherever it is.
     _, wrapper = _sources.find_def("em_oww_sync.sync")
-    _sources.find_def("em_oww_sync._sync_locked")   # the body exists to be guarded
-    assert any(isinstance(n, ast.AsyncWith) and "em_ota.queue" in ast.unparse(n.items[0].context_expr)
-               for n in ast.walk(wrapper)), "em_oww_sync.sync does not take em_ota.queue"
-    callers = [f"{path.name}:{fn.name}" for path in _sources.MODULES
-               for fn in ast.walk(_sources.tree(path))
-               if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
-               and fn is not wrapper and fn.name != "_sync_locked"
-               and "_sync_locked(" in ast.unparse(fn)]
+    _sources.find_def("em_oww_sync._sync_locked")  # the body exists to be guarded
+    assert any(
+        isinstance(n, ast.AsyncWith)
+        and "em_ota.queue" in ast.unparse(n.items[0].context_expr)
+        for n in ast.walk(wrapper)
+    ), "em_oww_sync.sync does not take em_ota.queue"
+    callers = [
+        f"{path.name}:{fn.name}"
+        for path in _sources.MODULES
+        for fn in ast.walk(_sources.tree(path))
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and fn is not wrapper
+        and fn.name != "_sync_locked"
+        and "_sync_locked(" in ast.unparse(fn)
+    ]
     assert not callers, f"unlocked asset sync called from {callers}"
 
 
@@ -3147,12 +3404,17 @@ def test_the_image_keeps_its_data_on_the_mounted_directory():
     Read from the Dockerfile's instructions, not its comments.
     """
     root = Path(__file__).resolve().parent.parent
-    instructions = [ln.strip() for ln in (root / "Dockerfile").read_text().splitlines()
-                    if ln.strip() and not ln.lstrip().startswith("#")]
+    instructions = [
+        ln.strip()
+        for ln in (root / "Dockerfile").read_text().splitlines()
+        if ln.strip() and not ln.lstrip().startswith("#")
+    ]
     assert "ENV DB_PATH=/app/data/echomuse.db" in instructions
     # sqlite will not create the directory, and without a volume nothing else does.
-    assert any(ln.startswith("RUN mkdir -p") and "/app/data" in ln.split()
-               for ln in instructions)
+    assert any(
+        ln.startswith("RUN mkdir -p") and "/app/data" in ln.split()
+        for ln in instructions
+    )
     # The directory the default points at is the one both compose files mount.
     for compose in ("docker-compose.yml", "docker-compose.deploy.yml"):
         assert ":/app/data" in (root / compose).read_text(), compose

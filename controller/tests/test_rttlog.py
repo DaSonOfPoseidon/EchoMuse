@@ -16,6 +16,7 @@ def log(device="dev1", summary_sec=600.0):
 
 # ─── Busy excursions are never coalesced ──────────────────────────────────────
 
+
 def test_busy_excursion_logs_immediately():
     line = log().record(1011, busy=True, now=0.0)
     assert line == "[dev1] RTT excursion: 1011ms (busy)"
@@ -41,6 +42,7 @@ def test_busy_excursions_do_not_disturb_an_open_idle_window():
 
 # ─── Idle excursions coalesce ─────────────────────────────────────────────────
 
+
 def test_idle_excursion_is_silent_inside_the_window():
     L = log()
     assert L.record(600, busy=False, now=0.0) is None
@@ -64,8 +66,10 @@ def test_window_resets_after_emitting():
     assert L.idle_since is None
     # The next window starts at the next excursion, not at the last emit.
     assert L.record(700, busy=False, now=1200.0) is None
-    assert L.record(800, busy=False, now=1801.0) == \
-        "[dev1] RTT: 2 idle excursions in 10m, worst 800ms"
+    assert (
+        L.record(800, busy=False, now=1801.0)
+        == "[dev1] RTT: 2 idle excursions in 10m, worst 800ms"
+    )
 
 
 def test_elapsed_is_reported_not_assumed():
@@ -88,6 +92,7 @@ def test_a_quiet_link_emits_nothing():
 
 
 # ─── The volume claim, as arithmetic ──────────────────────────────────────────
+
 
 def test_coalescing_is_worth_doing():
     """

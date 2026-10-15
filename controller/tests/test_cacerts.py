@@ -8,15 +8,18 @@ refusing to look like it worked.
 """
 
 import sys, pathlib
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import pytest
 
 import em_cacerts
 
-PEM = ("-----BEGIN CERTIFICATE-----\n"
-       "MIIByjCCATOgAwIBAgIUFakeFakeFake\n"
-       "-----END CERTIFICATE-----\n")
+PEM = (
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIByjCCATOgAwIBAgIUFakeFakeFake\n"
+    "-----END CERTIFICATE-----\n"
+)
 
 
 def _ok(*args, **kwargs):
@@ -24,6 +27,7 @@ def _ok(*args, **kwargs):
         returncode = 0
         stdout = "1 added"
         stderr = ""
+
     return R()
 
 
@@ -32,6 +36,7 @@ def _fails(*args, **kwargs):
         returncode = 1
         stdout = ""
         stderr = "update-ca-certificates: broken"
+
     return R()
 
 
@@ -75,8 +80,9 @@ def test_anchor_name_always_ends_crt():
 
 def test_a_missing_file_is_refused_with_somewhere_to_look(tmp_path):
     with pytest.raises(em_cacerts.CATrustError) as e:
-        em_cacerts.install(str(tmp_path / "nope.crt"),
-                           anchor_dir=tmp_path / "a", runner=_ok)
+        em_cacerts.install(
+            str(tmp_path / "nope.crt"), anchor_dir=tmp_path / "a", runner=_ok
+        )
     # The message has to say where to put it, or the user is left guessing
     # between the host path and the path inside the container.
     assert "/ssl" in str(e.value)
@@ -89,7 +95,7 @@ def test_a_non_pem_file_is_refused_with_the_conversion_command(tmp_path):
     successful-looking startup in front of it.
     """
     src = tmp_path / "ca.crt"
-    src.write_bytes(b"\x30\x82\x01\x0a\x02\x82")      # DER, not PEM
+    src.write_bytes(b"\x30\x82\x01\x0a\x02\x82")  # DER, not PEM
     with pytest.raises(em_cacerts.CATrustError) as e:
         em_cacerts.install(str(src), anchor_dir=tmp_path / "a", runner=_ok)
     assert "openssl" in str(e.value)
@@ -116,6 +122,6 @@ def test_startup_refuses_rather_than_starting_untrusted():
     nobody connects back to this option.
     """
     src = (pathlib.Path(__file__).resolve().parents[1] / "em_start.py").read_text()
-    ca = src[src.index("EM_EXTRA_CA_CERT"):]
+    ca = src[src.index("EM_EXTRA_CA_CERT") :]
     assert "sys.exit(1)" in ca
     assert "em_cacerts.install" in ca

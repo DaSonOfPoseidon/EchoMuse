@@ -4,6 +4,7 @@ reason, from the register message to a dashboard line. Written from the
 spec's edges: every life-time value it defines, the reserved ones, and the
 revision below which the fields mean nothing.
 """
+
 import em_db
 import em_health
 
@@ -44,7 +45,10 @@ def test_below_rev_7_the_bytes_are_not_health():
 def test_nothing_reported_is_none_not_healthy():
     assert em_health.emmc_summary(None) is None
     assert em_health.emmc_summary({"emmc_rev": None}) is None
-    assert em_health.emmc_summary(_row(eol=0, a=0, b=0)) == {"text": "unknown", "level": None}
+    assert em_health.emmc_summary(_row(eol=0, a=0, b=0)) == {
+        "text": "unknown",
+        "level": None,
+    }
 
 
 def test_unplanned_boots_are_warnings():
@@ -56,16 +60,33 @@ def test_unplanned_boots_are_warnings():
 
 
 def test_wear_values_keep_only_well_typed_readings():
-    e = {"rev": 7, "preEol": 1, "lifeA": 1, "lifeB": 2, "name": "FJ25AB", "date": "08/2017"}
+    e = {
+        "rev": 7,
+        "preEol": 1,
+        "lifeA": 1,
+        "lifeB": 2,
+        "name": "FJ25AB",
+        "date": "08/2017",
+    }
     assert em_health.wear_values(e) == (7, 1, 1, 2, "FJ25AB", "08/2017", None)
     assert em_health.wear_values({"rev": "7", "lifeA": True, "name": ""}) is None
     assert em_health.wear_values(None) is None
-    assert em_health.wear_values({"rev": 7, "lifeA": False}) == (7, None, None, None, None, None, None)
+    assert em_health.wear_values({"rev": 7, "lifeA": False}) == (
+        7,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
 
 
 def _db(tmp_path):
     em_db.init(str(tmp_path / "em.db"))
-    em_db._conn.execute("INSERT INTO devices (device_id, label, approved) VALUES ('D', 'x', 1)")
+    em_db._conn.execute(
+        "INSERT INTO devices (device_id, label, approved) VALUES ('D', 'x', 1)"
+    )
     em_db._conn.commit()
 
 
@@ -92,7 +113,8 @@ def test_wear_is_one_row_per_day_with_the_latest_reading(tmp_path):
     em_db.record_wear("D", "2026-10-02", (7, 1, 2, 2, "FJ25AB", "08/2017", None))
     assert _count("device_wear") == 2
     rows = em_db._conn.execute(
-        "SELECT day, emmc_life_a, emmc_life_b FROM device_wear ORDER BY day").fetchall()
+        "SELECT day, emmc_life_a, emmc_life_b FROM device_wear ORDER BY day"
+    ).fetchall()
     assert [tuple(r) for r in rows] == [("2026-10-01", 1, 2), ("2026-10-02", 2, 2)]
     h = em_db.latest_health()["D"]
     assert (h["day"], h["emmc_life_a"]) == ("2026-10-02", 2)

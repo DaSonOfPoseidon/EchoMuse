@@ -38,8 +38,11 @@ def test_entity_keys_are_appended_not_renumbered():
 
 def test_the_mute_sensor_is_advertised_and_gated_on_mic():
     src = ESPHOME.read_text()
-    entities = _block(src, "isinstance(msg, api_pb2.ListEntitiesRequest)",
-                      "ListEntitiesDoneResponse()")
+    entities = _block(
+        src,
+        "isinstance(msg, api_pb2.ListEntitiesRequest)",
+        "ListEntitiesDoneResponse()",
+    )
     sensor = _block(entities, "ListEntitiesBinarySensorResponse(", ")")
     assert "key=MIC_MUTED_KEY" in sensor
     assert "self.label" not in sensor
@@ -51,18 +54,24 @@ def test_the_mute_sensor_is_advertised_and_gated_on_mic():
 def test_the_button_mute_is_read_only():
     """Nothing that takes a command from HA may name the sensor's key."""
     src = ESPHOME.read_text()
-    for handler in ("isinstance(msg, api_pb2.VoiceAssistantSetConfiguration)",
-                    "isinstance(msg, api_pb2.MediaPlayerCommandRequest)"):
+    for handler in (
+        "isinstance(msg, api_pb2.VoiceAssistantSetConfiguration)",
+        "isinstance(msg, api_pb2.MediaPlayerCommandRequest)",
+    ):
         block = _block(src, handler, "\n        if isinstance(msg, ")
         assert "MIC_MUTED_KEY" not in block
-    assert _sources.all_code().count("MIC_MUTED_KEY") == 3, \
-        "defined, advertised, reported — nothing else"
+    assert (
+        _sources.all_code().count("MIC_MUTED_KEY") == 3
+    ), "defined, advertised, reported — nothing else"
 
 
 def test_subscribing_to_states_reports_the_mute():
     src = ESPHOME.read_text()
-    sub = _block(src, "isinstance(msg, (api_pb2.SubscribeStatesRequest,",
-                 "SubscribeVoiceAssistantRequest")
+    sub = _block(
+        src,
+        "isinstance(msg, (api_pb2.SubscribeStatesRequest,",
+        "SubscribeVoiceAssistantRequest",
+    )
     assert "_mic_muted_msg()" in sub
 
 
@@ -74,17 +83,24 @@ def test_the_wake_word_defaults_to_listening():
     assert re.search(r"^\s{8}self\.mic_muted\s*:\s*bool\s*=\s*False", init, re.M)
     # The speaker's mute is a different thing and keeps its own state.
     assert "self.output_mute = em_output_mute.OutputMute()" in init
-    assert "return False, True" in _block(src, "def get_mic_muted_and_wake_word(", "\n\n\n")
+    assert "return False, True" in _block(
+        src, "def get_mic_muted_and_wake_word(", "\n\n\n"
+    )
     db = DB.read_text()
     getter = _block(db, "def get_wake_word_enabled(", "\n\n\n")
-    assert "not in _wake_word_off_ids" in getter, "stored as the OFF set, so absent is on"
+    assert (
+        "not in _wake_word_off_ids" in getter
+    ), "stored as the OFF set, so absent is on"
 
 
 def test_the_picker_reads_back_the_truth():
     """HA's picker shows what we report, so it must never report the model while off."""
     src = ESPHOME.read_text()
-    cfg = _block(src, "isinstance(msg, api_pb2.VoiceAssistantConfigurationRequest)",
-                 "\n        if isinstance(msg, ")
+    cfg = _block(
+        src,
+        "isinstance(msg, api_pb2.VoiceAssistantConfigurationRequest)",
+        "\n        if isinstance(msg, ",
+    )
     assert "active_wake_words=[self.oww_model_id] if enabled else []" in cfg
     assert "wake_word_enabled" in cfg
 
@@ -92,8 +108,11 @@ def test_the_picker_reads_back_the_truth():
 def test_the_picker_turns_detection_on_and_off():
     """Meaning comes from em_wakeword.requested_on; a decline is logged, not applied."""
     src = ESPHOME.read_text()
-    setcfg = _block(src, "isinstance(msg, api_pb2.VoiceAssistantSetConfiguration)",
-                    "\n        if isinstance(msg, ")
+    setcfg = _block(
+        src,
+        "isinstance(msg, api_pb2.VoiceAssistantSetConfiguration)",
+        "\n        if isinstance(msg, ",
+    )
     assert "em_wakeword.requested_on(requested, self.oww_model_id)" in setcfg
     assert "if want is None:" in setcfg
     assert "self._apply_wake_word(want)" in setcfg
@@ -102,19 +121,29 @@ def test_the_picker_turns_detection_on_and_off():
 def test_the_picker_write_is_applied_before_the_handler_yields():
     """HA reads the configuration back straight after writing it, so no state change may wait on an await or a task."""
     src = ESPHOME.read_text()
-    setcfg = _block(src, "isinstance(msg, api_pb2.VoiceAssistantSetConfiguration)",
-                    "\n        if isinstance(msg, ")
+    setcfg = _block(
+        src,
+        "isinstance(msg, api_pb2.VoiceAssistantSetConfiguration)",
+        "\n        if isinstance(msg, ",
+    )
     assert "create_task" not in setcfg and "await " not in setcfg
-    apply = _block(src, "    def _apply_wake_word(self, on: bool) -> None:", "\n    def ")
+    apply = _block(
+        src, "    def _apply_wake_word(self, on: bool) -> None:", "\n    def "
+    )
     assert "create_task" not in apply
     assert re.search(r"^\s+set_fn\(on\)\s*$", apply, re.M), "called, not scheduled"
 
     ctrl = CONTROLLER.read_text()
-    setter = _block(ctrl, "        def _set_wake_word(on: bool, _d=_device_ref) -> None:",
-                    "            async def _follow()")
-    for line in ("_d.wake_word_enabled = t.enabled",
-                 "esphome.update_wake_word(_d.device_id, t.enabled)",
-                 "em_dbwriter.submit(db.set_wake_word_enabled, _d.device_id, t.enabled)"):
+    setter = _block(
+        ctrl,
+        "        def _set_wake_word(on: bool, _d=_device_ref) -> None:",
+        "            async def _follow()",
+    )
+    for line in (
+        "_d.wake_word_enabled = t.enabled",
+        "esphome.update_wake_word(_d.device_id, t.enabled)",
+        "em_dbwriter.submit(db.set_wake_word_enabled, _d.device_id, t.enabled)",
+    ):
         assert line in setter, f"{line!r} must run before the setter returns"
     assert "await " not in setter
 
@@ -122,12 +151,17 @@ def test_the_picker_write_is_applied_before_the_handler_yields():
 def test_the_choice_survives_a_controller_restart():
     """Read from the DB at connect and set on the server before its port comes up."""
     src = CONTROLLER.read_text()
-    assert "device.wake_word_enabled = await loop.run_in_executor(\n            None, db.get_wake_word_enabled, device_id" in src
+    assert (
+        "device.wake_word_enabled = await loop.run_in_executor(\n            None, db.get_wake_word_enabled, device_id"
+        in src
+    )
     connect = _block(src, "await esphome.device_connected(", "\n        )")
     assert "wake_word_enabled=device.wake_word_enabled" in connect
     esp = ESPHOME.read_text()
     dc = _block(esp, "async def device_connected(", "\nasync def device_disconnected(")
-    assert dc.index("server.wake_word_enabled = bool(wake_word_enabled)") < dc.index("await server.start(host)")
+    assert dc.index("server.wake_word_enabled = bool(wake_word_enabled)") < dc.index(
+        "await server.start(host)"
+    )
 
 
 def test_the_choice_is_not_a_config_key():
@@ -176,9 +210,13 @@ def test_the_wake_listener_honours_the_picker():
 def test_the_wake_stream_does_not_come_up_with_the_wake_word_off():
     """`Device.mic_start` is the one gate; `mic_start_turn` (an HA-initiated turn) is not gated."""
     src = CONTROLLER.read_text()
-    start = _block(src, "    async def mic_start(self):", "    async def mic_start_turn(self):")
+    start = _block(
+        src, "    async def mic_start(self):", "    async def mic_start_turn(self):"
+    )
     assert "wake_word_enabled" in start
-    turn = _block(src, "    async def mic_start_turn(self):", "    async def mic_stop(self):")
+    turn = _block(
+        src, "    async def mic_start_turn(self):", "    async def mic_stop(self):"
+    )
     assert "wake_word_enabled" not in turn
 
 
@@ -209,7 +247,9 @@ def test_a_private_wake_is_declined_with_the_wake_word_off():
     turn = _block(src, "async def _private_wake_turn(", "\n\n\n")
     gate = turn.index("if not device.wake_word_enabled:")
     close = turn.index('await device.listen_close(session, "wake_off")', gate)
-    assert close < turn.index("Wake word detected"), \
-        "the wake must be declined before a turn is set up"
-    assert turn.index('listen_close(session, "muted")') < gate, \
-        "the button mute keeps its own reason and is checked first"
+    assert close < turn.index(
+        "Wake word detected"
+    ), "the wake must be declined before a turn is set up"
+    assert (
+        turn.index('listen_close(session, "muted")') < gate
+    ), "the button mute keeps its own reason and is checked first"

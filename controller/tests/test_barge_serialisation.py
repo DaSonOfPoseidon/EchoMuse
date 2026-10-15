@@ -74,9 +74,9 @@ def test_the_stale_tail_is_discarded_until_run_start():
     b = RunBarrier()
     b.abort()
     b.begin_turn()
-    assert b.discards(is_run_start=False) is True   # stale RUN_END
-    assert b.discards(is_run_start=False) is True   # stale STT_VAD_END
-    assert b.discards(is_run_start=False) is True   # stale ERROR
+    assert b.discards(is_run_start=False) is True  # stale RUN_END
+    assert b.discards(is_run_start=False) is True  # stale STT_VAD_END
+    assert b.discards(is_run_start=False) is True  # stale ERROR
 
 
 def test_run_start_releases_the_barrier_and_is_itself_delivered():
@@ -96,8 +96,8 @@ def test_everything_after_run_start_is_delivered():
     b = RunBarrier()
     b.abort()
     b.begin_turn()
-    b.discards(is_run_start=False)                  # stale, dropped
-    b.discards(is_run_start=True)                   # ours, releases
+    b.discards(is_run_start=False)  # stale, dropped
+    b.discards(is_run_start=True)  # ours, releases
     assert b.discards(is_run_start=False) is False
     assert b.discards(is_run_start=False) is False
 
@@ -117,7 +117,7 @@ def test_the_barrier_does_not_outlive_its_turn():
     b.abort()
     b.begin_turn()
     assert b.discards(is_run_start=False) is True
-    b.end_turn()                                    # RUN_START never came
+    b.end_turn()  # RUN_START never came
     assert b.active is False
     assert b.discards(is_run_start=False) is False
 
@@ -192,12 +192,10 @@ def test_the_event_handler_consults_the_barrier_before_anything_else():
     STT_VAD_END is as fatal to the interrupting turn as a stale RUN_END, and
     listing event types to guard would go stale the next time one is added.
     """
-    handler = ESPHOME_SRC[ESPHOME_SRC.index("def _handle_voice_event"):]
+    handler = ESPHOME_SRC[ESPHOME_SRC.index("def _handle_voice_event") :]
     gate = handler.index("self._barrier")
     first_dispatch = handler.index("if event_type ==")
-    assert gate < first_dispatch, (
-        "the barrier must gate every event, not selected ones"
-    )
+    assert gate < first_dispatch, "the barrier must gate every event, not selected ones"
 
 
 def test_barge_serialises_in_both_phases():
@@ -206,15 +204,15 @@ def test_barge_serialises_in_both_phases():
     aborted first. Playback must serialise too: RUN_END follows TTS_END, so a
     barge in the first milliseconds of audio can beat it.
     """
-    watcher = CONTROLLER_SRC[CONTROLLER_SRC.index("async def _barge_watcher"):]
+    watcher = CONTROLLER_SRC[CONTROLLER_SRC.index("async def _barge_watcher") :]
     watcher = watcher[: watcher.index("\nasync def ", 10)]
     assert "abort_ha=True" in watcher, (
         "barge during thinking must abort HA's pipeline before the "
         "interrupting turn starts"
     )
-    assert "abort_ha_run" in watcher, (
-        "barge during playback must serialise against the interrupting turn"
-    )
+    assert (
+        "abort_ha_run" in watcher
+    ), "barge during playback must serialise against the interrupting turn"
 
 
 def test_the_unarmed_run_end_path_is_still_there():
@@ -224,9 +222,9 @@ def test_the_unarmed_run_end_path_is_still_there():
     setup dialog for the life of the feature. The barrier is armed only by an
     abort, so this path must survive untouched.
     """
-    assert re.search(r"if not self\._run_started:", ESPHOME_SRC), (
-        "the RUN_END-without-RUN_START discriminator is gone"
-    )
+    assert re.search(
+        r"if not self\._run_started:", ESPHOME_SRC
+    ), "the RUN_END-without-RUN_START discriminator is gone"
     assert "self._ha_never_started = True" in ESPHOME_SRC
 
 
@@ -239,10 +237,8 @@ def _turn_body() -> str:
     """
     start = ESPHOME_SRC.index("async def run_esphome_voice_turn")
     body = ESPHOME_SRC[start:]
-    body = body[:re.search(r"\n    async def ", body[1:]).start() + 1]
-    return "\n".join(
-        l for l in body.splitlines() if not l.lstrip().startswith("#")
-    )
+    body = body[: re.search(r"\n    async def ", body[1:]).start() + 1]
+    return "\n".join(l for l in body.splitlines() if not l.lstrip().startswith("#"))
 
 
 def test_every_abandoned_turn_serialises_at_teardown():
@@ -262,12 +258,12 @@ def test_every_abandoned_turn_serialises_at_teardown():
     was listening.
     """
     body = _turn_body()
-    assert "if self._run_started and not self._run_finished:" in body, \
-        "teardown must serialise a run HA never told us finished"
+    assert (
+        "if self._run_started and not self._run_finished:" in body
+    ), "teardown must serialise a run HA never told us finished"
     guard = body.index("if self._run_started and not self._run_finished:")
     end_turn = body.index("self._barrier.end_turn()")
-    assert guard < end_turn, \
-        "the abort must arm the barrier before the turn drops it"
+    assert guard < end_turn, "the abort must arm the barrier before the turn drops it"
 
 
 def test_teardown_is_reached_by_every_return():
@@ -280,11 +276,13 @@ def test_teardown_is_reached_by_every_return():
     lines = _turn_body().splitlines()
     tear = next(i for i, l in enumerate(lines) if "self._turn_active    = False" in l)
     enclosing = next(
-        lines[i].strip() for i in range(tear, 0, -1)
+        lines[i].strip()
+        for i in range(tear, 0, -1)
         if lines[i].strip() in ("try:", "finally:")
     )
-    assert enclosing == "finally:", \
-        f"teardown sits under {enclosing!r}; an early return would skip it"
+    assert (
+        enclosing == "finally:"
+    ), f"teardown sits under {enclosing!r}; an early return would skip it"
 
 
 def test_the_serialisation_lives_in_exactly_one_place():
@@ -307,18 +305,19 @@ def test_ending_the_run_is_idempotent():
     — the precise failure this whole mechanism exists to prevent — so the
     flag must be set before anything is sent, not after.
     """
-    fn = ESPHOME_SRC[ESPHOME_SRC.index("def end_ha_run"):][:4000]
+    fn = ESPHOME_SRC[ESPHOME_SRC.index("def end_ha_run") :][:4000]
     # Past the docstring: it quotes `start=False` while explaining why the
     # ordering matters, and matching that instead of the send is how the
     # first version of this test failed. Third time today.
-    code = fn[fn.index('"""', fn.index('"""') + 3) + 3:]
+    code = fn[fn.index('"""', fn.index('"""') + 3) + 3 :]
     code = "\n".join(l for l in code.splitlines() if not l.lstrip().startswith("#"))
     early_out = code.index("return")
     set_flag = code.index("self._run_finished = True")
     send = code.index("start=False")
-    assert early_out < set_flag < send, \
-        "end_ha_run must bail on an already-finished run, and claim the run "\
+    assert early_out < set_flag < send, (
+        "end_ha_run must bail on an already-finished run, and claim the run "
         "before it sends anything"
+    )
 
 
 def test_a_genuinely_finished_run_is_not_aborted():
@@ -328,12 +327,14 @@ def test_a_genuinely_finished_run_is_not_aborted():
     completed and arming a barrier the next turn does not need.
     """
     assert ESPHOME_SRC.count("self._run_finished = True") >= 3, (
-        "expected the flag set by end_ha_run plus both terminal RUN_END "
-        "branches"
+        "expected the flag set by end_ha_run plus both terminal RUN_END " "branches"
     )
-    never_started = ESPHOME_SRC[ESPHOME_SRC.index("self._ha_never_started = True"):][:200]
-    assert "self._run_finished = True" in never_started, \
-        "a run HA ended without starting is finished, not live"
+    never_started = ESPHOME_SRC[ESPHOME_SRC.index("self._ha_never_started = True") :][
+        :200
+    ]
+    assert (
+        "self._run_finished = True" in never_started
+    ), "a run HA ended without starting is finished, not live"
 
 
 def test_the_flag_resets_per_turn():
@@ -342,5 +343,6 @@ def test_the_flag_resets_per_turn():
     silently, and only for the multi-run case that is hard to reproduce.
     """
     body = _turn_body()
-    assert "self._run_finished          = False" in body, \
-        "the flag must be cleared at turn start beside _run_started"
+    assert (
+        "self._run_finished          = False" in body
+    ), "the flag must be cleared at turn start beside _run_started"

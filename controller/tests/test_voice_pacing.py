@@ -29,8 +29,10 @@ DEVICE = CONTROLLER.parent / "device"
 
 
 def test_no_delay_while_under_the_lead():
-    assert em_pacing.lead_delay(sent_seconds=2.0, elapsed_seconds=0.0,
-                                lead_seconds=4.0) == 0.0
+    assert (
+        em_pacing.lead_delay(sent_seconds=2.0, elapsed_seconds=0.0, lead_seconds=4.0)
+        == 0.0
+    )
 
 
 def test_the_delay_is_exactly_the_excess():
@@ -55,7 +57,7 @@ def test_a_fast_producer_settles_at_the_lead_and_never_exceeds_it():
     """
     lead, period = 4.0, 0.0427
     now, sent, worst = 0.0, 0.0, 0.0
-    for _ in range(2000):                     # ~85s of audio
+    for _ in range(2000):  # ~85s of audio
         now += em_pacing.lead_delay(sent, now, lead)
         sent += period
         worst = max(worst, sent - now)
@@ -88,10 +90,13 @@ def test_the_lead_stays_under_the_device_buffer():
     )
     # Headroom, not a hairline pass: em_player.LEAD_S keeps ~1.4s for the
     # same reason on the music plane.
-    assert device_seconds - lead >= 1.0, "less than 1s of headroom under the device buffer"
+    assert (
+        device_seconds - lead >= 1.0
+    ), "less than 1s of headroom under the device buffer"
 
 
 # ── The wiring ───────────────────────────────────────────────────────────────
+
 
 def test_the_pacing_wait_is_raced_against_cancel():
     """
@@ -99,11 +104,12 @@ def test_the_pacing_wait_is_raced_against_cancel():
     add pacing latency to the one thing that must never be delayed.
     """
     src = (CONTROLLER / "em_controller.py").read_text()
-    block = src[src.index("async def send_period("):]
-    block = block[:block.index("sent_seconds += SPEAKER_PERIOD_SECONDS")]
+    block = src[src.index("async def send_period(") :]
+    block = block[: block.index("sent_seconds += SPEAKER_PERIOD_SECONDS")]
     assert "em_pacing.lead_delay(" in block, "send_period must consult the pacer"
-    assert "cancel_event.wait()" in block, \
-        "the pacing wait must be raced against cancel_event, not a bare sleep"
+    assert (
+        "cancel_event.wait()" in block
+    ), "the pacing wait must be raced against cancel_event, not a bare sleep"
     assert "asyncio.sleep(" not in block, "a bare sleep here swallows a barge-in"
 
 
@@ -114,8 +120,9 @@ def test_the_first_period_is_never_paced():
     first-period branch.
     """
     src = (CONTROLLER / "em_controller.py").read_text()
-    block = src[src.index("async def send_period("):]
-    block = block[:block.index("sent_seconds += SPEAKER_PERIOD_SECONDS")]
+    block = src[src.index("async def send_period(") :]
+    block = block[: block.index("sent_seconds += SPEAKER_PERIOD_SECONDS")]
     first = block.index("First streamed PCM period")
-    assert block.index("em_pacing.lead_delay(") > first, \
-        "pacing must come after the first-period branch, never before it"
+    assert (
+        block.index("em_pacing.lead_delay(") > first
+    ), "pacing must come after the first-period branch, never before it"

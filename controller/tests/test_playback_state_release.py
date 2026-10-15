@@ -36,7 +36,10 @@ CONTROLLER = Path(__file__).resolve().parents[1]
 def _function(name: str) -> ast.AsyncFunctionDef:
     tree = ast.parse((CONTROLLER / "em_controller.py").read_text())
     for node in ast.walk(tree):
-        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == name:
+        if (
+            isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+            and node.name == name
+        ):
             return node
     raise AssertionError(f"{name} not found in em_controller.py — renamed?")
 
@@ -63,9 +66,7 @@ def test_speaking_is_cleared_in_a_finally():
     """
     fn = _function("_run_post_turn_playback")
 
-    in_finally = any(
-        "_set_speaking" in _calls_in(t.finalbody) for t in _try_blocks(fn)
-    )
+    in_finally = any("_set_speaking" in _calls_in(t.finalbody) for t in _try_blocks(fn))
     assert in_finally, (
         "_run_post_turn_playback must clear `speaking` from a finally. "
         "Cancellation skips anything after the try, and the wake listener "
@@ -81,9 +82,11 @@ def test_speaker_busy_is_cleared_in_a_finally():
     for t in _try_blocks(fn):
         for n in t.finalbody:
             for sub in ast.walk(n):
-                if (isinstance(sub, ast.AugAssign)
-                        and isinstance(sub.target, ast.Attribute)
-                        and sub.target.attr == "speaker_busy"):
+                if (
+                    isinstance(sub, ast.AugAssign)
+                    and isinstance(sub.target, ast.Attribute)
+                    and sub.target.attr == "speaker_busy"
+                ):
                     released = True
     assert released, (
         "speaker_busy must be decremented from a finally — a leaked count "
@@ -104,10 +107,12 @@ def test_the_clear_survives_the_cancellation_that_triggered_it():
     for t in _try_blocks(fn):
         for n in t.finalbody:
             for sub in ast.walk(n):
-                if (isinstance(sub, ast.Call)
-                        and isinstance(sub.func, ast.Attribute)
-                        and sub.func.attr == "shield"
-                        and "_set_speaking" in _calls_in(sub.args)):
+                if (
+                    isinstance(sub, ast.Call)
+                    and isinstance(sub.func, ast.Attribute)
+                    and sub.func.attr == "shield"
+                    and "_set_speaking" in _calls_in(sub.args)
+                ):
                     shielded = True
     assert shielded, (
         "the _set_speaking(False) in the finally must be wrapped in "
@@ -130,9 +135,7 @@ def test_the_wake_listener_still_gates_on_speaking():
         if not isinstance(node, ast.If):
             continue
         names = {n.attr for n in ast.walk(node.test) if isinstance(n, ast.Attribute)}
-        if "speaking" in names and any(
-            isinstance(b, ast.Continue) for b in node.body
-        ):
+        if "speaking" in names and any(isinstance(b, ast.Continue) for b in node.body):
             found = True
     assert found, (
         "the wake listener no longer skips frames while `speaking` is set. "

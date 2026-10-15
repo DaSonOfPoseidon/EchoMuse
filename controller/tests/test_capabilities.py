@@ -42,7 +42,7 @@ def device_capabilities() -> list[str]:
     that hides a typo rather than surfacing it.
     """
     src = CONTROL_GO.read_text()
-    m = re.search(r'func capabilities\(\) \[\]string \{(.*?)\n\}', src, re.S)
+    m = re.search(r"func capabilities\(\) \[\]string \{(.*?)\n\}", src, re.S)
     assert m, "could not find func capabilities() in control.go"
     return re.findall(r'"([a-z_]+)"', m.group(1))
 
@@ -65,10 +65,10 @@ def test_every_capability_the_controller_checks_is_one_the_device_sends():
     # satellite, which decides which HA entities get advertised. A typo in
     # either is an entity that never appears or never fires, with no error
     # anywhere — exactly what this test exists to catch.
-    checked = set(re.findall(r'"([a-z_]+)"\s+in\s+\(self\.capabilities',
-                             CONTROLLER.read_text()))
-    checked |= set(re.findall(r'_device_has\(\s*"([a-z_]+)"\s*\)',
-                              ESPHOME.read_text()))
+    checked = set(
+        re.findall(r'"([a-z_]+)"\s+in\s+\(self\.capabilities', CONTROLLER.read_text())
+    )
+    checked |= set(re.findall(r'_device_has\(\s*"([a-z_]+)"\s*\)', ESPHOME.read_text()))
     assert checked, "no capability checks found — has the idiom changed?"
     unknown = checked - caps
     assert not unknown, (
@@ -83,13 +83,16 @@ def test_shadow_capability_is_surfaced_to_the_dashboard():
     toggle that silently does nothing on older firmware — which reads as a
     broken feature rather than an unsupported one.
     """
-    assert "oww_shadow_capable" in CONTROLLER.read_text(), \
-        "em_controller must expose the shadow capability as a property"
-    assert "owwShadowCapable" in _device_record(), \
-        "/api/devices must surface the shadow capability"
+    assert (
+        "oww_shadow_capable" in CONTROLLER.read_text()
+    ), "em_controller must expose the shadow capability as a property"
+    assert (
+        "owwShadowCapable" in _device_record()
+    ), "/api/devices must surface the shadow capability"
     jsx = (ROOT / "controller" / "static" / "dashboard.jsx").read_text()
-    assert "owwShadowCapable" in jsx, \
-        "the dashboard must gate the on-device toggle on the capability"
+    assert (
+        "owwShadowCapable" in jsx
+    ), "the dashboard must gate the on-device toggle on the capability"
 
 
 def test_wake_mic_capability_is_surfaced_to_the_dashboard():
@@ -106,13 +109,16 @@ def test_volume_cue_capability_is_surfaced_to_the_dashboard():
     """Old firmware must not be offered a switch it cannot honour."""
     caps = device_capabilities()
     assert "volume_cue" in caps, "firmware no longer announces volume_cue"
-    assert "volume_cue_capable" in CONTROLLER.read_text(), \
-        "em_controller must expose the volume cue capability as a property"
-    assert "volumeCueCapable" in _device_record(), \
-        "/api/devices must surface the volume cue capability"
+    assert (
+        "volume_cue_capable" in CONTROLLER.read_text()
+    ), "em_controller must expose the volume cue capability as a property"
+    assert (
+        "volumeCueCapable" in _device_record()
+    ), "/api/devices must surface the volume cue capability"
     jsx = (ROOT / "controller" / "static" / "dashboard.jsx").read_text()
-    assert "volumeCueCapable" in jsx, \
-        "the dashboard must gate the volume button sound on the capability"
+    assert (
+        "volumeCueCapable" in jsx
+    ), "the dashboard must gate the volume button sound on the capability"
 
 
 def test_response_level_is_gated_on_its_capability():
@@ -137,8 +143,9 @@ def test_sendspin_is_gated_on_its_capability_and_its_token_stays_private():
     jsx = (ROOT / "controller" / "static" / "dashboard.jsx").read_text()
     assert "disabled={!sendspinCapable}" in jsx
     handler = _sources.def_source("_on_sendspin_token")
-    assert "log." not in handler and "em_events.push" not in handler, \
-        "the sendspin_token handler must hand the token to its waiter and nothing else"
+    assert (
+        "log." not in handler and "em_events.push" not in handler
+    ), "the sendspin_token handler must hand the token to its waiter and nothing else"
 
 
 def test_triggering_is_a_separate_capability_from_scoring():
@@ -151,14 +158,19 @@ def test_triggering_is_a_separate_capability_from_scoring():
     """
     caps = device_capabilities()
     assert "oww_trigger" in caps, "firmware no longer announces oww_trigger"
-    assert "oww_shadow" in caps, \
-        "oww_trigger must not replace oww_shadow — shadow is still a mode"
-    assert "oww_trigger_capable" in CONTROLLER.read_text(), \
-        "em_controller must expose the trigger capability as a property"
-    assert "owwTriggerCapable" in _device_record(), \
-        "/api/devices must surface the trigger capability"
-    assert "owwTriggerCapable" in (ROOT / "controller" / "static" / "dashboard.jsx").read_text(), \
-        "the dashboard must gate the 'On device' option on the capability"
+    assert (
+        "oww_shadow" in caps
+    ), "oww_trigger must not replace oww_shadow — shadow is still a mode"
+    assert (
+        "oww_trigger_capable" in CONTROLLER.read_text()
+    ), "em_controller must expose the trigger capability as a property"
+    assert (
+        "owwTriggerCapable" in _device_record()
+    ), "/api/devices must surface the trigger capability"
+    assert (
+        "owwTriggerCapable"
+        in (ROOT / "controller" / "static" / "dashboard.jsx").read_text()
+    ), "the dashboard must gate the 'On device' option on the capability"
 
 
 def test_remote_volume_arc_is_capability_gated():
@@ -187,16 +199,20 @@ def test_the_toggle_control_actually_honours_disabled():
     call sites already looked correct while the bug was live.
     """
     jsx = (ROOT / "controller" / "static" / "dashboard.jsx").read_text()
-    m = re.search(r'function Toggle\(\{(.*?)\}\)', jsx, re.S)
+    m = re.search(r"function Toggle\(\{(.*?)\}\)", jsx, re.S)
     assert m, "dashboard.jsx must still define a Toggle component"
-    assert "disabled" in m.group(1), \
-        "Toggle must accept a `disabled` prop — every caller that passes one " \
+    assert "disabled" in m.group(1), (
+        "Toggle must accept a `disabled` prop — every caller that passes one "
         "is relying on it to refuse the write, not merely to grey the switch"
+    )
 
-    body = jsx[m.end():jsx.index("\n}", m.end())]
-    assert re.search(r'if\s*\(!disabled\)|disabled\s*\?\s*undefined|disabled\s*\|\|', body), \
-        "Toggle's click handler must check `disabled` before calling onChange — " \
+    body = jsx[m.end() : jsx.index("\n}", m.end())]
+    assert re.search(
+        r"if\s*\(!disabled\)|disabled\s*\?\s*undefined|disabled\s*\|\|", body
+    ), (
+        "Toggle's click handler must check `disabled` before calling onChange — "
         "styling it grey while still writing the value is the bug this pins"
+    )
 
 
 def test_capabilities_reported_before_the_server_exists_are_not_lost():
@@ -235,14 +251,19 @@ def test_the_pending_capabilities_are_applied_when_the_server_is_built():
     reads (_device_has → srv.capabilities).
     """
     src = ESPHOME.read_text()
-    create = re.search(r"async def _register_device_server\(.*?\n(?=\n\nasync def |\n\ndef |\Z)",
-                       src, re.S)
+    create = re.search(
+        r"async def _register_device_server\(.*?\n(?=\n\nasync def |\n\ndef |\Z)",
+        src,
+        re.S,
+    )
     assert create, "could not find _register_device_server"
     body = create.group(0)
-    assert "_pending_caps" in body, \
-        "server creation must seed capabilities from the pending map"
-    assert "set_capabilities" in body, \
-        "and must apply them via the same setter the entity gate reads"
+    assert (
+        "_pending_caps" in body
+    ), "server creation must seed capabilities from the pending map"
+    assert (
+        "set_capabilities" in body
+    ), "and must apply them via the same setter the entity gate reads"
 
 
 def test_a_capability_that_changes_later_rebuilds_the_entity_list():
@@ -291,8 +312,9 @@ def test_the_api_can_tell_no_sensor_from_no_reading():
     is its own question, tracked separately. The API field stands on its own
     merits regardless of who renders it.
     """
-    assert "ambientLightCapable" in _device_record(), \
-        "/api/devices must report whether the device found its ALS"
+    assert (
+        "ambientLightCapable" in _device_record()
+    ), "/api/devices must report whether the device found its ALS"
 
 
 def test_hardware_echo_reference_is_a_capability_and_a_runtime_state():
@@ -314,18 +336,21 @@ def test_hardware_echo_reference_is_a_capability_and_a_runtime_state():
     assert "aec_hw_ref" in caps, "firmware no longer announces aec_hw_ref"
 
     ctl = CONTROLLER.read_text()
-    assert "aec_hw_ref_capable" in ctl, \
-        "em_controller must expose the hardware-reference capability"
-    assert '"aecRef"' in ctl or "'aecRef'" in ctl, \
-        "the stats allowlist must carry aecRef, or it is dropped in the relay"
+    assert (
+        "aec_hw_ref_capable" in ctl
+    ), "em_controller must expose the hardware-reference capability"
+    assert (
+        '"aecRef"' in ctl or "'aecRef'" in ctl
+    ), "the stats allowlist must carry aecRef, or it is dropped in the relay"
 
     api = _device_record()
     for field in ("aecHwRefCapable", "aecRef"):
         assert field in api, f"/api/devices must surface {field}"
 
     jsx = (ROOT / "controller" / "static" / "dashboard.jsx").read_text()
-    assert "hwEchoRef" in jsx, \
-        "the dashboard must gate the AEC delay control on the live reference"
+    assert (
+        "hwEchoRef" in jsx
+    ), "the dashboard must gate the AEC delay control on the live reference"
 
 
 def test_the_aec_delay_control_is_gated_on_the_live_reference_not_the_capability():
@@ -344,8 +369,9 @@ def test_the_aec_delay_control_is_gated_on_the_live_reference_not_the_capability
     m = re.search(r"hwEchoRef=\{([^}]*)\}", jsx)
     assert m, "dashboard must pass hwEchoRef to the config form"
     expr = m.group(1)
-    assert "aecRef" in expr, \
-        "hwEchoRef must come from the runtime aecRef, not from the capability"
+    assert (
+        "aecRef" in expr
+    ), "hwEchoRef must come from the runtime aecRef, not from the capability"
     assert "aecHwRefCapable" not in expr, (
         "hwEchoRef must NOT be driven by the capability: a capable device on "
         "the software tap still needs its delay slider"
@@ -367,8 +393,8 @@ def test_the_controller_announces_its_own_features_and_the_device_reads_them():
     py = CONTROLLER.read_text()
     go = CONTROL_GO.read_text()
 
-    block = py[py.index("CONTROLLER_FEATURES = ["):]
-    block = block[:block.index("]") + 1]
+    block = py[py.index("CONTROLLER_FEATURES = [") :]
+    block = block[: block.index("]") + 1]
     announced = set(re.findall(r'"([a-z_]+)"', block))
     assert announced, "CONTROLLER_FEATURES is empty — did it move?"
 
@@ -389,10 +415,14 @@ def test_private_listening_is_negotiated_in_both_directions():
     constants must be the same strings or the pure logic reads a different
     capability from the one negotiated."""
     import sys
+
     sys.path.insert(0, str(ROOT / "controller"))
     import em_listen
+
     py = CONTROLLER.read_text()
-    assert f'"{em_listen.FEATURE}"' in py[py.index("CONTROLLER_FEATURES = ["):][:200]
+    assert f'"{em_listen.FEATURE}"' in py[py.index("CONTROLLER_FEATURES = [") :][:200]
     assert f'"{em_listen.CAPABILITY}" in (self.capabilities' in py
     assert em_listen.CAPABILITY in device_capabilities()
-    assert re.search(r'FeatureListenSession\s*=\s*"listen_session"', CONTROL_GO.read_text())
+    assert re.search(
+        r'FeatureListenSession\s*=\s*"listen_session"', CONTROL_GO.read_text()
+    )

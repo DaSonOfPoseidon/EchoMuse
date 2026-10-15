@@ -20,7 +20,7 @@ class _Stub:
         self._fn = fn
 
     def run(self, _outputs, feeds):
-        data  = next(v for k, v in feeds.items() if k == "data")
+        data = next(v for k, v in feeds.items() if k == "data")
         state = next(v for k, v in feeds.items() if k == "state")
         return [self._fn(data), state]
 
@@ -87,7 +87,7 @@ def test_a_total_gate_lands_on_the_floor_instead_of_silence():
     expected = src[: -em_ns.OLA_DELAY].astype(np.float64) * (
         10.0 ** (em_ns.NS_FLOOR_DB / 20.0)
     )
-    got = out[em_ns.OLA_DELAY:]
+    got = out[em_ns.OLA_DELAY :]
     np.testing.assert_allclose(got, expected, atol=2)
 
     # The point of the floor: a fully-gated stream is attenuated, never
@@ -107,7 +107,7 @@ def test_the_floor_does_not_change_speech_that_the_model_passes():
     out = _pcm(d.process(src.tobytes())).astype(np.float64)
 
     ref = src[: -em_ns.OLA_DELAY].astype(np.float64)
-    got = out[em_ns.OLA_DELAY:]
+    got = out[em_ns.OLA_DELAY :]
     rms_ref = float(np.sqrt(np.mean(ref**2)))
     rms_got = float(np.sqrt(np.mean(got**2)))
     assert rms_got == pytest.approx(rms_ref, rel=0.01)
@@ -122,8 +122,8 @@ def test_frames_split_across_calls_are_carried_not_dropped():
     a = _pcm(whole.process(src.tobytes()))
     raw = src.tobytes()
     b = b""
-    for cut in range(0, len(raw), 300):        # not a multiple of the hop
-        b += ragged.process(raw[cut:cut + 300])
+    for cut in range(0, len(raw), 300):  # not a multiple of the hop
+        b += ragged.process(raw[cut : cut + 300])
     b = _pcm(b)
 
     n = min(a.size, b.size)
@@ -144,4 +144,6 @@ def test_zero_report_separates_a_chewed_stream_from_a_silent_room():
     assert quiet.in_zeros == quiet.samples
     assert "in=100.0%" in quiet.zero_report()
 
-    assert em_ns.StreamingDenoiser(sessions=_passthrough()).zero_report() == "no samples"
+    assert (
+        em_ns.StreamingDenoiser(sessions=_passthrough()).zero_report() == "no samples"
+    )

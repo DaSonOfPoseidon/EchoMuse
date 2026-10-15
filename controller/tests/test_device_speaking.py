@@ -47,12 +47,14 @@ def pushed():
 
 
 async def _record(pushed, device):
-    pushed.append({
-        "device_id": device.device_id,
-        "speaking": device.speaking,
-        "thinking": device.thinking,
-        "listening": device.listening,
-    })
+    pushed.append(
+        {
+            "device_id": device.device_id,
+            "speaking": device.speaking,
+            "thinking": device.thinking,
+            "listening": device.listening,
+        }
+    )
 
 
 def _device(device_id="dev1"):
@@ -61,13 +63,14 @@ def _device(device_id="dev1"):
     fixture. Everything else stays at its initialised value."""
     return em_controller.Device(
         device_id,
-        "10.0.0.1",      # ip — never sent anywhere by the paths under test
-        [],              # capabilities
-        None,            # control_ws — the state methods write no frames
+        "10.0.0.1",  # ip — never sent anywhere by the paths under test
+        [],  # capabilities
+        None,  # control_ws — the state methods write no frames
     )
 
 
 # ── The flag and the push are the same operation ─────────────────────────────
+
 
 def test_setting_speaking_pushes_the_transition(pushed):
     """
@@ -86,9 +89,10 @@ def test_setting_speaking_pushes_the_transition(pushed):
 
     asyncio.run(main())
 
-    assert [p["speaking"] for p in pushed] == [True, False], (
-        f"the speaking transitions were not pushed in order: {pushed}"
-    )
+    assert [p["speaking"] for p in pushed] == [
+        True,
+        False,
+    ], f"the speaking transitions were not pushed in order: {pushed}"
     assert all(p["device_id"] == "dev1" for p in pushed), pushed
 
 
@@ -106,10 +110,13 @@ def test_a_repeated_set_does_not_push(pushed):
         await d._set_speaking(True)
 
     asyncio.run(main())
-    assert len(pushed) == 1, f"three identical sets pushed {len(pushed)} times: {pushed}"
+    assert (
+        len(pushed) == 1
+    ), f"three identical sets pushed {len(pushed)} times: {pushed}"
 
 
 # ── Mutual exclusion ─────────────────────────────────────────────────────────
+
 
 def test_starting_to_speak_clears_thinking(pushed):
     """
@@ -130,9 +137,9 @@ def test_starting_to_speak_clears_thinking(pushed):
         "thinking survived the start of speech — when speaking clears, the tile "
         "will read Thinking again mid-response"
     )
-    assert pushed[-1]["thinking"] is False, (
-        f"the push still carried thinking=true: {pushed[-1]}"
-    )
+    assert (
+        pushed[-1]["thinking"] is False
+    ), f"the push still carried thinking=true: {pushed[-1]}"
 
 
 def test_clearing_speaking_leaves_thinking_alone(pushed):
@@ -146,7 +153,7 @@ def test_clearing_speaking_leaves_thinking_alone(pushed):
 
     async def main():
         await d._set_speaking(True)
-        d.thinking = True          # the STT/intent phase begins
+        d.thinking = True  # the STT/intent phase begins
         await d._set_speaking(False)
 
     asyncio.run(main())
@@ -157,6 +164,7 @@ def test_clearing_speaking_leaves_thinking_alone(pushed):
 
 
 # ── A failed push must not fail the speaker ──────────────────────────────────
+
 
 def test_a_failing_push_does_not_raise(pushed):
     """
@@ -202,6 +210,7 @@ def test_a_failing_push_does_not_raise(pushed):
 
 
 # ── The flag is not the buffer ───────────────────────────────────────────────
+
 
 def test_speaker_busy_is_counted_and_is_not_speaking(pushed):
     """

@@ -4,15 +4,24 @@ em_wifi: every SSID the standard allows, and every WPA2 passphrase.
 The controller used to refuse any SSID or passphrase with a `"` or `\\` in
 it, which are both valid; and it could not name an SSID that is not UTF-8.
 """
+
 import pytest
 
 import _sources
 import em_wifi
 
 
-@pytest.mark.parametrize("name", [
-    "My Home WiFi", " padded ", "Bob's", 'say "hi"', "back\\slash", "Café 🏠",
-])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "My Home WiFi",
+        " padded ",
+        "Bob's",
+        'say "hi"',
+        "back\\slash",
+        "Café 🏠",
+    ],
+)
 def test_every_valid_ssid_is_accepted(name):
     assert em_wifi.problem(em_wifi.ssid_bytes(name), "12345678") is None
 
@@ -34,23 +43,43 @@ def test_malformed_ssid_hex_is_refused_not_ignored():
         em_wifi.ssid_bytes("net", "zz")
 
 
-@pytest.mark.parametrize("ssid,why", [
-    (b"", "empty"), (b"\x00\x00", "empty"), (b"x" * 33, "32"),
-])
+@pytest.mark.parametrize(
+    "ssid,why",
+    [
+        (b"", "empty"),
+        (b"\x00\x00", "empty"),
+        (b"x" * 33, "32"),
+    ],
+)
 def test_ssid_limits(ssid, why):
     assert why in em_wifi.problem(ssid, "")
 
 
-@pytest.mark.parametrize("psk", [
-    "", "12345678", "p" * 63, 'pa"ss\\word\'!', "has spaces in it", "AB" * 32,
-])
+@pytest.mark.parametrize(
+    "psk",
+    [
+        "",
+        "12345678",
+        "p" * 63,
+        "pa\"ss\\word'!",
+        "has spaces in it",
+        "AB" * 32,
+    ],
+)
 def test_valid_passphrases(psk):
     assert em_wifi.problem(b"net", psk) is None
 
 
-@pytest.mark.parametrize("psk", [
-    "short", "p" * 64, "has\nnewline", "café-pass", "tab\there!",
-])
+@pytest.mark.parametrize(
+    "psk",
+    [
+        "short",
+        "p" * 64,
+        "has\nnewline",
+        "café-pass",
+        "tab\there!",
+    ],
+)
 def test_invalid_passphrases(psk):
     assert em_wifi.problem(b"net", psk)
 

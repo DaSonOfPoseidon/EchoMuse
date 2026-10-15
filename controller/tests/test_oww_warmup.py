@@ -25,6 +25,7 @@ def feed_n(gate, n):
 
 # ─── The window ───────────────────────────────────────────────────────────────
 
+
 def test_window_matches_the_classifier_input():
     """
     The wake models take [1, 16, 96] — sixteen embeddings, one per 80ms chunk.
@@ -77,6 +78,7 @@ def test_repeated_resets_each_require_a_full_window():
 
 # ─── The failure it reproduces ────────────────────────────────────────────────
 
+
 def test_a_confident_score_inside_the_window_is_not_trusted():
     """
     The recorded events scored 0.770-0.994 and two of them cleared a threshold
@@ -103,6 +105,7 @@ def test_the_real_wake_word_is_delayed_not_lost():
 
 
 # ─── Counter hygiene ──────────────────────────────────────────────────────────
+
 
 def test_the_counter_saturates():
     """A listener runs for weeks; the counter must not grow without bound."""

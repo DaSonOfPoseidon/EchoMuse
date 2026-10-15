@@ -36,6 +36,7 @@ def _gain_db(guard, x, chunks=1):
 
 # ─── The crossover ───────────────────────────────────────────────────────────
 
+
 def test_the_crossover_sums_flat():
     """
     Linkwitz-Riley's defining property, and the reason it is used here rather
@@ -55,6 +56,7 @@ def test_a_subtractive_split_would_not_have_worked():
     sitting in the remainder.
     """
     from scipy.signal import butter, sosfreqz
+
     sos = butter(4, M.CROSSOVER_HZ / (FS / 2), btype="low", output="sos")
     w, h = sosfreqz(sos, worN=4096, fs=FS)
     at60 = np.argmin(np.abs(w - 60.0))
@@ -64,11 +66,15 @@ def test_a_subtractive_split_would_not_have_worked():
 
 # ─── What it does to audio ───────────────────────────────────────────────────
 
-@pytest.mark.parametrize("freq,at_least_db", [
-    (40, 12.0),
-    (60, 10.0),
-    (100, 4.0),
-])
+
+@pytest.mark.parametrize(
+    "freq,at_least_db",
+    [
+        (40, 12.0),
+        (60, 10.0),
+        (100, 4.0),
+    ],
+)
 def test_loud_bass_is_removed(freq, at_least_db):
     assert _gain_db(M.BassGuard(FS), _sine(freq)) <= -at_least_db
 
@@ -87,7 +93,7 @@ def test_quiet_bass_keeps_its_low_end():
     This is what makes it dynamic rather than a high-pass filter. Below the
     threshold the driver can deliver the excursion, so nothing is taken away.
     """
-    quiet = _sine(60, amp=0.0005)          # about -66 dBFS
+    quiet = _sine(60, amp=0.0005)  # about -66 dBFS
     assert _gain_db(M.BassGuard(FS), quiet) == pytest.approx(0.0, abs=0.05)
 
 
@@ -99,6 +105,7 @@ def test_it_is_transparent_when_nothing_crosses_the_threshold():
 
 
 # ─── The knob ────────────────────────────────────────────────────────────────
+
 
 def test_the_guard_depth_bounds_the_reduction():
     for depth in (-6.0, -12.0, -20.0):
@@ -118,8 +125,9 @@ def test_zero_depth_is_a_no_op_rather_than_a_surprise():
     Someone setting the guard to 0 means "off". It must not still be filtering
     and re-summing with a subtle level change.
     """
-    assert _gain_db(M.BassGuard(FS, bass_guard_db=0.0),
-                    _sine(40)) == pytest.approx(0.0, abs=0.05)
+    assert _gain_db(M.BassGuard(FS, bass_guard_db=0.0), _sine(40)) == pytest.approx(
+        0.0, abs=0.05
+    )
 
 
 def test_a_positive_depth_is_clamped():
@@ -128,6 +136,7 @@ def test_a_positive_depth_is_clamped():
 
 
 # ─── Streaming ───────────────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("chunks", [2, 7, 37, 512])
 def test_chunked_matches_one_shot(chunks):
@@ -155,6 +164,7 @@ def test_empty_input_is_handled():
 
 
 # ─── Factory ─────────────────────────────────────────────────────────────────
+
 
 def test_disabled_returns_none_so_the_call_site_stays_simple():
     assert M.for_stream(FS, False) is None

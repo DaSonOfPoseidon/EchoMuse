@@ -48,7 +48,7 @@ def _strip_js_comments(src: str) -> str:
 def _fn_source(path: Path, header: str, strip) -> str:
     src = strip(path.read_text())
     start = src.index(header)
-    return src[start:start + 4_000]
+    return src[start : start + 4_000]
 
 
 def test_get_status_reads_what_the_turn_path_reads():
@@ -60,12 +60,15 @@ def test_get_status_reads_what_the_turn_path_reads():
     device is not answering. `speaking` drifted from its own push for
     exactly this reason and cost a release.
     """
-    body = _fn_source(CONTROLLER / "em_esphome.py",
-                      "def get_status(", _strip_py_comments)
-    assert "_servers.get(device_id)" in body, \
-        "server presence must be read from the same registry get_server uses"
-    assert "get_satellite()" in body, \
-        "HA presence must be the satellite the turn path requires, not a flag"
+    body = _fn_source(
+        CONTROLLER / "em_esphome.py", "def get_status(", _strip_py_comments
+    )
+    assert (
+        "_servers.get(device_id)" in body
+    ), "server presence must be read from the same registry get_server uses"
+    assert (
+        "get_satellite()" in body
+    ), "HA presence must be the satellite the turn path requires, not a flag"
 
 
 def test_status_has_no_fourth_state():
@@ -76,8 +79,9 @@ def test_status_has_no_fourth_state():
     code does not track, and the dashboard would render a state that can
     never be reached.
     """
-    body = _fn_source(CONTROLLER / "em_esphome.py",
-                      "def get_status(", _strip_py_comments)
+    body = _fn_source(
+        CONTROLLER / "em_esphome.py", "def get_status(", _strip_py_comments
+    )
     assert "haSubscribed" not in body
     for field in ("port", "listening", "haConnected"):
         assert f'"{field}"' in body, f"get_status must report {field}"
@@ -99,16 +103,17 @@ def test_dashboard_renders_the_state_and_not_just_the_port():
     nobody had. The port stays — it is what a stale HA config entry is
     keyed on — but the state is what the row is for.
     """
-    src = _strip_js_comments(
-        (CONTROLLER / "static" / "dashboard.jsx").read_text())
-    assert "device.voiceSatellite" in src, \
-        "the Status tab must read the satellite state"
-    assert "'Voice assistant'" in src, \
-        "the row must be labelled for what it reports, not for the protocol"
-    for state in ("HA connected", "Waiting for HA", "Port down",
-                  "No satellite server"):
+    src = _strip_js_comments((CONTROLLER / "static" / "dashboard.jsx").read_text())
+    assert (
+        "device.voiceSatellite" in src
+    ), "the Status tab must read the satellite state"
+    assert (
+        "'Voice assistant'" in src
+    ), "the row must be labelled for what it reports, not for the protocol"
+    for state in ("HA connected", "Waiting for HA", "Port down", "No satellite server"):
         assert state in src, f"missing the {state!r} state"
     # A row that renders nothing when the field is absent is the failure
     # this whole change exists to prevent, one level up.
-    assert "if (!vs)" in src, \
-        "a missing voiceSatellite must render as a fault, not as blank"
+    assert (
+        "if (!vs)" in src
+    ), "a missing voiceSatellite must render as a fault, not as blank"

@@ -40,10 +40,11 @@ def _delay(lim):
 
 def _aligned(lim, out):
     """Output with the look-ahead delay removed, for comparing against input."""
-    return out[_delay(lim):]
+    return out[_delay(lim) :]
 
 
 # ─── The thing it was built for ──────────────────────────────────────────────
+
 
 def test_a_signal_over_full_scale_comes_out_under_threshold():
     lim = L.Limiter(FS)
@@ -80,6 +81,7 @@ def test_the_backstop_clip_is_counted_not_silent():
 
 # ─── Transparency: it must not touch audio that does not need it ─────────────
 
+
 def test_signal_below_threshold_is_returned_unchanged():
     """Transparency: below the threshold the limiter is a pure delay."""
     lim = L.Limiter(FS)
@@ -100,6 +102,7 @@ def test_silence_does_not_produce_a_gain_excursion():
 
 
 # ─── Streaming parity ────────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("chunks", [2, 7, 37, 512])
 def test_chunked_is_identical_to_one_shot(chunks):
@@ -155,7 +158,7 @@ def test_flush_emits_the_tail_and_can_be_called_once():
 
 def test_a_buffer_shorter_than_the_lookahead_is_not_lost():
     lim = L.Limiter(FS)
-    x = _sine(amp=2.0, seconds=0.001)          # ~48 samples, under a 5ms window
+    x = _sine(amp=2.0, seconds=0.001)  # ~48 samples, under a 5ms window
     out = np.concatenate([lim.process(x), lim.flush()])
     assert out.size == x.size + _delay(lim)
     assert np.abs(out).max() <= 32767.0 + 1e-6
@@ -163,13 +166,14 @@ def test_a_buffer_shorter_than_the_lookahead_is_not_lost():
 
 # ─── Attack and release character ────────────────────────────────────────────
 
+
 def test_the_gain_is_already_down_when_the_peak_arrives():
     """
     This is the whole point of the look-ahead. A limiter that reacts on the
     peak itself has already let the peak through, which is a clipper.
     """
     x = np.zeros(FS // 10)
-    x[FS // 20:] = FULL * 4.0                  # step into heavy overload
+    x[FS // 20 :] = FULL * 4.0  # step into heavy overload
     lim = L.Limiter(FS)
     out = np.concatenate([lim.process(x), lim.flush()])
     ceiling = FULL * 10 ** (L.DEFAULT_THRESHOLD_DB / 20.0)
@@ -189,30 +193,33 @@ def test_release_is_gradual_rather_than_instant():
     # The burst needs ~12dB of reduction and release is 10dB per 400ms, so the
     # tone has to run past ~480ms for full recovery to be reachable at all.
     burst = np.full(2000, FULL * 4.0)
-    tone = _sine(freq=200.0, seconds=1.2, amp=0.5)      # well under threshold
+    tone = _sine(freq=200.0, seconds=1.2, amp=0.5)  # well under threshold
     x = np.concatenate([burst, tone])
     lim = L.Limiter(FS, release_ms=400.0)
     out = _run(lim, x)
 
-    after = out[2000 + _delay(lim):]
-    early = np.abs(after[:2000]).max()               # ~40ms after the burst
-    late = np.abs(after[-2000:]).max()               # ~1.16s after
+    after = out[2000 + _delay(lim) :]
+    early = np.abs(after[:2000]).max()  # ~40ms after the burst
+    late = np.abs(after[-2000:]).max()  # ~1.16s after
     assert early < late, "gain snapped back instantly — that is pumping"
-    assert late == pytest.approx(np.abs(tone).max(), rel=0.02), \
-        "the tone never returned to its own level"
+    assert late == pytest.approx(
+        np.abs(tone).max(), rel=0.02
+    ), "the tone never returned to its own level"
 
 
 def test_a_faster_release_recovers_sooner():
     """Pins the direction of the knob, which is what a user is choosing."""
-    x = np.concatenate([np.full(2000, FULL * 4.0),
-                        _sine(freq=200.0, seconds=0.2, amp=0.5)])
+    x = np.concatenate(
+        [np.full(2000, FULL * 4.0), _sine(freq=200.0, seconds=0.2, amp=0.5)]
+    )
     s_lim, f_lim = L.Limiter(FS, release_ms=4000.0), L.Limiter(FS, release_ms=20.0)
-    slow = np.abs(_run(s_lim, x)[2000 + _delay(s_lim):]).max()
-    fast = np.abs(_run(f_lim, x)[2000 + _delay(f_lim):]).max()
+    slow = np.abs(_run(s_lim, x)[2000 + _delay(s_lim) :]).max()
+    fast = np.abs(_run(f_lim, x)[2000 + _delay(f_lim) :]).max()
     assert fast > slow
 
 
 # ─── Parameter handling ──────────────────────────────────────────────────────
+
 
 def test_threshold_above_zero_dbfs_is_refused():
     """
@@ -243,6 +250,7 @@ def test_reduction_is_reported():
 
 # ─── #275: bypassed clipping is the backstop working, not a bug ──────────────
 
+
 def test_bypassed_limiter_counts_its_clips_separately():
     """
     While limiterEnabled is off, a boosted EQ ahead legitimately pushes
@@ -253,12 +261,12 @@ def test_bypassed_limiter_counts_its_clips_separately():
     two states want opposite investigations, so they get two counters.
     """
     lim = L.Limiter(FS, enabled=False)
-    hot = _sine(amp=4.0)                     # far past the ceiling
+    hot = _sine(amp=4.0)  # far past the ceiling
     out = _run(lim, hot)
-    assert lim.clipped == 0, \
-        "a bypassed limiter must not read as a buggy limiting one"
-    assert lim.clipped_bypassed > 0, \
-        "over-ceiling samples while bypassed must be counted - visibly"
+    assert lim.clipped == 0, "a bypassed limiter must not read as a buggy limiting one"
+    assert (
+        lim.clipped_bypassed > 0
+    ), "over-ceiling samples while bypassed must be counted - visibly"
     # And they pass through hot: nobody is limiting this signal.
     assert np.abs(out).max() > L._CEILING
 
@@ -281,11 +289,13 @@ def test_toggle_midstream_splits_the_two_counters():
     """
     lim = L.Limiter(FS)
     x = _sine(amp=3.0)
-    lim.process(x[: len(x) // 2])            # enabled: limited, nothing clipped
+    lim.process(x[: len(x) // 2])  # enabled: limited, nothing clipped
     lim.set_params(enabled=False)
-    lim.process(x[len(x) // 2:])
+    lim.process(x[len(x) // 2 :])
     lim.flush()
-    assert lim.clipped_bypassed > 0, \
-        "hot material after the toggle must be visible as bypassed clipping"
-    assert lim.clipped == 0, \
-        "post-toggle clips must not read as a buggy limiting limiter"
+    assert (
+        lim.clipped_bypassed > 0
+    ), "hot material after the toggle must be visible as bypassed clipping"
+    assert (
+        lim.clipped == 0
+    ), "post-toggle clips must not read as a buggy limiting limiter"

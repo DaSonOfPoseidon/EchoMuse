@@ -16,7 +16,7 @@ CONTROLLER = Path(__file__).resolve().parents[1]
 
 def _finally_src() -> str:
     src = (CONTROLLER / "em_controller.py").read_text()
-    start = src.index("log.info(f\"[control] Device disconnected")
+    start = src.index('log.info(f"[control] Device disconnected')
     end = src.index("# ─── Data plane handler", start)
     return src[start:end]
 
@@ -24,27 +24,37 @@ def _finally_src() -> str:
 def test_teardown_is_deferred_not_immediate():
     src = (CONTROLLER / "em_controller.py").read_text()
     start = src.index('log.info(f"[control] Device disconnected')
-    seg = src[start:start + 1200]
+    seg = src[start : start + 1200]
     task_call = seg.index("em_tasks.spawn(")
     sync_path = seg[:task_call]
-    for call in ("esphome.device_disconnected",
-                 "em_ble_proxy.device_disconnected",
-                 "device_gone", "notify_device_disconnected"):
-        assert call not in sync_path, \
-            f"{call} must move into the grace task, not run on close"
-    assert "_release_device_services" in seg[task_call:], \
-        "the close path must hand over to the grace task"
+    for call in (
+        "esphome.device_disconnected",
+        "em_ble_proxy.device_disconnected",
+        "device_gone",
+        "notify_device_disconnected",
+    ):
+        assert (
+            call not in sync_path
+        ), f"{call} must move into the grace task, not run on close"
+    assert (
+        "_release_device_services" in seg[task_call:]
+    ), "the close path must hand over to the grace task"
 
 
 def test_the_grace_task_checks_for_a_replacement():
     src = (CONTROLLER / "em_controller.py").read_text()
     start = src.index("async def _release_device_services")
-    task = src[start:start + 2500]
+    task = src[start : start + 2500]
     assert "CONTROL_RECONNECT_GRACE_S" in task
-    assert "em_state.devices.get(device.device_id)" in task, \
-        "the task must check whether a replacement registered"
-    for call in ("notify_device_disconnected", "esphome.device_disconnected",
-                 "em_ble_proxy.device_disconnected", "device_gone"):
+    assert (
+        "em_state.devices.get(device.device_id)" in task
+    ), "the task must check whether a replacement registered"
+    for call in (
+        "notify_device_disconnected",
+        "esphome.device_disconnected",
+        "em_ble_proxy.device_disconnected",
+        "device_gone",
+    ):
         assert call in task, f"{call} belongs in the deferred release"
 
 
@@ -62,5 +72,6 @@ def test_the_stale_connection_guard_survives():
     """
     src = (CONTROLLER / "em_controller.py").read_text()
     # the message wraps across two f-string lines — match the fragments
-    assert "replacement is active" in src and "services up" in src, \
-        "the out-of-order stale guard is still needed alongside the grace"
+    assert (
+        "replacement is active" in src and "services up" in src
+    ), "the out-of-order stale guard is still needed alongside the grace"

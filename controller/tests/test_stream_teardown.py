@@ -38,7 +38,10 @@ def _finally_body() -> list[ast.stmt]:
     """The `finally:` block of _ffmpeg_decode."""
     tree = ast.parse((CONTROLLER / "em_esphome.py").read_text())
     for node in ast.walk(tree):
-        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == FUNC:
+        if (
+            isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+            and node.name == FUNC
+        ):
             for stmt in ast.walk(node):
                 if isinstance(stmt, ast.Try) and stmt.finalbody:
                     return stmt.finalbody
@@ -71,9 +74,9 @@ def test_ffmpeg_is_killed_before_the_feeder_is_cancelled():
         f"{FUNC}'s finally no longer kills the subprocess — a barge-in would "
         "leave ffmpeg running"
     )
-    assert cancel is not None, (
-        f"{FUNC}'s finally no longer cancels the feeder — restructured?"
-    )
+    assert (
+        cancel is not None
+    ), f"{FUNC}'s finally no longer cancels the feeder — restructured?"
     assert kill < cancel, (
         f"{FUNC} cancels the feeder (line {cancel}) before killing ffmpeg "
         f"(line {kill}). With nobody draining stdout the feeder's own finally "

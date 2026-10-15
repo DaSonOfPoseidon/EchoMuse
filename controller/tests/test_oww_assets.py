@@ -18,6 +18,7 @@ import em_oww_assets as A
 
 def _asset(name, md5, kind, size=1000):
     from pathlib import Path
+
     return A.Asset(name=name, source=Path("/src") / name, md5=md5, size=size, kind=kind)
 
 
@@ -141,21 +142,29 @@ def test_space_is_only_checked_against_what_actually_needs_sending():
 
 # ─── Device inventory parsing ────────────────────────────────────────────────
 
+
 def test_listing_parses_md5_mtime_name():
-    text = ("aff8f1c6bee88425111e62aadf3c381c 1753900000 "
-            f"{A.DEVICE_DIR}/libonnxruntime.so\n")
+    text = (
+        "aff8f1c6bee88425111e62aadf3c381c 1753900000 "
+        f"{A.DEVICE_DIR}/libonnxruntime.so\n"
+    )
     got = A.parse_device_listing(text)
-    assert got == {"libonnxruntime.so": ("aff8f1c6bee88425111e62aadf3c381c", 1753900000)}
+    assert got == {
+        "libonnxruntime.so": ("aff8f1c6bee88425111e62aadf3c381c", 1753900000)
+    }
 
 
-@pytest.mark.parametrize("line", [
-    "",
-    "garbage",
-    "nothexdigest 123 /x/a.onnx",
-    "aff8f1c6bee88425111e62aadf3c381c notanint /x/a.onnx",
-    "aff8f1c6 123 /x/a.onnx",
-    "md5sum: can't open '/x/a.onnx': No such file or directory",
-])
+@pytest.mark.parametrize(
+    "line",
+    [
+        "",
+        "garbage",
+        "nothexdigest 123 /x/a.onnx",
+        "aff8f1c6bee88425111e62aadf3c381c notanint /x/a.onnx",
+        "aff8f1c6 123 /x/a.onnx",
+        "md5sum: can't open '/x/a.onnx': No such file or directory",
+    ],
+)
 def test_unparseable_lines_are_skipped_not_guessed(line):
     """
     Shell noise (a prompt echo, an error from a missing file) must not become
@@ -177,6 +186,7 @@ def test_a_partial_inventory_is_safe():
 
 # ─── Contract with the device ────────────────────────────────────────────────
 
+
 def test_device_dir_matches_the_firmware_constant():
     """
     DEVICE_DIR and shadow.DefaultDir are the same path in two languages. If
@@ -184,17 +194,21 @@ def test_device_dir_matches_the_firmware_constant():
     and the only symptom is shadow mode silently never starting.
     """
     from pathlib import Path
-    go = (Path(__file__).resolve().parents[2]
-          / "device/internal/wakeword/shadow/open.go").read_text()
-    assert f'DefaultDir = "{A.DEVICE_DIR}"' in go, (
-        "em_oww_assets.DEVICE_DIR has drifted from shadow.DefaultDir"
-    )
+
+    go = (
+        Path(__file__).resolve().parents[2] / "device/internal/wakeword/shadow/open.go"
+    ).read_text()
+    assert (
+        f'DefaultDir = "{A.DEVICE_DIR}"' in go
+    ), "em_oww_assets.DEVICE_DIR has drifted from shadow.DefaultDir"
 
 
 def test_shared_model_names_match_what_the_device_opens():
     from pathlib import Path
-    go = (Path(__file__).resolve().parents[2]
-          / "device/internal/wakeword/shadow/open.go").read_text()
+
+    go = (
+        Path(__file__).resolve().parents[2] / "device/internal/wakeword/shadow/open.go"
+    ).read_text()
     for name in A.SHARED_NAMES:
         assert f'"{name}"' in go, f"{name} is not what the device opens"
     assert f'"{A.RUNTIME_NAME}"' in go
@@ -208,19 +222,24 @@ def test_classifier_filename_matches_the_device_stem_rule():
     exact bug ModelStem was written to fix.
     """
     import em_oww_models
+
     assert em_oww_models.prediction_key("hey_mycroft_v0.1") == "hey_mycroft_v0.1"
     assert em_oww_models.prediction_key("/data/oww_models/clara.onnx") == "clara"
 
 
 # ─── df parsing ──────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("line,want", [
-    # Wrapped filesystem name — what a real device actually returned.
-    ("                  1010       648       346  65% /data", 346),
-    # Unwrapped, the shape the column index was originally written for.
-    ("/dev/block/platform/mtk-msdc.0/by-name/userdata 1010 648 346 65% /data", 346),
-    ("tmpfs 100 0 100 0% /data", 100),
-])
+
+@pytest.mark.parametrize(
+    "line,want",
+    [
+        # Wrapped filesystem name — what a real device actually returned.
+        ("                  1010       648       346  65% /data", 346),
+        # Unwrapped, the shape the column index was originally written for.
+        ("/dev/block/platform/mtk-msdc.0/by-name/userdata 1010 648 346 65% /data", 346),
+        ("tmpfs 100 0 100 0% /data", 100),
+    ],
+)
 def test_free_space_is_read_from_the_percentage_anchor_not_a_column_index(line, want):
     """
     busybox wraps a long filesystem name onto its own line, so the available
@@ -231,7 +250,9 @@ def test_free_space_is_read_from_the_percentage_anchor_not_a_column_index(line, 
     assert A.parse_free_mb(line) == want
 
 
-@pytest.mark.parametrize("line", ["", "garbage", "df: /data: No such file or directory"])
+@pytest.mark.parametrize(
+    "line", ["", "garbage", "df: /data: No such file or directory"]
+)
 def test_unreadable_df_yields_no_measurement(line):
     """None means 'unknown', which plan_sync treats as 'do not check' — the
     opposite of 0, which would block every install."""
@@ -246,6 +267,7 @@ def test_unknown_free_space_does_not_block():
 
 # ── The stock set every device carries ────────────────────────────────────
 
+
 def test_stock_models_match_what_the_dashboard_offers():
     """
     STOCK_MODELS is what we install; WW_MODELS is what a user can select.
@@ -256,8 +278,8 @@ def test_stock_models_match_what_the_dashboard_offers():
     """
     import re
     from pathlib import Path
-    jsx = (Path(__file__).resolve().parents[1]
-           / "static" / "dashboard.jsx").read_text()
+
+    jsx = (Path(__file__).resolve().parents[1] / "static" / "dashboard.jsx").read_text()
     block = re.search(r"const WW_MODELS = \[(.*?)\];", jsx, re.S)
     assert block, "dashboard.jsx must still define WW_MODELS"
     offered = set(re.findall(r"value:\s*'([^']+)'", block.group(1)))
@@ -280,7 +302,9 @@ def test_the_stock_set_is_installed_alongside_the_selected_model():
         pytest.skip("openwakeword not installed in this environment")
     assets, problems = A.desired_assets(["alexa_v0.1"], resources=res)
     names = [a.name for a in assets if a.kind == "classifier"]
-    assert names[0] == "alexa_v0.1.onnx", "the selected model must stay first (it is pinned)"
+    assert (
+        names[0] == "alexa_v0.1.onnx"
+    ), "the selected model must stay first (it is pinned)"
     assert set(names) == {f"{m}.onnx" for m in A.STOCK_MODELS}
     assert not [p for p in problems if "wake model" in p]
 
@@ -300,12 +324,18 @@ def test_installing_the_stock_set_does_not_evict_custom_models():
     installing them would have deleted every custom model on the device —
     including ones a user trained themselves and cannot re-download.
     """
-    desired = _base() + [
-        _asset("my_custom.onnx", "c1", "classifier"),
-    ] + [_asset(f"{m}.onnx", m, "classifier") for m in A.STOCK_MODELS]
+    desired = (
+        _base()
+        + [
+            _asset("my_custom.onnx", "c1", "classifier"),
+        ]
+        + [_asset(f"{m}.onnx", m, "classifier") for m in A.STOCK_MODELS]
+    )
     actual = {
-        A.RUNTIME_NAME: ("rt1", NOW), "melspectrogram.onnx": ("mel1", NOW),
-        "embedding_model.onnx": ("emb1", NOW), "my_custom.onnx": ("c1", NOW),
+        A.RUNTIME_NAME: ("rt1", NOW),
+        "melspectrogram.onnx": ("mel1", NOW),
+        "embedding_model.onnx": ("emb1", NOW),
+        "my_custom.onnx": ("c1", NOW),
         "older_custom.onnx": ("o1", NOW - 100),
     }
     plan = A.plan_sync(desired, actual)
@@ -317,17 +347,21 @@ def test_leftover_custom_models_are_still_evicted_beyond_the_budget():
     """The budget still applies — it now governs leftovers only, not everything."""
     desired = _base() + [_asset(f"{m}.onnx", m, "classifier") for m in A.STOCK_MODELS]
     actual = {
-        A.RUNTIME_NAME: ("rt1", NOW), "melspectrogram.onnx": ("mel1", NOW),
+        A.RUNTIME_NAME: ("rt1", NOW),
+        "melspectrogram.onnx": ("mel1", NOW),
         "embedding_model.onnx": ("emb1", NOW),
         **{f"c{i}.onnx": (f"c{i}", NOW - i) for i in range(A.CLASSIFIER_SLOTS + 2)},
     }
     plan = A.plan_sync(desired, actual)
     assert len(plan.prune) == 2, plan.prune
-    assert plan.prune == [f"c{A.CLASSIFIER_SLOTS}.onnx", f"c{A.CLASSIFIER_SLOTS + 1}.onnx"], \
-        "eviction must still be oldest-first"
+    assert plan.prune == [
+        f"c{A.CLASSIFIER_SLOTS}.onnx",
+        f"c{A.CLASSIFIER_SLOTS + 1}.onnx",
+    ], "eviction must still be oldest-first"
 
 
 # ── Reconcile-on-connect: does the device have the model it was told to use ──
+
 
 def test_the_selected_classifier_is_recognised_when_installed():
     desired = _base() + [_asset("selected.onnx", "c1", "classifier")]
@@ -348,8 +382,10 @@ def test_the_right_name_with_the_wrong_bytes_counts_as_missing():
     which disagrees with the controller silently.
     """
     desired = _base() + [_asset("selected.onnx", "c-new", "classifier")]
-    actual = {**{a.name: (a.md5, NOW) for a in _base()},
-              "selected.onnx": ("c-old", NOW)}
+    actual = {
+        **{a.name: (a.md5, NOW) for a in _base()},
+        "selected.onnx": ("c-old", NOW),
+    }
     assert A.missing_selected_classifier(desired, actual) == "selected.onnx"
 
 
@@ -362,8 +398,7 @@ def test_only_the_SELECTED_classifier_gates_readiness():
         _asset("selected.onnx", "c1", "classifier"),
         _asset("spare.onnx", "c2", "classifier"),
     ]
-    actual = {**{a.name: (a.md5, NOW) for a in _base()},
-              "selected.onnx": ("c1", NOW)}
+    actual = {**{a.name: (a.md5, NOW) for a in _base()}, "selected.onnx": ("c1", NOW)}
     assert A.missing_selected_classifier(desired, actual) is None
 
 
@@ -378,6 +413,7 @@ def test_no_classifier_to_check_is_not_a_missing_one():
 # stands a mode down. These cover the repair question beside it — the one
 # nothing was asking while Office sat without three of the four stock
 # classifiers for a fortnight, reported healthy the whole time.
+
 
 def test_a_complete_device_has_nothing_missing():
     desired = _base() + [_asset("selected.onnx", "c1", "classifier")]
@@ -396,8 +432,7 @@ def test_a_spare_classifier_is_missing_even_though_the_device_can_score():
         _asset("spare_a.onnx", "c2", "classifier"),
         _asset("spare_b.onnx", "c3", "classifier"),
     ]
-    actual = {**{a.name: (a.md5, NOW) for a in _base()},
-              "selected.onnx": ("c1", NOW)}
+    actual = {**{a.name: (a.md5, NOW) for a in _base()}, "selected.onnx": ("c1", NOW)}
     assert A.missing_selected_classifier(desired, actual) is None
     assert A.missing_assets(desired, actual) == ["spare_a.onnx", "spare_b.onnx"]
 
@@ -407,14 +442,16 @@ def test_the_runtime_and_shared_models_count_too():
     desired = _base() + [_asset("selected.onnx", "c1", "classifier")]
     actual = {"selected.onnx": ("c1", NOW)}
     assert A.missing_assets(desired, actual) == [
-        A.RUNTIME_NAME, "melspectrogram.onnx", "embedding_model.onnx"]
+        A.RUNTIME_NAME,
+        "melspectrogram.onnx",
+        "embedding_model.onnx",
+    ]
 
 
 def test_the_right_name_with_the_wrong_bytes_is_missing_here_too():
     """Same md5 rule as everywhere else in this module."""
     desired = _base() + [_asset("spare.onnx", "c-new", "classifier")]
-    actual = {**{a.name: (a.md5, NOW) for a in _base()},
-              "spare.onnx": ("c-old", NOW)}
+    actual = {**{a.name: (a.md5, NOW) for a in _base()}, "spare.onnx": ("c-old", NOW)}
     assert A.missing_assets(desired, actual) == ["spare.onnx"]
 
 
@@ -430,14 +467,17 @@ def test_an_unreadable_inventory_reports_everything_missing():
 
 # ── The speech gate's model ──────────────────────────────────────────────────
 
+
 def test_the_vad_model_is_never_evicted_as_a_leftover_classifier():
     """
     It is a .onnx the device was given and no desired list names as a
     classifier — exactly the shape the LRU deletes. Deleting it drops every
     device back to the RMS gate, silently.
     """
-    desired = _base() + [_asset(A.VAD_NAME, "v1", "vad"),
-                         _asset("a.onnx", "c1", "classifier")]
+    desired = _base() + [
+        _asset(A.VAD_NAME, "v1", "vad"),
+        _asset("a.onnx", "c1", "classifier"),
+    ]
     actual = {a.name: (a.md5, NOW - 999_999) for a in desired}
     assert A.VAD_NAME not in A.plan_sync(desired, actual, slots=0).prune
     # Nor when this controller has no copy to offer (an older image): a
@@ -462,18 +502,22 @@ def test_the_vad_model_ships_from_the_image_not_the_package(tmp_path):
 
 def test_vad_name_matches_what_the_device_opens():
     from pathlib import Path
-    go = (Path(__file__).resolve().parents[2]
-          / "device/internal/client/speechgate.go").read_text()
+
+    go = (
+        Path(__file__).resolve().parents[2] / "device/internal/client/speechgate.go"
+    ).read_text()
     assert f'sileroModel = "{A.VAD_NAME}"' in go
 
 
 def test_the_image_builds_the_model_where_the_plan_looks():
     from pathlib import Path
+
     df = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text()
     assert f"COPY --from=silero /silero_vad.onnx {A.RUNTIME_DIR}/{A.VAD_NAME}" in df
 
 
 # ── Reconcile: every device carries the full set, whatever its mode ──────────
+
 
 @pytest.mark.parametrize("mode_off", [False, True])
 def test_a_complete_device_needs_nothing(mode_off):
@@ -489,12 +533,18 @@ def test_gaps_are_repaired_in_either_mode(mode_off):
 
 
 def test_a_locally_scoring_device_without_its_model_is_deaf_until_repaired():
-    assert A.reconcile_action(False, "hey_jarvis_v0.1.onnx", ["hey_jarvis_v0.1.onnx"]) == "deaf"
+    assert (
+        A.reconcile_action(False, "hey_jarvis_v0.1.onnx", ["hey_jarvis_v0.1.onnx"])
+        == "deaf"
+    )
 
 
 def test_a_controller_scoring_device_without_its_model_is_only_repaired():
     """It can still hear its wake word: the controller is scoring for it."""
-    assert A.reconcile_action(True, "hey_jarvis_v0.1.onnx", ["hey_jarvis_v0.1.onnx"]) == "repair"
+    assert (
+        A.reconcile_action(True, "hey_jarvis_v0.1.onnx", ["hey_jarvis_v0.1.onnx"])
+        == "repair"
+    )
 
 
 def test_the_connect_reconcile_is_not_gated_on_the_wake_word_mode():
@@ -502,11 +552,13 @@ def test_the_connect_reconcile_is_not_gated_on_the_wake_word_mode():
     the controller's wake word never got the runtime or the speech gate's
     model, and could not switch mode without an install first."""
     import ast
+
     _, fn = _sources.find_def("em_oww_sync.reconcile")
     for node in ast.walk(fn):
         if isinstance(node, ast.If) and "MODE_OFF" in ast.unparse(node.test):
-            assert not any(isinstance(b, ast.Return) for b in node.body), (
-                "em_oww_sync.reconcile returns early on the wake word mode")
+            assert not any(
+                isinstance(b, ast.Return) for b in node.body
+            ), "em_oww_sync.reconcile returns early on the wake word mode"
     assert "reconcile_action(" in ast.unparse(fn)
 
 
@@ -514,10 +566,12 @@ def test_the_reconcile_never_changes_a_devices_mode():
     """Repair, never switch: a device missing its model keeps its mode and
     answers the button until the install lands (Wil, 2026-09-22)."""
     import ast
+
     _, fn = _sources.find_def("em_oww_sync.reconcile")
     for node in ast.walk(fn):
         if isinstance(node, (ast.Assign, ast.AugAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for t in targets:
-                assert "oww_on_device" not in ast.unparse(t), (
-                    "em_oww_sync.reconcile changes the wake word mode")
+                assert "oww_on_device" not in ast.unparse(
+                    t
+                ), "em_oww_sync.reconcile changes the wake word mode"

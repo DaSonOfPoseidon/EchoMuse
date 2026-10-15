@@ -15,7 +15,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import em_wakeword
 
-
 # ── What a picker write asks for ─────────────────────────────────────────────
 
 MODEL = "hey_mycroft_v0.1"
@@ -54,10 +53,14 @@ def test_a_custom_model_is_matched_by_its_id_exactly():
     custom = "kitchen_helper"
     assert em_wakeword.requested_on([custom], custom) is True
     assert em_wakeword.requested_on(["kitchen"], custom) is None
-    assert em_wakeword.requested_on(["/data/oww_models/kitchen_helper.onnx"], custom) is None
+    assert (
+        em_wakeword.requested_on(["/data/oww_models/kitchen_helper.onnx"], custom)
+        is None
+    )
 
 
 # ── The choice from HA ───────────────────────────────────────────────────────
+
 
 def test_turning_the_wake_word_off_stops_the_stream():
     t = em_wakeword.on_request(want=False, enabled=True, mic_muted=False)
@@ -104,12 +107,15 @@ def test_setting_the_state_already_held_is_a_no_op():
 
 # ── The button does not move HA's choice ─────────────────────────────────────
 
+
 def test_the_button_never_moves_the_wake_word():
     """on_mic_mute returns a bare bool, so no press can carry a new wake word state."""
     for before, now in ((False, True), (True, False), (False, False), (True, True)):
         for enabled in (True, False):
             out = em_wakeword.on_mic_mute(
-                was_muted=before, now_muted=now, enabled=enabled,
+                was_muted=before,
+                now_muted=now,
+                enabled=enabled,
             )
             assert out is True or out is False
             assert not isinstance(out, em_wakeword.Transition)
@@ -119,9 +125,14 @@ def test_pressing_mute_leaves_the_stream_alone():
     """The device stops its own stream on mute; a controller mic_stop racing
     that is how a stream ends up stuck."""
     for enabled in (True, False):
-        assert em_wakeword.on_mic_mute(
-            was_muted=False, now_muted=True, enabled=enabled,
-        ) is False
+        assert (
+            em_wakeword.on_mic_mute(
+                was_muted=False,
+                now_muted=True,
+                enabled=enabled,
+            )
+            is False
+        )
 
 
 def test_unmuting_with_the_wake_word_off_stops_the_stream_again():
@@ -129,15 +140,25 @@ def test_unmuting_with_the_wake_word_off_stops_the_stream_again():
     With the wake word off those frames are only discarded, so the controller
     takes the stream back down — which re-asserts HA's choice rather than
     changing it."""
-    assert em_wakeword.on_mic_mute(
-        was_muted=True, now_muted=False, enabled=False,
-    ) is True
+    assert (
+        em_wakeword.on_mic_mute(
+            was_muted=True,
+            now_muted=False,
+            enabled=False,
+        )
+        is True
+    )
 
 
 def test_unmuting_with_the_wake_word_on_leaves_the_stream_up():
-    assert em_wakeword.on_mic_mute(
-        was_muted=True, now_muted=False, enabled=True,
-    ) is False
+    assert (
+        em_wakeword.on_mic_mute(
+            was_muted=True,
+            now_muted=False,
+            enabled=True,
+        )
+        is False
+    )
 
 
 def test_a_reconnect_re_report_changes_nothing():
@@ -145,12 +166,18 @@ def test_a_reconnect_re_report_changes_nothing():
     off Wi-Fi must not read as a button press in either direction."""
     for muted in (False, True):
         for enabled in (True, False):
-            assert em_wakeword.on_mic_mute(
-                was_muted=muted, now_muted=muted, enabled=enabled,
-            ) is False
+            assert (
+                em_wakeword.on_mic_mute(
+                    was_muted=muted,
+                    now_muted=muted,
+                    enabled=enabled,
+                )
+                is False
+            )
 
 
 # ── Whether the wake word may act ────────────────────────────────────────────
+
 
 def test_wake_is_allowed_only_when_listening_and_unmuted():
     assert em_wakeword.wake_allowed(mic_muted=False, enabled=True) is True
@@ -161,6 +188,7 @@ def test_wake_is_allowed_only_when_listening_and_unmuted():
 
 # ── Off, for an Echo that listens privately ──────────────────────────────────
 
+
 def test_off_is_declined_on_firmware_that_would_still_send():
     """An older privately listening Echo opens a session and streams before
     the controller can close it, so "No wake word" would be a false claim."""
@@ -168,16 +196,22 @@ def test_off_is_declined_on_firmware_that_would_still_send():
 
 
 def test_off_is_accepted_where_the_device_stops_at_the_crossing():
-    assert not em_wakeword.decline_off(want=False, listening_locally=True, device_can=True)
+    assert not em_wakeword.decline_off(
+        want=False, listening_locally=True, device_can=True
+    )
 
 
 def test_off_is_accepted_for_an_echo_streaming_to_the_controller():
     """mic_stop is enough when the controller does the listening."""
-    assert not em_wakeword.decline_off(want=False, listening_locally=False, device_can=False)
+    assert not em_wakeword.decline_off(
+        want=False, listening_locally=False, device_can=False
+    )
 
 
 def test_on_is_never_declined():
-    assert not em_wakeword.decline_off(want=True, listening_locally=True, device_can=False)
+    assert not em_wakeword.decline_off(
+        want=True, listening_locally=True, device_can=False
+    )
 
 
 # ── A stored "No wake word" on firmware that cannot honour it (#776) ─────────
@@ -189,26 +223,31 @@ def test_on_is_never_declined():
 # source-reading tests elsewhere in this file cannot see whether the stored
 # value and the reported value are moved together.
 
+
 def test_a_stored_off_is_given_up_on_firmware_that_would_still_send():
     assert em_wakeword.stored_off_unsupported(
-        stored=True, listening_locally=True, device_can=False)
+        stored=True, listening_locally=True, device_can=False
+    )
 
 
 def test_a_stored_off_is_kept_where_the_device_stops_at_the_crossing():
     assert not em_wakeword.stored_off_unsupported(
-        stored=True, listening_locally=True, device_can=True)
+        stored=True, listening_locally=True, device_can=True
+    )
 
 
 def test_a_stored_off_is_kept_for_an_echo_streaming_to_the_controller():
     """The controller stops that stream itself, so this Echo IS honouring off.
     Reverting it would be a regression, not a fix."""
     assert not em_wakeword.stored_off_unsupported(
-        stored=True, listening_locally=False, device_can=False)
+        stored=True, listening_locally=False, device_can=False
+    )
 
 
 def test_nothing_to_give_up_when_the_wake_word_is_already_on():
     assert not em_wakeword.stored_off_unsupported(
-        stored=False, listening_locally=True, device_can=False)
+        stored=False, listening_locally=True, device_can=False
+    )
 
 
 def test_the_stored_rule_is_the_decline_rule_mirrored():
@@ -224,23 +263,35 @@ def test_the_stored_rule_is_the_decline_rule_mirrored():
     crossing, the answer is yes in both, and turning the wake word back on is
     never refused by either."""
     for local, can, would_decline in [
-        (True, False, True),    # privately listening, cannot stop at the crossing
-        (True, True, False),    # can honour it
+        (True, False, True),  # privately listening, cannot stop at the crossing
+        (True, True, False),  # can honour it
         (False, False, False),  # controller-scores, so mic_stop is enough
         (False, True, False),
     ]:
-        assert em_wakeword.decline_off(
-            want=False, listening_locally=local, device_can=can) is would_decline
+        assert (
+            em_wakeword.decline_off(want=False, listening_locally=local, device_can=can)
+            is would_decline
+        )
         # An existing stored off is given up exactly when a fresh one would be
         # declined — that is the mirror, and it is the whole of it.
-        assert em_wakeword.stored_off_unsupported(
-            stored=True, listening_locally=local, device_can=can) is would_decline
+        assert (
+            em_wakeword.stored_off_unsupported(
+                stored=True, listening_locally=local, device_can=can
+            )
+            is would_decline
+        )
         # Nothing stored, nothing to give up.
-        assert em_wakeword.stored_off_unsupported(
-            stored=False, listening_locally=local, device_can=can) is False
+        assert (
+            em_wakeword.stored_off_unsupported(
+                stored=False, listening_locally=local, device_can=can
+            )
+            is False
+        )
         # Turning it back on is never refused.
-        assert em_wakeword.decline_off(
-            want=True, listening_locally=local, device_can=can) is False
+        assert (
+            em_wakeword.decline_off(want=True, listening_locally=local, device_can=can)
+            is False
+        )
 
 
 def test_the_stored_rule_runs_where_the_device_reports_listening():
@@ -249,8 +300,7 @@ def test_the_stored_rule_runs_where_the_device_reports_listening():
     there reads "not private" for a private Echo."""
     _, branch = _sources.find_def("_on_listen_state")
 
-    assert any("stored_off_unsupported" in ast.unparse(n)
-               for n in ast.walk(branch)), (
+    assert any("stored_off_unsupported" in ast.unparse(n) for n in ast.walk(branch)), (
         "the stored-off rule must be reached from the listen_state branch, "
         "which is where the device says what it is doing with its microphone"
     )
@@ -281,9 +331,13 @@ CONTROLLER = Path(__file__).resolve().parent.parent
 
 def _func(name: str) -> str:
     tree = ast.parse((CONTROLLER / "em_controller.py").read_text())
-    return ast.unparse(next(
-        n for n in ast.walk(tree)
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name))
+    return ast.unparse(
+        next(
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name
+        )
+    )
 
 
 def test_the_rule_does_not_know_where_the_wake_word_is_detected():
@@ -334,7 +388,7 @@ def test_audio_arriving_with_the_wake_word_off_is_a_stream_to_stop():
 def test_the_wake_listener_stops_a_stray_stream():
     src = _func("_stream_listen")
     at = src.index("em_wakeword.stray_stream(")
-    assert "mic_stop()" in src[at:at + 600]
+    assert "mic_stop()" in src[at : at + 600]
 
 
 def test_a_request_for_on_while_temporarily_on_is_stored():
@@ -349,7 +403,10 @@ def test_a_request_for_on_while_temporarily_on_is_stored():
     # _set_wake_word is nested inside another function, so search the whole tree.
     set_fn = None
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_set_wake_word":
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_set_wake_word"
+        ):
             set_fn = node
             break
     assert set_fn is not None, "_set_wake_word not found"
@@ -360,9 +417,9 @@ def test_a_request_for_on_while_temporarily_on_is_stored():
         "while temporarily on must still be stored, or the person's choice "
         "comes back as off after the upgrade"
     )
-    assert "set_wake_word_enabled" in body, (
-        "the stored value must be written when the temporary flag is set"
-    )
+    assert (
+        "set_wake_word_enabled" in body
+    ), "the stored value must be written when the temporary flag is set"
 
 
 def test_home_assistant_is_made_to_read_a_state_it_did_not_set():
@@ -380,10 +437,10 @@ def test_home_assistant_is_made_to_read_a_state_it_did_not_set():
 def test_the_temporary_on_refreshes_home_assistant():
     src = (CONTROLLER / "em_controller.py").read_text()
     at = src.index("em_wakeword.stored_off_unsupported(")
-    assert "update_wake_word(device_id, True, refresh=True)" in src[at:at + 600]
+    assert "update_wake_word(device_id, True, refresh=True)" in src[at : at + 600]
     esp = (CONTROLLER / "em_esphome.py").read_text()
-    fn = esp[esp.index("def update_wake_word("):]
-    fn = fn[:fn.index("\ndef ")]
+    fn = esp[esp.index("def update_wake_word(") :]
+    fn = fn[: fn.index("\ndef ")]
     assert "ha_needs_refresh(" in fn and "satellite.disconnect()" in fn
     assert "srv.wake_word_told = enabled" in esp
 
@@ -394,6 +451,9 @@ def test_a_stored_choice_that_can_be_honoured_again_refreshes_home_assistant():
     listen_state handler decides, and a refresh here would bounce HA twice."""
     src = (CONTROLLER / "em_controller.py").read_text()
     at = src.index("wake_word_enabled=device.wake_word_enabled,\n        )")
-    after = src[at:at + 700]
+    after = src[at : at + 700]
     gate = after.index("if device.wake_word_off_capable:")
-    assert "update_wake_word(device_id, device.wake_word_enabled, refresh=True)" in after[gate:gate + 140]
+    assert (
+        "update_wake_word(device_id, device.wake_word_enabled, refresh=True)"
+        in after[gate : gate + 140]
+    )

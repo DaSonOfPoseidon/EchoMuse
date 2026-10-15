@@ -5,11 +5,11 @@ import pytest
 
 import em_oww_models as owm
 
-
 # ─── prediction_key ──────────────────────────────────────────────────────────
 # Regression guard for the silent-zero bug: openwakeword keys its
 # prediction dict by filename stem, so scoring a custom model by its raw
 # config value (a path) reads 0.0 forever and the wake word never fires.
+
 
 def test_prediction_key_stock_name_passthrough():
     assert owm.prediction_key("hey_jarvis_v0.1") == "hey_jarvis_v0.1"
@@ -26,6 +26,7 @@ def test_prediction_key_relative_path():
 # ─── scalar_score ────────────────────────────────────────────────────────────
 # #869: a classifier exported with a [batch, 1, 1] output leaves openwakeword
 # holding a one-element array, and the listener crashed formatting it.
+
 
 @pytest.mark.parametrize("shape", [(), (1,), (1, 1), (1, 1, 1)])
 def test_scalar_score_takes_any_output_shape(shape):
@@ -53,11 +54,14 @@ def test_every_score_the_controller_reads_is_made_scalar():
     src = (Path(__file__).resolve().parent.parent / "em_controller.py").read_text()
     reads = [l.strip() for l in src.splitlines() if "prediction.get(" in l]
     assert len(reads) >= 2
-    assert all(l.startswith("score = em_oww_models.scalar_score(prediction.get(")
-               for l in reads), reads
+    assert all(
+        l.startswith("score = em_oww_models.scalar_score(prediction.get(")
+        for l in reads
+    ), reads
 
 
 # ─── safe_model_filename ─────────────────────────────────────────────────────
+
 
 def test_filename_accepts_simple_onnx():
     assert owm.safe_model_filename("hey_clara.onnx") == "hey_clara.onnx"
@@ -78,6 +82,7 @@ def test_filename_rejects_traversal_and_junk():
 
 
 # ─── models_dir / scan ───────────────────────────────────────────────────────
+
 
 def test_models_dir_sits_beside_db():
     d = owm.models_dir("/app/data/echomuse.db")
@@ -100,11 +105,12 @@ def test_scan_lists_only_onnx_sorted(tmp_path):
 
 # ─── in_use_by ───────────────────────────────────────────────────────────────
 
+
 def test_in_use_by_matches_path_refs_only(tmp_path):
     model = tmp_path / "hey_clara.onnx"
     model.write_bytes(b"m")
     configs = {
-        "global":   {"owwModel": "hey_jarvis_v0.1"},
+        "global": {"owwModel": "hey_jarvis_v0.1"},
         "device-a": {"owwModel": str(model)},
         "device-b": {"owwModel": str(tmp_path / "other.onnx")},
         "device-c": {},
@@ -114,6 +120,7 @@ def test_in_use_by_matches_path_refs_only(tmp_path):
 
 
 # ── display_name ──────────────────────────────────────────────────────────
+
 
 def test_display_name_strips_the_version_suffix():
     assert owm.display_name("hey_jarvis_v0.1") == "hey jarvis"
@@ -128,8 +135,7 @@ def test_display_name_handles_custom_model_paths():
     no metadata at all (metadata_props={}, empty doc strings, raw torch_jit
     exports) and custom models are not in openwakeword.MODELS either.
     """
-    assert owm.display_name(
-        "/data/oww_models/hey_clarra.onnx") == "hey clarra"
+    assert owm.display_name("/data/oww_models/hey_clarra.onnx") == "hey clarra"
     assert owm.display_name("hey_clarra") == "hey clarra"
 
 
@@ -155,4 +161,5 @@ def test_display_name_matches_openwakeword_own_names():
         stem = Path(spec["model_path"]).stem
         assert owm.display_name(stem) == name.replace("_", " "), (
             f"display_name({stem!r}) disagrees with openwakeword's own name "
-            f"for the model, {name!r}")
+            f"for the model, {name!r}"
+        )

@@ -18,6 +18,7 @@ What is not checked: literal colours in the exempt components (the Echo
 drawing, the terminal, LED swatches). Those are the device's colours, see
 test_design_tokens.EXEMPT.
 """
+
 from __future__ import annotations
 
 import re
@@ -33,7 +34,7 @@ TEXT, NON_TEXT = 4.5, 3.0
 def _theme(selector: str) -> dict[str, str]:
     html = HTML.read_text()
     start = html.index(selector)
-    body = html[start:html.index("}", start)]
+    body = html[start : html.index("}", start)]
     return dict(re.findall(r"(--[\w-]+):\s*(#[0-9a-fA-F]{6}|rgba\([^)]*\))", body))
 
 
@@ -45,7 +46,7 @@ THEMES = {"light": LIGHT, "dark": DARK}
 def _rgb(value: str, under: tuple[float, ...] | None = None) -> tuple[float, ...]:
     """0-255 RGB; an rgba() is composited over `under`, as the browser paints it."""
     if value.startswith("#"):
-        return tuple(int(value[i:i + 2], 16) for i in (1, 3, 5))
+        return tuple(int(value[i : i + 2], 16) for i in (1, 3, 5))
     r, g, b, a = (float(x) for x in re.findall(r"[\d.]+", value))
     assert under is not None, f"{value} is translucent; say what it sits on"
     return tuple(c * a + u * (1 - a) for c, u in zip((r, g, b), under))
@@ -55,6 +56,7 @@ def _luminance(rgb) -> float:
     def lin(c):
         c /= 255
         return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
     r, g, b = (lin(c) for c in rgb)
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
@@ -67,7 +69,9 @@ def ratio(a, b) -> float:
 def _surfaces(t: dict[str, str]) -> dict[str, tuple]:
     """Every background text can sit on, including the tints over panels."""
     flat = {k: _rgb(t[f"--{k}"]) for k in ("raised", "card", "surface", "bg")}
-    tinted = {f"hairline over {k}": _rgb(t["--hairline"], flat[k]) for k in ("raised", "card")}
+    tinted = {
+        f"hairline over {k}": _rgb(t["--hairline"], flat[k]) for k in ("raised", "card")
+    }
     return {**flat, **tinted}
 
 
@@ -76,9 +80,12 @@ TEXT_TOKENS = ["text", "text2", "muted", "accent", "ok", "warn", "error"]
 
 # Text on a filled control: (label, [every stop of the fill it can sit on]).
 LABELS = [
-    ("accent-tint", ["accent-hi", "accent"]),               # .em-pill--accent, .em-iconbtn--accent (hover too)
-    ("on-error", ["error", "error-deep"]),                  # .em-pill--danger
-    ("text", ["surface", "border-soft"]),                   # .em-pill
+    (
+        "accent-tint",
+        ["accent-hi", "accent"],
+    ),  # .em-pill--accent, .em-iconbtn--accent (hover too)
+    ("on-error", ["error", "error-deep"]),  # .em-pill--danger
+    ("text", ["surface", "border-soft"]),  # .em-pill
 ]
 
 # Non-text: control edges (--field-line on inputs, --faint on .em-pill), the
@@ -91,7 +98,11 @@ NON_TEXT_TOKENS = ["field-line", "accent", "accent-hi", "faint"]
 def test_text_tokens_meet_4_5_on_every_surface(theme, token):
     t = THEMES[theme]
     fg = _rgb(t[f"--{token}"])
-    bad = {name: round(ratio(fg, bg), 2) for name, bg in _surfaces(t).items() if ratio(fg, bg) < TEXT}
+    bad = {
+        name: round(ratio(fg, bg), 2)
+        for name, bg in _surfaces(t).items()
+        if ratio(fg, bg) < TEXT
+    }
     assert not bad, f"--{token} ({theme}) under {TEXT}:1 on {bad}"
 
 
@@ -100,7 +111,11 @@ def test_text_tokens_meet_4_5_on_every_surface(theme, token):
 def test_button_labels_meet_4_5_at_both_ends_of_their_gradient(theme, label, fills):
     t = THEMES[theme]
     fg = _rgb(t[f"--{label}"])
-    bad = {f: round(ratio(fg, _rgb(t[f"--{f}"])), 2) for f in fills if ratio(fg, _rgb(t[f"--{f}"])) < TEXT}
+    bad = {
+        f: round(ratio(fg, _rgb(t[f"--{f}"])), 2)
+        for f in fills
+        if ratio(fg, _rgb(t[f"--{f}"])) < TEXT
+    }
     assert not bad, f"--{label} ({theme}) under {TEXT}:1 on {bad}"
 
 
@@ -110,7 +125,11 @@ def test_control_edges_and_focus_meet_3_on_panels(theme, token):
     t = THEMES[theme]
     fg = _rgb(t[f"--{token}"])
     panels = {k: v for k, v in _surfaces(t).items() if k != "bg"}
-    bad = {name: round(ratio(fg, bg), 2) for name, bg in panels.items() if ratio(fg, bg) < NON_TEXT}
+    bad = {
+        name: round(ratio(fg, bg), 2)
+        for name, bg in panels.items()
+        if ratio(fg, bg) < NON_TEXT
+    }
     assert not bad, f"--{token} ({theme}) under {NON_TEXT}:1 on {bad}"
 
 
@@ -135,12 +154,18 @@ _DARK_RULE = ".em-lcd, .em-inset, .em-console, .em-ctrl-update, .em-on-dark {"
 def _dark_rule() -> dict[str, str]:
     html = HTML.read_text()
     start = html.index(_DARK_RULE)
-    return dict(re.findall(r"(--[\w-]+):\s*(#[0-9a-fA-F]{6})", html[start:html.index("}", start)]))
+    return dict(
+        re.findall(
+            r"(--[\w-]+):\s*(#[0-9a-fA-F]{6})", html[start : html.index("}", start)]
+        )
+    )
 
 
 def _dark_surfaces(t: dict[str, str]) -> dict[str, tuple]:
     out = {k: _rgb(t[f"--{k}"]) for k in ("lcd-face", "lcd-bg", "lcd-deep")}
-    for i, stop in enumerate(re.findall(r"#[0-9a-fA-F]{6}", t["--notice-bg"] if "--notice-bg" in t else "")):
+    for i, stop in enumerate(
+        re.findall(r"#[0-9a-fA-F]{6}", t["--notice-bg"] if "--notice-bg" in t else "")
+    ):
         out[f"notice-bg stop {i}"] = _rgb(stop)
     return out
 
@@ -154,9 +179,13 @@ def test_the_dark_surface_rule_is_the_dark_theme():
 
 def _notice(theme):
     html = HTML.read_text()
-    sel = ':root, :root[data-theme="light"] {' if theme == "light" else ':root[data-theme="dark"] {'
+    sel = (
+        ':root, :root[data-theme="light"] {'
+        if theme == "light"
+        else ':root[data-theme="dark"] {'
+    )
     start = html.index(sel)
-    block = html[start:html.index("}", start)]
+    block = html[start : html.index("}", start)]
     return dict(re.findall(r"(--notice-bg):\s*([^;]+);", block))
 
 
@@ -165,7 +194,11 @@ def _notice(theme):
 def test_text_tokens_meet_4_5_on_dark_surfaces(theme, token):
     t = {**THEMES[theme], **_notice(theme)}
     fg = _rgb(_dark_rule()[f"--{token}"])
-    bad = {n: round(ratio(fg, bg), 2) for n, bg in _dark_surfaces(t).items() if ratio(fg, bg) < TEXT}
+    bad = {
+        n: round(ratio(fg, bg), 2)
+        for n, bg in _dark_surfaces(t).items()
+        if ratio(fg, bg) < TEXT
+    }
     assert not bad, f"--{token} inside a dark surface ({theme}) under {TEXT}:1 on {bad}"
 
 
@@ -174,9 +207,13 @@ def test_text_tokens_meet_4_5_on_dark_surfaces(theme, token):
 def test_lcd_text_colours_meet_4_5(theme, token):
     t = THEMES[theme]
     fg = _rgb(t[f"--{token}"])
-    panels = {n: bg for n, bg in _dark_surfaces(t).items() if not n.startswith("notice")}
+    panels = {
+        n: bg for n, bg in _dark_surfaces(t).items() if not n.startswith("notice")
+    }
     panels.update({f"glow over {n}": _glow(bg, fg) for n, bg in list(panels.items())})
-    bad = {n: round(ratio(fg, bg), 2) for n, bg in panels.items() if ratio(fg, bg) < TEXT}
+    bad = {
+        n: round(ratio(fg, bg), 2) for n, bg in panels.items() if ratio(fg, bg) < TEXT
+    }
     assert not bad, f"--{token} ({theme}) under {TEXT}:1 on {bad}"
 
 
@@ -196,8 +233,12 @@ def test_device_state_names_are_legible_on_the_lcd():
         for key, token in states:
             lcd = t[token]
             fg = _rgb(lcd)
-            panels = [bg for n, bg in _dark_surfaces(t).items() if not n.startswith("notice")]
-            worst = min(ratio(fg, bg) for bg in panels + [_glow(bg, fg) for bg in panels])
+            panels = [
+                bg for n, bg in _dark_surfaces(t).items() if not n.startswith("notice")
+            ]
+            worst = min(
+                ratio(fg, bg) for bg in panels + [_glow(bg, fg) for bg in panels]
+            )
             assert worst >= TEXT, f"{key} lcd {lcd} ({theme}) {worst:.2f}:1"
 
 

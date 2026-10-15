@@ -28,9 +28,14 @@ def _func(module: str, name: str, cls: str = "") -> ast.AST:
     tree = ast.parse((CONTROLLER / module).read_text())
     scope = tree
     if cls:
-        scope = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == cls)
-    return next(n for n in ast.walk(scope)
-                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name)
+        scope = next(
+            n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == cls
+        )
+    return next(
+        n
+        for n in ast.walk(scope)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name
+    )
 
 
 def _calls(node: ast.AST) -> list:
@@ -53,6 +58,7 @@ def fresh_db(tmp_path):
 
 # ── the key ───────────────────────────────────────────────────────────────────
 
+
 def test_key_is_32_random_bytes_assigned_once(fresh_db):
     db.register_new_device("G090LF0000000001", "10.0.0.1", "v0")
     db.register_new_device("G090LF0000000002", "10.0.0.2", "v0")
@@ -67,11 +73,13 @@ def test_key_is_32_random_bytes_assigned_once(fresh_db):
 
 def test_connections_default_off_and_live_in_the_bluetooth_section():
     import em_config_sections
+
     assert db.DEFAULT_DEVICE_CONFIG["bleProxyConnections"] is False
     assert "bleProxyConnections" in em_config_sections.SECTIONS["bluetooth"]["keys"]
 
 
 # ── never offered in the clear ────────────────────────────────────────────────
+
 
 def test_a_proxy_has_connections_exactly_when_it_has_a_key():
     init = _func("em_ble_proxy.py", "__init__", "DeviceBleProxyServer")
@@ -84,8 +92,11 @@ def test_a_proxy_has_connections_exactly_when_it_has_a_key():
 
 def test_the_handlers_exist_only_on_an_encrypted_connection():
     init = _func("em_ble_proxy.py", "__init__", "BluetoothProxySatellite")
-    guarded = [n for n in ast.walk(init) if isinstance(n, ast.If)
-               and ast.unparse(n.test) == "owning_server.connections"]
+    guarded = [
+        n
+        for n in ast.walk(init)
+        if isinstance(n, ast.If) and ast.unparse(n.test) == "owning_server.connections"
+    ]
     assert len(guarded) == 1, "one branch decides both encryption and the handlers"
     calls = _calls(guarded[0])
     assert "set_encryption" in calls and "GattProxy" in calls
@@ -97,18 +108,28 @@ def test_the_handlers_exist_only_on_an_encrypted_connection():
 
 def test_flags_and_encryption_follow_the_same_fact():
     handle = _func("em_ble_proxy.py", "handle_message", "BluetoothProxySatellite")
-    info = next(n for n in ast.walk(handle) if isinstance(n, ast.Call)
-                and getattr(n.func, "attr", "") == "DeviceInfoResponse")
+    info = next(
+        n
+        for n in ast.walk(handle)
+        if isinstance(n, ast.Call)
+        and getattr(n.func, "attr", "") == "DeviceInfoResponse"
+    )
     kw = {k.arg: ast.unparse(k.value) for k in info.keywords}
     assert kw["api_encryption_supported"] == "self._gatt is not None"
-    assert "BT_PROXY_FLAGS_ACTIVE if self._gatt is not None else BT_PROXY_FLAGS" in kw[
-        "bluetooth_proxy_feature_flags"]
+    assert (
+        "BT_PROXY_FLAGS_ACTIVE if self._gatt is not None else BT_PROXY_FLAGS"
+        in kw["bluetooth_proxy_feature_flags"]
+    )
 
 
 def test_pairing_is_not_advertised():
     tree = ast.parse((CONTROLLER / "em_ble_proxy.py").read_text())
-    active = next(n for n in tree.body if isinstance(n, ast.Assign)
-                  and getattr(n.targets[0], "id", "") == "BT_PROXY_FLAGS_ACTIVE")
+    active = next(
+        n
+        for n in tree.body
+        if isinstance(n, ast.Assign)
+        and getattr(n.targets[0], "id", "") == "BT_PROXY_FLAGS_ACTIVE"
+    )
     names = {n.attr for n in ast.walk(active) if isinstance(n, ast.Attribute)}
     assert {"ACTIVE_CONNECTIONS", "REMOTE_CACHING", "CACHE_CLEARING"} <= names
     assert "PAIRING" not in names
@@ -116,18 +137,31 @@ def test_pairing_is_not_advertised():
 
 # ── the key goes to one request and nowhere else ──────────────────────────────
 
+
 def test_key_endpoint_is_admin_only_and_says_nothing_else():
     _, fn = _sources.find_def("_get_ble_proxy_key")
     assert [ast.unparse(d) for d in fn.decorator_list] == ["auth.require_admin"]
     # Full call names: `em_http.error` answers the request, `log.error` would
     # put the key in the log.
     calls = [ast.unparse(n.func) for n in ast.walk(fn) if isinstance(n, ast.Call)]
-    for forbidden in ("log.info", "log.warning", "log.debug", "log.error",
-                      "log_device", "broadcast", "em_events.push", "em_events.push_log"):
-        assert not any(c == forbidden or c.endswith("." + forbidden) for c in calls), \
-            f"the key handler calls {forbidden}"
+    for forbidden in (
+        "log.info",
+        "log.warning",
+        "log.debug",
+        "log.error",
+        "log_device",
+        "broadcast",
+        "em_events.push",
+        "em_events.push_log",
+    ):
+        assert not any(
+            c == forbidden or c.endswith("." + forbidden) for c in calls
+        ), f"the key handler calls {forbidden}"
     # all_code() is unparsed, which writes every string single-quoted.
-    assert "add_get('/api/devices/{id}/ble_proxy/key', _get_ble_proxy_key)" in _sources.all_code()
+    assert (
+        "add_get('/api/devices/{id}/ble_proxy/key', _get_ble_proxy_key)"
+        in _sources.all_code()
+    )
 
 
 def test_key_is_not_in_a_support_bundle_or_the_device_list():
@@ -135,26 +169,40 @@ def test_key_is_not_in_a_support_bundle_or_the_device_list():
     # Everything that answers an HTTP request or builds the device list. A
     # second caller there is a second way out for the key. (em_ble_proxy reads
     # it too, to run the encrypted listener; that is not a way out.)
-    api = [m for m in _sources.MODULES
-           if m.stem in ("em_api", "em_device_view") or m.stem.startswith("em_routes_")]
+    api = [
+        m
+        for m in _sources.MODULES
+        if m.stem in ("em_api", "em_device_view") or m.stem.startswith("em_routes_")
+    ]
     assert len(api) > 10, [m.stem for m in api]
-    users = [n.name for m in api for n in ast.walk(_sources.tree(m))
-             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-             and "ensure_ble_proxy_key" in ast.unparse(n)]
+    users = [
+        n.name
+        for m in api
+        for n in ast.walk(_sources.tree(m))
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and "ensure_ble_proxy_key" in ast.unparse(n)
+    ]
     assert users == ["_get_ble_proxy_key"], users
 
 
 # ── negotiated both ways ──────────────────────────────────────────────────────
 
+
 def test_controller_and_device_announce_the_same_name():
     ctrl = (CONTROLLER / "em_controller.py").read_text()
     tree = ast.parse(ctrl)
-    features = next(n for n in tree.body if isinstance(n, ast.Assign)
-                    and getattr(n.targets[0], "id", "") == "CONTROLLER_FEATURES")
+    features = next(
+        n
+        for n in tree.body
+        if isinstance(n, ast.Assign)
+        and getattr(n.targets[0], "id", "") == "CONTROLLER_FEATURES"
+    )
     assert "ble_connect" in ast.literal_eval(features.value)
     go = (CONTROLLER.parent / "device/internal/client/control.go").read_text()
     assert 'const FeatureBleConnect = "ble_connect"' in go
-    assert '"ble_connect"}' in go.split("func capabilities()")[1].split("return caps")[0]
+    assert (
+        '"ble_connect"}' in go.split("func capabilities()")[1].split("return caps")[0]
+    )
 
 
 def test_frames_go_only_to_a_device_that_announced_it():
@@ -163,6 +211,7 @@ def test_frames_go_only_to_a_device_that_announced_it():
     data = (CONTROLLER.parent / "device/internal/client/data.go").read_text()
     assert "frameTypeBleGatt = byte(0x08)" in data
     import em_ble_gatt
+
     assert em_ble_gatt.FRAME_BLE_GATT == 0x08
 
 

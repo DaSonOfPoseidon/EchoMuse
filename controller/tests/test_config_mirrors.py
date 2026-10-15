@@ -56,7 +56,7 @@ def _registration_keys() -> set[str]:
     # have.
     tail = block[1]
     end = re.search(r"\n {0,4}(async )?def ", tail)
-    body = tail[:end.start()] if end else tail
+    body = tail[: end.start()] if end else tail
     return set(re.findall(r'config\.get\(\s*["\']([A-Za-z]+)["\']', body))
 
 
@@ -71,8 +71,9 @@ def test_every_registration_mirror_is_also_applied_on_a_live_push():
     missing = reg - live - REGISTRATION_ONLY
     assert not missing, (
         "These config keys update the controller when a device registers but "
-        "NOT when config is saved:\n  " + "\n  ".join(sorted(missing)) +
-        "\n\nThey will appear to do nothing until the device reconnects. Add "
+        "NOT when config is saved:\n  "
+        + "\n  ".join(sorted(missing))
+        + "\n\nThey will appear to do nothing until the device reconnects. Add "
         "them to em_device_config.apply_live_config, or to REGISTRATION_ONLY with a "
         "reason."
     )
@@ -84,8 +85,13 @@ def test_the_output_chain_is_carried_by_both():
     fallback at all: the firmware ignores them, so the controller-side mirror
     is the ONLY thing that makes them work.
     """
-    chain = {"limiterEnabled", "limiterThreshold", "limiterRelease",
-             "bassGuardEnabled", "bassGuardDb"}
+    chain = {
+        "limiterEnabled",
+        "limiterThreshold",
+        "limiterRelease",
+        "bassGuardEnabled",
+        "bassGuardDb",
+    }
     assert chain <= _registration_keys()
     assert chain <= _live_push_keys()
 
@@ -99,4 +105,5 @@ def test_registration_only_keys_are_really_absent():
     stale = REGISTRATION_ONLY & _live_push_keys()
     assert not stale, (
         f"REGISTRATION_ONLY lists {sorted(stale)}, but they are applied on a "
-        f"live push — drop them from the exemption")
+        f"live push — drop them from the exemption"
+    )

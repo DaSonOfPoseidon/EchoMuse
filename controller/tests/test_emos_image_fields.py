@@ -51,8 +51,10 @@ def _declared_fields() -> tuple:
     for node in _api_tree().body:
         if not isinstance(node, ast.Assign):
             continue
-        if any(isinstance(t, ast.Name) and t.id == "EMOS_IMAGE_FIELDS"
-               for t in node.targets):
+        if any(
+            isinstance(t, ast.Name) and t.id == "EMOS_IMAGE_FIELDS"
+            for t in node.targets
+        ):
             return tuple(ast.literal_eval(node.value))
     raise AssertionError("em_routes_provision.EMOS_IMAGE_FIELDS not found")
 
@@ -64,16 +66,23 @@ def _handled_fields() -> set:
     a name that appears only in a comment or a docstring is not counted.
     """
     handler = next(
-        (n for n in ast.walk(_api_tree())
-         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-         and n.name == HANDLER),
-        None)
+        (
+            n
+            for n in ast.walk(_api_tree())
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name == HANDLER
+        ),
+        None,
+    )
     assert handler is not None, f"em_routes_provision.{HANDLER} not found"
 
     def _is_field_name(node) -> bool:
-        return (isinstance(node, ast.Attribute) and node.attr == "name"
-                and isinstance(node.value, ast.Name)
-                and node.value.id == "field")
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "name"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "field"
+        )
 
     found = set()
     for node in ast.walk(handler):
@@ -83,8 +92,9 @@ def _handled_fields() -> set:
             if isinstance(comparator, ast.Constant):
                 found.add(comparator.value)
             elif isinstance(comparator, (ast.Tuple, ast.List, ast.Set)):
-                found.update(e.value for e in comparator.elts
-                             if isinstance(e, ast.Constant))
+                found.update(
+                    e.value for e in comparator.elts if isinstance(e, ast.Constant)
+                )
             # A bare Name — `field.name not in EMOS_IMAGE_FIELDS` — is the
             # allowlist check itself, not a branch. Skipped deliberately.
     return found
@@ -99,9 +109,9 @@ def _wizard_fields() -> set:
     src = (CONTROLLER / "static" / "dashboard.jsx").read_text()
     start = src.index("async function runBuildEmos(")
     # The next declaration at the same indentation ends the body.
-    end = re.search(r"\n  (?:async )?function ", src[start + 1:])
+    end = re.search(r"\n  (?:async )?function ", src[start + 1 :])
     assert end, "could not find the end of runBuildEmos"
-    body = src[start:start + 1 + end.start()]
+    body = src[start : start + 1 + end.start()]
     assert "fd.append(" in body, "runBuildEmos no longer builds a FormData"
     return set(re.findall(r"fd\.append\(\s*'([^']+)'", body))
 
@@ -116,7 +126,8 @@ def test_the_handler_reads_every_field_the_wizard_sends():
         f"dashboard.jsx sends {sorted(missing)} to /api/provision/emos_image "
         f"and em_routes_provision.EMOS_IMAGE_FIELDS does not list them, so they are "
         f"dropped without an error and the image is built as though they were "
-        f"never sent")
+        f"never sent"
+    )
 
 
 def test_system_part_specifically_crosses_the_boundary():
@@ -127,10 +138,12 @@ def test_system_part_specifically_crosses_the_boundary():
     """
     assert "system_part" in _wizard_fields(), (
         "runBuildEmos must append system_part, or no image can carry an "
-        "emos.system= stamp")
+        "emos.system= stamp"
+    )
     assert "system_part" in _handled_fields(), (
         "the parse loop must branch on system_part, or the value is dropped "
-        "and every v2 image mounts emOS's hardcoded fallback partition")
+        "and every v2 image mounts emOS's hardcoded fallback partition"
+    )
 
 
 def test_every_allowed_field_has_a_branch_that_stores_it():
@@ -143,7 +156,8 @@ def test_every_allowed_field_has_a_branch_that_stores_it():
     unhandled = set(_declared_fields()) - _handled_fields()
     assert not unhandled, (
         f"EMOS_IMAGE_FIELDS names {sorted(unhandled)} but the parse loop has "
-        f"no branch reading them — they are accepted and then dropped")
+        f"no branch reading them — they are accepted and then dropped"
+    )
 
 
 def test_an_unknown_field_is_logged_rather_than_skipped():
@@ -154,9 +168,9 @@ def test_an_unknown_field_is_logged_rather_than_skipped():
     handled = _handled_fields()
     assert handled, "the parse loop no longer branches on field.name"
     body = _sources.code_only(_sources.def_source(HANDLER))
-    assert "EMOS_IMAGE_FIELDS" in body, (
-        "the parse loop must check the allowlist")
+    assert "EMOS_IMAGE_FIELDS" in body, "the parse loop must check the allowlist"
     assert re.search(r"log\.warning\([^)]*field\.name", body, re.S), (
         "an unrecognised multipart field must be logged with its name — "
         "without it, a field the wizard sends and the handler ignores is "
-        "invisible at every layer")
+        "invisible at every layer"
+    )

@@ -38,6 +38,7 @@ def _load_dropped_keys():
     which is exactly why the separate decorator-placement tests below exist.
     """
     import ast
+
     _, node = _sources.find_def("dropped_keys")
     node.decorator_list = []
     mod = ast.Module(body=[node], type_ignores=[])
@@ -50,16 +51,32 @@ dropped_keys = _load_dropped_keys()
 
 # The real fleet config as it stood before the incident.
 LIVE_CONFIG = {
-    "adcDigitalGain": 88, "adcMicpga": 40, "micGainDb": 24,
-    "aecEnabled": True, "aecDelayMs": 0, "aecTailMs": 300,
-    "startupVolume": 85, "vadThreshold": 0.001, "vadSpeechMs": 32,
-    "vadSilenceMs": 900, "owwThreshold": 0.5, "bargeInEnabled": True,
-    "bargeInThreshold": 0.05, "owwModel": "hey_mycroft_v0.1",
-    "owwSpeexNs": False, "nsAsr": True, "bleProxyEnabled": True,
-    "beamformingEnabled": True, "beamAngle": -1,
-    "eqBands": [0, 3, 2, 0, -2, 3, 7, 0], "eqLoudness": True,
-    "ledScene": "standard", "ledListenColor": "#00b400",
-    "ledThinkColor": "#00c800", "agcEnabled": True, "nsEnabled": False,
+    "adcDigitalGain": 88,
+    "adcMicpga": 40,
+    "micGainDb": 24,
+    "aecEnabled": True,
+    "aecDelayMs": 0,
+    "aecTailMs": 300,
+    "startupVolume": 85,
+    "vadThreshold": 0.001,
+    "vadSpeechMs": 32,
+    "vadSilenceMs": 900,
+    "owwThreshold": 0.5,
+    "bargeInEnabled": True,
+    "bargeInThreshold": 0.05,
+    "owwModel": "hey_mycroft_v0.1",
+    "owwSpeexNs": False,
+    "nsAsr": True,
+    "bleProxyEnabled": True,
+    "beamformingEnabled": True,
+    "beamAngle": -1,
+    "eqBands": [0, 3, 2, 0, -2, 3, 7, 0],
+    "eqLoudness": True,
+    "ledScene": "standard",
+    "ledListenColor": "#00b400",
+    "ledThinkColor": "#00c800",
+    "agcEnabled": True,
+    "nsEnabled": False,
 }
 
 
@@ -101,10 +118,13 @@ def test_result_is_sorted_for_a_stable_error_message():
     assert out == sorted(out)
 
 
-@pytest.mark.parametrize("path,handler", [
-    ("global", "_post_global_config"),
-    ("device", "_post_device_config"),
-])
+@pytest.mark.parametrize(
+    "path,handler",
+    [
+        ("global", "_post_global_config"),
+        ("device", "_post_device_config"),
+    ],
+)
 def test_both_write_paths_are_guarded(path, handler):
     """
     Both endpoints replace rather than merge, so both need the check. A
@@ -127,8 +147,8 @@ def test_new_default_key_does_not_block_a_stale_dashboard_save():
     actually persisted — keeps legitimate saves working while still
     catching a genuinely destructive partial write.
     """
-    raw_stored = {k: v for k, v in LIVE_CONFIG.items()}   # no new key yet
-    stale_dashboard_body = dict(raw_stored)               # lacks the new default
+    raw_stored = {k: v for k, v in LIVE_CONFIG.items()}  # no new key yet
+    stale_dashboard_body = dict(raw_stored)  # lacks the new default
     assert dropped_keys(stale_dashboard_body, raw_stored) == []
 
     # ...while the destructive partial write is still refused.
@@ -155,6 +175,7 @@ def test_guard_reads_raw_stored_config_not_the_underlaid_view():
 # text, which drops decorators entirely, so they were exercising a different
 # function than production. These parse the real file instead.
 
+
 def _decorators_of(name):
     _, n = _sources.find_def(name)
     return [getattr(d, "id", getattr(d, "attr", "?")) for d in n.decorator_list]
@@ -168,13 +189,16 @@ def test_dropped_keys_is_a_plain_helper_not_a_route_handler():
     )
 
 
-@pytest.mark.parametrize("handler", [
-    "_post_global_config",
-    "_post_device_config",
-    "_post_upload_binary",
-])
+@pytest.mark.parametrize(
+    "handler",
+    [
+        "_post_global_config",
+        "_post_device_config",
+        "_post_upload_binary",
+    ],
+)
 def test_mutating_handlers_still_require_admin(handler):
     """Any config/binary write must keep its auth decorator."""
-    assert "require_admin" in _decorators_of(handler), (
-        f"{handler} lost its @auth.require_admin — anyone could call it"
-    )
+    assert "require_admin" in _decorators_of(
+        handler
+    ), f"{handler} lost its @auth.require_admin — anyone could call it"

@@ -29,9 +29,13 @@ from esphome.vendor.api_pb2 import VoiceAssistantEvent as ET  # noqa: E402
 
 def satellite() -> "em_esphome.EchoMuseSatellite":
     s = em_esphome.EchoMuseSatellite(
-        device_id="G090LF0000000001", label="Test", mac_address="02:EC:00:00:00:01",
-        oww_model_id="hey_jarvis_v0.1", on_disconnected_cb=lambda *_: None,
-        oww_model_info=None)
+        device_id="G090LF0000000001",
+        label="Test",
+        mac_address="02:EC:00:00:00:01",
+        oww_model_id="hey_jarvis_v0.1",
+        on_disconnected_cb=lambda *_: None,
+        oww_model_info=None,
+    )
     s._turn_active = True
     return s
 
@@ -101,8 +105,9 @@ def test_the_turn_records_it_and_does_not_answer_an_announcement_it_did_not_play
     own outcome, and no AnnounceFinished, which HA would take as the reply to
     the question it has just sent."""
     from pathlib import Path
+
     src = Path(em_esphome.__file__).read_text()
-    assert 'elif self._ha_ended_early:' in src
+    assert "elif self._ha_ended_early:" in src
     assert 'trace.outcome = "superseded"' in src
     guard = src.index("if not self._ha_ended_early:")
     sent = src.index("VoiceAssistantAnnounceFinished(success=True)", guard)
@@ -111,7 +116,17 @@ def test_the_turn_records_it_and_does_not_answer_an_announcement_it_did_not_play
 
 def test_the_flag_resets_per_turn():
     from pathlib import Path
+
     src = Path(em_esphome.__file__).read_text()
     assert src.count("self._ha_ended_early") >= 5
-    assert len([l for l in src.splitlines()
-                if l.strip().startswith("self._ha_ended_early") and l.rstrip().endswith("= False")]) == 2
+    assert (
+        len(
+            [
+                l
+                for l in src.splitlines()
+                if l.strip().startswith("self._ha_ended_early")
+                and l.rstrip().endswith("= False")
+            ]
+        )
+        == 2
+    )

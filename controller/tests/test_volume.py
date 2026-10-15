@@ -4,6 +4,7 @@ The scale existed as `/ 175` copy-pasted into three modules with no test at
 all, which is how it went four releases with a ceiling that put the codec's
 DAC into positive digital gain. These pin the ceiling and the round trip.
 """
+
 import pytest
 
 import em_volume

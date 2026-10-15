@@ -61,7 +61,7 @@ def test_boundary_of_the_match_window():
 
 def test_nearest_crossing_wins():
     t = tracker()
-    t.record_cross(0.5, age_ms=0, at_now=10.0)   # 1.0s before the wake
+    t.record_cross(0.5, age_ms=0, at_now=10.0)  # 1.0s before the wake
     t.record_cross(0.95, age_ms=0, at_now=10.9)  # 0.1s before the wake
     score, delta = t.match(wake_mono=11.0)
     assert score == 0.95, "the nearer crossing describes this utterance"
@@ -154,7 +154,9 @@ def test_on_without_the_capability_degrades_to_shadow_not_on():
     """Honouring it would stop the controller acting on its own detections
     while waiting for wakes the firmware has no code to send — a deaf device,
     which is a wrong answer rather than the old behaviour."""
-    assert em_shadow.effective_mode("on", trigger_capable=False) == em_shadow.MODE_SHADOW
+    assert (
+        em_shadow.effective_mode("on", trigger_capable=False) == em_shadow.MODE_SHADOW
+    )
     assert em_shadow.effective_mode("on", trigger_capable=True) == em_shadow.MODE_ON
 
 
@@ -174,6 +176,7 @@ def test_a_missing_model_never_changes_the_mode():
     installs the model. So readiness is not an input to the mode at all.
     """
     import inspect
+
     params = inspect.signature(em_shadow.effective_mode).parameters
     assert not [p for p in params if "model" in p or "ready" in p or "fallback" in p]
     assert em_shadow.effective_mode("on", trigger_capable=True) == em_shadow.MODE_ON
@@ -181,7 +184,10 @@ def test_a_missing_model_never_changes_the_mode():
 
 def test_off_stays_off_whatever_the_capability():
     for capable in (True, False):
-        assert em_shadow.effective_mode("off", trigger_capable=capable) == em_shadow.MODE_OFF
+        assert (
+            em_shadow.effective_mode("off", trigger_capable=capable)
+            == em_shadow.MODE_OFF
+        )
 
 
 def test_in_on_mode_only_the_device_triggers():

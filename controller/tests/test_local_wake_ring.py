@@ -19,12 +19,14 @@ ROOT = CONTROLLER.parent
 
 def test_the_controller_pushes_the_listening_anim_at_registration():
     src = (CONTROLLER / "em_controller.py").read_text()
-    block = src[src.index("device.led_scene     = em_scenes.resolve(config)"):]
+    block = src[src.index("device.led_scene     = em_scenes.resolve(config)") :]
     block = block[:2000]
-    assert '"listeningAnim"' in block, \
-        "registration must hand the device its listening animation"
-    assert "led_anim_capable" in block, \
-        "firmware without local animation must keep the old behaviour"
+    assert (
+        '"listeningAnim"' in block
+    ), "registration must hand the device its listening animation"
+    assert (
+        "led_anim_capable" in block
+    ), "firmware without local animation must keep the old behaviour"
 
 
 def test_the_controller_updates_it_on_a_live_scene_change():
@@ -35,32 +37,37 @@ def test_the_controller_updates_it_on_a_live_scene_change():
     exists for.
     """
     src = _sources.def_source("apply_live_config")
-    body = src[src.index("live.led_scene = em_scenes.resolve(effective)"):]
+    body = src[src.index("live.led_scene = em_scenes.resolve(effective)") :]
     body = body[:1200]
-    assert '"listeningAnim"' in body, \
-        "a live scene change must refresh the device's cached animation"
+    assert (
+        '"listeningAnim"' in body
+    ), "a live scene change must refresh the device's cached animation"
 
 
 def test_the_device_draws_locally_before_reporting_the_crossing():
     src = (ROOT / "device" / "cmd" / "server.go").read_text()
-    fn = src[src.index("func onWakeCrossing"):]
-    fn = fn[:fn.index("\nfunc ", 1)]
+    fn = src[src.index("func onWakeCrossing") :]
+    fn = fn[: fn.index("\nfunc ", 1)]
     draw = fn.index("srv.StartAnim(spec)")
     send = fn.index("cc.SendOwwWake(")
-    assert draw < send, \
-        "the local draw must precede the report - drawing after is the bug"
+    assert (
+        draw < send
+    ), "the local draw must precede the report - drawing after is the bug"
     # Only devices that actually trigger locally may do this; shadow mode
     # and muted crossings keep their existing paths.
-    assert fn.index("OnDeviceOn") < draw, \
-        "shadow-mode crossings must not light the turn ring"
-    assert "IsMuted()" in fn[:fn.index("srv.StartAnim(spec)")], \
-        "a muted crossing is suppressed, not announced"
+    assert (
+        fn.index("OnDeviceOn") < draw
+    ), "shadow-mode crossings must not light the turn ring"
+    assert (
+        "IsMuted()" in fn[: fn.index("srv.StartAnim(spec)")]
+    ), "a muted crossing is suppressed, not announced"
 
 
 def test_the_go_config_message_carries_the_field():
     src = (ROOT / "device" / "internal" / "config" / "config.go").read_text()
-    assert re.search(r'ListeningAnim\s+json\.RawMessage\s+`json:"listeningAnim,omitempty"`', src), \
-        "the wire field must exist with the exact tag the controller sends"
+    assert re.search(
+        r'ListeningAnim\s+json\.RawMessage\s+`json:"listeningAnim,omitempty"`', src
+    ), "the wire field must exist with the exact tag the controller sends"
 
 
 def test_the_arbitration_loser_gets_its_ring_turned_off():
@@ -78,27 +85,28 @@ def test_the_arbitration_loser_gets_its_ring_turned_off():
     the wrong path's code.
     """
     src = (CONTROLLER / "em_controller.py").read_text()
-    src = src[src.index("async def _stream_listen"):]
-    branch = src[src.index("if not serves or won_by != device.device_id:"):]
+    src = src[src.index("async def _stream_listen") :]
+    branch = src[src.index("if not serves or won_by != device.device_id:") :]
     # The no-HA sub-branch ends at its own `continue`; ceding is what follows.
     stand = branch.index("if not serves:")
-    cede  = branch[branch.index("continue", stand) + len("continue"):]
-    cede  = cede[:cede.index("continue")]
+    cede = branch[branch.index("continue", stand) + len("continue") :]
+    cede = cede[: cede.index("continue")]
     # Comments on this path necessarily discuss the call they exclude.
     code = "\n".join(
         line for line in cede.splitlines() if not line.lstrip().startswith("#")
     )
-    assert "leds_off(device)" in code, \
-        "a ceding device must be told to darken its ring"
-    assert "_leds_turn_end" not in code, \
-        "the loser had no turn, so it gets plain off, not an outcome cue"
+    assert "leds_off(device)" in code, "a ceding device must be told to darken its ring"
+    assert (
+        "_leds_turn_end" not in code
+    ), "the loser had no turn, so it gets plain off, not an outcome cue"
 
     # And the two exits must stay distinguishable: the stand-down path is the
     # one that cues, and reading it as a cede would take the cue away exactly
     # on a multi-device fleet, which is how this was reported.
-    standdown = branch[stand:branch.index("continue", stand)]
-    assert "_leds_turn_end(device)" in standdown, \
-        "a device with no HA cues its state whether or not another Echo won"
+    standdown = branch[stand : branch.index("continue", stand)]
+    assert (
+        "_leds_turn_end(device)" in standdown
+    ), "a device with no HA cues its state whether or not another Echo won"
 
 
 def test_the_private_path_darkens_a_loser_and_cues_a_device_with_no_ha():
@@ -106,13 +114,13 @@ def test_the_private_path_darkens_a_loser_and_cues_a_device_with_no_ha():
     which returns where the stream path continues. Both must also close the
     session, or the Echo keeps sending until its own ack timeout."""
     src = (CONTROLLER / "em_controller.py").read_text()
-    body = src[src.index("async def _private_wake_turn"):]
-    body = body[:body.index("\nasync def ")]
-    branch = body[body.index("if not serves or won_by != device.device_id:"):]
-    branch = branch[:branch.index("await device.listen_ack(session)")]
+    body = src[src.index("async def _private_wake_turn") :]
+    body = body[: body.index("\nasync def ")]
+    branch = body[body.index("if not serves or won_by != device.device_id:") :]
+    branch = branch[: branch.index("await device.listen_ack(session)")]
     code = "\n".join(l for l in branch.splitlines() if not l.lstrip().startswith("#"))
     assert "listen_close(session" in code
-    standdown = code[code.index("if not serves:"):code.index("else:")]
-    cede = code[code.index("else:"):]
+    standdown = code[code.index("if not serves:") : code.index("else:")]
+    cede = code[code.index("else:") :]
     assert "_leds_turn_end(device)" in standdown
     assert "leds_off(device)" in cede and "_leds_turn_end" not in cede

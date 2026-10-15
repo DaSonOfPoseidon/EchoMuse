@@ -80,8 +80,10 @@ def test_an_empty_setting_removes_only_a_file_this_controller_wrote(monkeypatch)
     file we wrote.
     """
     _reset()
-    replies = [f"0123456789abcdef0123456789abcdef  {em_endpoints.DEVICE_PATH}\n1\n{em_shell.OK_MARK}",
-               f"{em_shell.OK_MARK}"]
+    replies = [
+        f"0123456789abcdef0123456789abcdef  {em_endpoints.DEVICE_PATH}\n1\n{em_shell.OK_MARK}",
+        f"{em_shell.OK_MARK}",
+    ]
     calls, pushed = _patch_shell(monkeypatch, replies)
     monkeypatch.setattr(em_payloads, "endpoints_file", lambda: None)
 
@@ -101,7 +103,9 @@ def test_an_empty_setting_leaves_a_hand_written_file_alone(monkeypatch):
     """
     _reset()
     # File present (the md5sum line), but `grep -c managed_by` printed 0.
-    replies = [f"0123456789abcdef0123456789abcdef  {em_endpoints.DEVICE_PATH}\n0\n{em_shell.OK_MARK}"]
+    replies = [
+        f"0123456789abcdef0123456789abcdef  {em_endpoints.DEVICE_PATH}\n0\n{em_shell.OK_MARK}"
+    ]
     calls, pushed = _patch_shell(monkeypatch, replies)
     monkeypatch.setattr(em_payloads, "endpoints_file", lambda: None)
 
@@ -133,9 +137,7 @@ def test_a_device_that_does_not_answer_is_left_entirely_alone(monkeypatch):
     # It logs rather than raising a dashboard event, deliberately: this runs on
     # every connect, and an event per silent reconcile would bury the ones that
     # matter. The log line is the operator-facing record.
-    assert _events == [], (
-        f"a silent device must not raise a dashboard event: {_events}"
-    )
+    assert _events == [], f"a silent device must not raise a dashboard event: {_events}"
 
 
 def test_a_set_list_replaces_a_hand_written_file_and_says_so(monkeypatch):
@@ -146,9 +148,13 @@ def test_a_set_list_replaces_a_hand_written_file_and_says_so(monkeypatch):
     in the log rather than a silent substitution.
     """
     _reset()
-    want = em_endpoints.file_bytes([{"host": "10.0.0.5", "port": 8767, "tlsPort": 8770}])
+    want = em_endpoints.file_bytes(
+        [{"host": "10.0.0.5", "port": 8767, "tlsPort": 8770}]
+    )
     assert want, "the fixture must produce a file to write"
-    replies = [f"0123456789abcdef0123456789abcdef  {em_endpoints.DEVICE_PATH}\n0\n{em_shell.OK_MARK}"]
+    replies = [
+        f"0123456789abcdef0123456789abcdef  {em_endpoints.DEVICE_PATH}\n0\n{em_shell.OK_MARK}"
+    ]
     calls, pushed = _patch_shell(monkeypatch, replies)
     monkeypatch.setattr(em_payloads, "endpoints_file", lambda: want)
 
@@ -165,8 +171,12 @@ def test_a_file_already_carrying_the_want_is_left_alone(monkeypatch):
     is that md5 decides, never mere presence.
     """
     _reset()
-    want = em_endpoints.file_bytes([{"host": "10.0.0.5", "port": 8767, "tlsPort": 8770}])
-    replies = [f"{em_endpoints.md5(want)}  {em_endpoints.DEVICE_PATH}\n1\n{em_shell.OK_MARK}"]
+    want = em_endpoints.file_bytes(
+        [{"host": "10.0.0.5", "port": 8767, "tlsPort": 8770}]
+    )
+    replies = [
+        f"{em_endpoints.md5(want)}  {em_endpoints.DEVICE_PATH}\n1\n{em_shell.OK_MARK}"
+    ]
     calls, pushed = _patch_shell(monkeypatch, replies)
     monkeypatch.setattr(em_payloads, "endpoints_file", lambda: want)
 
@@ -186,16 +196,18 @@ def test_a_failed_removal_is_reported_and_not_claimed_as_success(monkeypatch):
     back on mDNS when it is not.
     """
     _reset()
-    replies = [f"0123456789abcdef0123456789abcdef  {em_endpoints.DEVICE_PATH}\n1\n{em_shell.OK_MARK}",
-               ""]  # the verification never echoes the sentinel
+    replies = [
+        f"0123456789abcdef0123456789abcdef  {em_endpoints.DEVICE_PATH}\n1\n{em_shell.OK_MARK}",
+        "",
+    ]  # the verification never echoes the sentinel
     _patch_shell(monkeypatch, replies)
     monkeypatch.setattr(em_payloads, "endpoints_file", lambda: None)
 
     assert asyncio.run(em_payloads.sync_endpoints(FakeLive(), "dev")) is False
     assert any(level == "warn" for level, _, _ in _events), _events
-    assert not any("removed — mDNS" in m for _, _, m in _events), (
-        f"claimed a removal that did not happen: {_events}"
-    )
+    assert not any(
+        "removed — mDNS" in m for _, _, m in _events
+    ), f"claimed a removal that did not happen: {_events}"
 
 
 def test_the_probe_recognises_only_a_real_md5_line_as_a_present_file():

@@ -7,7 +7,18 @@ from pathlib import Path
 import em_wakelevel as w
 
 # 25 frames: quiet room, a word rising to 0.05 RMS and falling away.
-VECTOR = [0.0004] * 15 + [0.002, 0.01, 0.03, 0.05, 0.04, 0.02, 0.008, 0.003, 0.001, 0.0005]
+VECTOR = [0.0004] * 15 + [
+    0.002,
+    0.01,
+    0.03,
+    0.05,
+    0.04,
+    0.02,
+    0.008,
+    0.003,
+    0.001,
+    0.0005,
+]
 GAIN_DB = 24.0
 EXPECTED = (-60.5, -50.0)
 
@@ -17,9 +28,15 @@ def test_shared_vector():
 
 
 def test_go_uses_the_same_vector():
-    go = (Path(__file__).parents[2] / "device/internal/client/wakelevel_test.go").read_text()
-    assert "wakeLevelFrames = 25" in (Path(__file__).parents[2]
-                                      / "device/internal/client/wakelevel.go").read_text()
+    go = (
+        Path(__file__).parents[2] / "device/internal/client/wakelevel_test.go"
+    ).read_text()
+    assert (
+        "wakeLevelFrames = 25"
+        in (
+            Path(__file__).parents[2] / "device/internal/client/wakelevel.go"
+        ).read_text()
+    )
     assert w.WINDOW_FRAMES == 25
     assert re.search(r"want := \[2\]float64\{-60\.5, -50\.0\}", go)
     assert "gainDb = 24.0" in go
@@ -42,7 +59,7 @@ def test_empty_is_none():
 def test_ring_keeps_only_the_window():
     r = w.LevelRing()
     for _ in range(100):
-        r.push(0.9)          # loud, long before the wake
+        r.push(0.9)  # loud, long before the wake
     for v in VECTOR:
         r.push(v)
     assert r.measure(GAIN_DB) == EXPECTED

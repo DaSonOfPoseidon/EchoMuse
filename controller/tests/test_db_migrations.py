@@ -25,8 +25,9 @@ def _legacy_db(tmp_path, upto=11, label="Kitchen"):
     c = sqlite3.connect(p)
     for sql in em_db.MIGRATIONS[:upto]:
         c.executescript(sql)
-    c.execute("INSERT INTO devices (device_id, label, approved) VALUES ('D', ?, 1)",
-              (label,))
+    c.execute(
+        "INSERT INTO devices (device_id, label, approved) VALUES ('D', ?, 1)", (label,)
+    )
     c.commit()
     c.close()
     return p
@@ -110,9 +111,15 @@ def test_the_backup_can_be_skipped_deliberately(tmp_path, monkeypatch):
     p = _legacy_db(tmp_path)
     real = sqlite3.connect
     monkeypatch.setenv("EM_SKIP_DB_BACKUP", "1")
-    monkeypatch.setattr(sqlite3, "connect",
-                        lambda path, *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("x"))
-                        if str(path).endswith(".bak") else real(path, *a, **k))
+    monkeypatch.setattr(
+        sqlite3,
+        "connect",
+        lambda path, *a, **k: (
+            (_ for _ in ()).throw(sqlite3.OperationalError("x"))
+            if str(path).endswith(".bak")
+            else real(path, *a, **k)
+        ),
+    )
     em_db.init(p)
     monkeypatch.undo()
     assert int(sqlite3.connect(p).execute(VER).fetchone()[0]) == len(em_db.MIGRATIONS)
@@ -127,7 +134,7 @@ def test_a_newer_database_refuses_to_start(tmp_path, monkeypatch):
     image back and is already troubleshooting.
     """
     p = _legacy_db(tmp_path)
-    em_db.init(p)   # migrate to current
+    em_db.init(p)  # migrate to current
 
     monkeypatch.setattr(em_db, "MIGRATIONS", em_db.MIGRATIONS[:-2])
     with pytest.raises(RuntimeError, match="newer version"):
@@ -156,25 +163,42 @@ def test_a_stored_wake_threshold_that_cannot_fire_is_lowered(tmp_path):
     value, and anything it cannot parse, alone.
     """
     import json
+
     p = _legacy_db(tmp_path, upto=23)
     c = sqlite3.connect(p)
-    c.execute("UPDATE devices SET config = ? WHERE device_id = 'D'",
-              (json.dumps({"owwThreshold": 1.0, "micGainDb": 24}),))
-    c.execute("INSERT INTO devices (device_id, label, approved, config) "
-              "VALUES ('E', 'Office', 1, ?)", (json.dumps({"owwThreshold": 0.9}),))
-    c.execute("INSERT INTO devices (device_id, label, approved, config) "
-              "VALUES ('F', 'Hall', 1, 'not json')")
-    c.execute("INSERT OR REPLACE INTO system_config (key, value) "
-              "VALUES ('global_device_config', ?)", (json.dumps({"owwThreshold": 1.0}),))
+    c.execute(
+        "UPDATE devices SET config = ? WHERE device_id = 'D'",
+        (json.dumps({"owwThreshold": 1.0, "micGainDb": 24}),),
+    )
+    c.execute(
+        "INSERT INTO devices (device_id, label, approved, config) "
+        "VALUES ('E', 'Office', 1, ?)",
+        (json.dumps({"owwThreshold": 0.9}),),
+    )
+    c.execute(
+        "INSERT INTO devices (device_id, label, approved, config) "
+        "VALUES ('F', 'Hall', 1, 'not json')"
+    )
+    c.execute(
+        "INSERT OR REPLACE INTO system_config (key, value) "
+        "VALUES ('global_device_config', ?)",
+        (json.dumps({"owwThreshold": 1.0}),),
+    )
     c.commit()
     c.close()
 
     em_db.init(p)
     c = sqlite3.connect(p)
     cfg = {r[0]: r[1] for r in c.execute("SELECT device_id, config FROM devices")}
-    fleet = json.loads(c.execute(
-        "SELECT value FROM system_config WHERE key = 'global_device_config'").fetchone()[0])
-    assert json.loads(cfg["D"]) == {"owwThreshold": em_db.OWW_THRESHOLD_MAX, "micGainDb": 24}
+    fleet = json.loads(
+        c.execute(
+            "SELECT value FROM system_config WHERE key = 'global_device_config'"
+        ).fetchone()[0]
+    )
+    assert json.loads(cfg["D"]) == {
+        "owwThreshold": em_db.OWW_THRESHOLD_MAX,
+        "micGainDb": 24,
+    }
     assert json.loads(cfg["E"]) == {"owwThreshold": 0.9}
     assert cfg["F"] == "not json"
     assert fleet["owwThreshold"] == em_db.OWW_THRESHOLD_MAX

@@ -58,7 +58,10 @@ def test_a_volume_from_ha_unmutes():
 
 def test_reports_while_unmuted_are_always_kept():
     m = OutputMute()
-    assert m.device_report(0) == (True, None), "volume 0 set on purpose is a real volume"
+    assert m.device_report(0) == (
+        True,
+        None,
+    ), "volume 0 set on purpose is a real volume"
     assert m.device_report(85) == (True, None)
 
 
@@ -74,9 +77,13 @@ def test_a_reconnect_reapplies_the_mute():
 def test_mute_is_handled_where_it_is_advertised():
     # We advertised VOLUME_MUTE and dropped the command for months (#641).
     import re
+
     src = open(os.path.join(os.path.dirname(__file__), "..", "em_esphome.py")).read()
     code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
     assert "MediaPlayerEntityFeature.VOLUME_MUTE" in code
-    assert re.search(r"self\._apply_output_mute\(cmd == api_pb2\.MEDIA_PLAYER_COMMAND_MUTE\)", code)
-    assert not re.search(r"muted\s*=\s*False", code), \
-        "the entity must report the real mute, never a constant"
+    assert re.search(
+        r"self\._apply_output_mute\(cmd == api_pb2\.MEDIA_PLAYER_COMMAND_MUTE\)", code
+    )
+    assert not re.search(
+        r"muted\s*=\s*False", code
+    ), "the entity must report the real mute, never a constant"

@@ -26,22 +26,30 @@ def test_every_preset_resolves_render_ready():
 
 def test_unknown_scene_falls_back_to_standard():
     scene = em_scenes.resolve({"ledScene": "does-not-exist"})
-    assert scene["listening"] == em_scenes.resolve({"ledScene": "standard"})["listening"]
+    assert (
+        scene["listening"] == em_scenes.resolve({"ledScene": "standard"})["listening"]
+    )
 
 
 def test_empty_config_is_standard():
-    assert em_scenes.resolve({})["listening"] == \
-        em_scenes.resolve({"ledScene": "standard"})["listening"]
-    assert em_scenes.resolve(None)["listening"] == \
-        em_scenes.resolve({"ledScene": "standard"})["listening"]
+    assert (
+        em_scenes.resolve({})["listening"]
+        == em_scenes.resolve({"ledScene": "standard"})["listening"]
+    )
+    assert (
+        em_scenes.resolve(None)["listening"]
+        == em_scenes.resolve({"ledScene": "standard"})["listening"]
+    )
 
 
 def test_custom_scene_uses_configured_colours():
-    scene = em_scenes.resolve({
-        "ledScene": "custom",
-        "ledListenColor": "#102030",
-        "ledThinkColor": "#405060",
-    })
+    scene = em_scenes.resolve(
+        {
+            "ledScene": "custom",
+            "ledListenColor": "#102030",
+            "ledThinkColor": "#405060",
+        }
+    )
     led = scene["listening"][0]
     assert (led["r"], led["g"], led["b"]) == (0x10, 0x20, 0x30)
     spin = scene["spin_frame"](3)
@@ -70,6 +78,7 @@ def test_pride_rotates_whole_palette():
 
 # ─── meter response curve (dashboard-tunable) ────────────────────────────────
 
+
 def test_meter_curve_omits_absent_keys():
     """
     Absent config keys must NOT be sent: an empty override means "use the
@@ -82,15 +91,20 @@ def test_meter_curve_omits_absent_keys():
 
 
 def test_meter_curve_passes_through_and_clamps():
-    anim = em_scenes.resolve({
-        "meterDecay": 0.5, "meterFloor": 0.0,
-        "meterGamma": 99, "meterRef": -1, "meterCurve": "bogus",
-    })["meter_anim"]
+    anim = em_scenes.resolve(
+        {
+            "meterDecay": 0.5,
+            "meterFloor": 0.0,
+            "meterGamma": 99,
+            "meterRef": -1,
+            "meterCurve": "bogus",
+        }
+    )["meter_anim"]
     assert anim["decay"] == 0.5
-    assert anim["floor"] == 0.0          # 0 is a real value, not "absent"
-    assert anim["gamma"] == 3.5          # clamped to the top of the range
-    assert anim["ref"] == 0.02           # clamped to the bottom
-    assert "curve" not in anim           # unparseable is dropped, not crashed
+    assert anim["floor"] == 0.0  # 0 is a real value, not "absent"
+    assert anim["gamma"] == 3.5  # clamped to the top of the range
+    assert anim["ref"] == 0.02  # clamped to the bottom
+    assert "curve" not in anim  # unparseable is dropped, not crashed
 
 
 def test_turn_state_ttls_are_bounded():
@@ -115,7 +129,7 @@ def test_meter_ttl_scales_with_response_length():
     value would clear the ring part-way through a long answer, which is the
     exact bug the playback_stats rendezvous fixes at the other end.
     """
-    assert em_scenes.meter_ttl(0.5) >= 30           # short clips get a floor
+    assert em_scenes.meter_ttl(0.5) >= 30  # short clips get a floor
     for seconds in (5, 30, 120, 600):
         assert em_scenes.meter_ttl(seconds) > seconds * 1.5
 
@@ -132,7 +146,7 @@ def test_outcome_cues_are_self_clearing_and_distinct():
         assert a["pattern"] == "pulse"
         assert 0 < a["ttlSec"] <= 2
     assert ns["periodMs"] != err["periodMs"]
-    assert err["periodMs"] < ns["periodMs"]   # error reads as more agitated
+    assert err["periodMs"] < ns["periodMs"]  # error reads as more agitated
 
 
 def test_ack_cue_is_a_steady_hold_not_a_rhythm():
@@ -153,12 +167,14 @@ def test_ack_cue_is_a_steady_hold_not_a_rhythm():
     scene = em_scenes.resolve({})
     ack = scene["ack_anim"]
 
-    assert ack["pattern"] == "solid", \
-        "a pulse would read as an outcome signal, which this is not"
+    assert (
+        ack["pattern"] == "solid"
+    ), "a pulse would read as an outcome signal, which this is not"
     assert "periodMs" not in ack, "a steady hold has no rhythm to carry"
-    assert 0 < ack["ttlSec"] <= 2, \
-        "must retire on the device's own ticker, and well inside the gap " \
+    assert 0 < ack["ttlSec"] <= 2, (
+        "must retire on the device's own ticker, and well inside the gap "
         "between the setup flow's two wake word prompts"
+    )
 
 
 def test_no_ha_cue_is_orange_in_every_scene():
@@ -173,12 +189,14 @@ def test_no_ha_cue_is_orange_in_every_scene():
     """
     for name in ("standard", "airy", "malevolent", "pride"):
         scene = em_scenes.resolve({"ledScene": name})
-        cue   = scene["no_ha_anim"]
-        assert cue["colors"] == [list(em_scenes.LINK_ORANGE)], \
-            "the fault colour must not follow the scene"
-        assert cue["colors"] != scene["error_anim"]["colors"], \
-            "and it must not land on the outcome cues' colour, or the two " \
+        cue = scene["no_ha_anim"]
+        assert cue["colors"] == [
+            list(em_scenes.LINK_ORANGE)
+        ], "the fault colour must not follow the scene"
+        assert cue["colors"] != scene["error_anim"]["colors"], (
+            "and it must not land on the outcome cues' colour, or the two "
             "reads become one signal"
+        )
 
 
 def test_no_ha_cue_is_two_throbs_and_self_clearing():
@@ -190,6 +208,7 @@ def test_no_ha_cue_is_two_throbs_and_self_clearing():
     """
     cue = em_scenes.resolve({})["no_ha_anim"]
     assert cue["pattern"] == "pulse"
-    assert cue["ttlSec"] == 1, \
-        "must retire on the device's own ticker with no follow-up message"
+    assert (
+        cue["ttlSec"] == 1
+    ), "must retire on the device's own ticker with no follow-up message"
     assert cue["ttlSec"] * 1000 / cue["periodMs"] == 2

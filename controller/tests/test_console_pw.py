@@ -14,7 +14,6 @@ import pytest
 
 import em_console_pw as pw
 
-
 # ── The cross-language contract ───────────────────────────────────────────────
 #
 # Deliberately at a low iteration count so the C side can be checked by hand
@@ -23,12 +22,20 @@ import em_console_pw as pw
 # record, so these are as real as any other record.
 KNOWN_VECTORS = [
     # (password, salt hex, iterations, expected hash hex)
-    ("hunter2", "0001020304050607", 1,
-     hashlib.sha256(bytes.fromhex("0001020304050607") + b"hunter2").hexdigest()),
-    ("hunter2", "0001020304050607", 2,
-     hashlib.sha256(
-         hashlib.sha256(bytes.fromhex("0001020304050607") + b"hunter2").digest()
-     ).hexdigest()),
+    (
+        "hunter2",
+        "0001020304050607",
+        1,
+        hashlib.sha256(bytes.fromhex("0001020304050607") + b"hunter2").hexdigest(),
+    ),
+    (
+        "hunter2",
+        "0001020304050607",
+        2,
+        hashlib.sha256(
+            hashlib.sha256(bytes.fromhex("0001020304050607") + b"hunter2").digest()
+        ).hexdigest(),
+    ),
 ]
 
 
@@ -78,12 +85,19 @@ def test_an_empty_password_is_refused_rather_than_hashed():
         pw.hash_password("")
 
 
-@pytest.mark.parametrize("bad", [
-    "", "   ", "notarecord", "1:xyz:abc", "1:0011:short",
-    "0:0011223344556677:" + "aa" * 32,          # zero iterations
-    "1::" + "aa" * 32,                          # no salt
-    "1:0011223344556677:" + "aa" * 31,          # truncated digest
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "   ",
+        "notarecord",
+        "1:xyz:abc",
+        "1:0011:short",
+        "0:0011223344556677:" + "aa" * 32,  # zero iterations
+        "1::" + "aa" * 32,  # no salt
+        "1:0011223344556677:" + "aa" * 31,  # truncated digest
+    ],
+)
 def test_unusable_records_are_not_a_password_in_force(bad):
     """
     A record we cannot parse must read as NO password, never as one nobody can

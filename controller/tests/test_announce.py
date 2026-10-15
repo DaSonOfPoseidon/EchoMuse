@@ -157,7 +157,9 @@ def test_a_failing_playback_still_replies():
 def test_an_empty_media_id_still_replies():
     replies = Replies()
     asyncio.run(
-        em_announce.run("", fetch=fetch_returning(b""), play=play_nothing, on_finished=replies)
+        em_announce.run(
+            "", fetch=fetch_returning(b""), play=play_nothing, on_finished=replies
+        )
     )
     assert replies.calls == [False]
 
@@ -314,7 +316,7 @@ def test_the_handler_does_not_answer_the_announce_itself():
     fetched anything. Everything else here would still pass with that
     restored.
     """
-    handler = ESPHOME_SRC[ESPHOME_SRC.index("def handle_message"):]
+    handler = ESPHOME_SRC[ESPHOME_SRC.index("def handle_message") :]
     handler = handler[: handler.index("\n    def ", 10)]
     assert "VoiceAssistantAnnounceFinished" not in handler, (
         "the announce is answered in the message handler again — HA is told "
@@ -328,7 +330,7 @@ def test_announcing_state_is_still_sent_synchronously():
     reply, so it belongs in the handler. Moving it out would leave the entity
     idle for the length of the announcement.
     """
-    handler = ESPHOME_SRC[ESPHOME_SRC.index("def handle_message"):]
+    handler = ESPHOME_SRC[ESPHOME_SRC.index("def handle_message") :]
     handler = handler[: handler.index("\n    def ", 10)]
     assert "MediaPlayerState.ANNOUNCING" in handler
 
@@ -341,12 +343,12 @@ def test_both_announce_paths_resolve_the_callback_the_same_way():
     both, so there is nothing to miss next time.
     """
     src = ESPHOME_SRC
-    assert src.count("_announce_play_cb()") >= 2, (
-        "the two announce paths must share one callback resolver"
-    )
-    assert "_fetch_and_play_announce" not in src, (
-        "a caller still references the removed helper"
-    )
+    assert (
+        src.count("_announce_play_cb()") >= 2
+    ), "the two announce paths must share one callback resolver"
+    assert (
+        "_fetch_and_play_announce" not in src
+    ), "a caller still references the removed helper"
 
 
 def test_no_handler_dispatches_to_a_method_that_does_not_exist():
@@ -399,20 +401,21 @@ def test_every_clip_ends_on_the_same_tail_whatever_the_engine_added():
         out = em_announce.set_trailing_quiet(clip, RATE)
         assert abs(_secs(out) - 1.2) < 0.011, pad
         # The sound itself is untouched.
-        assert out[:RATE * 2] == clip[:RATE * 2]
+        assert out[: RATE * 2] == clip[: RATE * 2]
 
 
 def test_a_short_tail_is_filled_out_with_silence_after_what_was_there():
     """The clip's own decay stays; silence is added behind it."""
     clip = np.concatenate([_tone(1.0), _quiet(0.05, noise=0.0005)]).tobytes()
     out = em_announce.set_trailing_quiet(clip, RATE)
-    assert out[:len(clip)] == clip
-    assert set(out[len(clip):]) == {0}
+    assert out[: len(clip)] == clip
+    assert set(out[len(clip) :]) == {0}
 
 
 def test_quiet_before_and_inside_the_message_is_kept():
-    clip = np.concatenate([_quiet(0.5), _tone(0.5), _quiet(0.8), _tone(0.5),
-                           _quiet(1.0)]).tobytes()
+    clip = np.concatenate(
+        [_quiet(0.5), _tone(0.5), _quiet(0.8), _tone(0.5), _quiet(1.0)]
+    ).tobytes()
     out = em_announce.set_trailing_quiet(clip, RATE)
     assert abs(_secs(out) - 2.5) < 0.011
 
@@ -450,9 +453,16 @@ def test_the_message_gets_the_tail_and_the_chime_does_not():
     async def play(pcm):
         played.append(pcm)
 
-    asyncio.run(em_announce.run(
-        "msg", fetch=fetch, play=play, on_finished=lambda ok: None,
-        preannounce_media_id="chime", tail=lambda pcm: pcm[:3]))
+    asyncio.run(
+        em_announce.run(
+            "msg",
+            fetch=fetch,
+            play=play,
+            on_finished=lambda ok: None,
+            preannounce_media_id="chime",
+            tail=lambda pcm: pcm[:3],
+        )
+    )
     assert played == [b"CHIME---", b"MES"]
 
 

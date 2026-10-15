@@ -81,22 +81,29 @@ def test_the_migrator_case_end_to_end(fresh_db):
     tells people to do so their devices keep working, and it is what made
     every Home Assistant user read-only forever.
     """
-    db.create_user("admin", "$2b$dummy", "admin")       # from the container
+    db.create_user("admin", "$2b$dummy", "admin")  # from the container
     db.create_user("family", "$2b$dummy", "readonly")
     assert db.user_count() == 2
-    assert db.ha_admin_count() == 0                      # nobody can get in
+    assert db.ha_admin_count() == 0  # nobody can get in
 
     import em_ingressauth
-    assert em_ingressauth.role_for(
-        existing_ha_admins=db.ha_admin_count(),
-        configured_default="readonly",
-    ) == "admin"
+
+    assert (
+        em_ingressauth.role_for(
+            existing_ha_admins=db.ha_admin_count(),
+            configured_default="readonly",
+        )
+        == "admin"
+    )
 
     # ...and the SECOND Home Assistant user is still read-only, which is the
     # property the fix must not trade away.
     db.create_ha_user("ha-first", "Wil", "admin")
     assert db.ha_admin_count() == 1
-    assert em_ingressauth.role_for(
-        existing_ha_admins=db.ha_admin_count(),
-        configured_default=None,
-    ) == "readonly"
+    assert (
+        em_ingressauth.role_for(
+            existing_ha_admins=db.ha_admin_count(),
+            configured_default=None,
+        )
+        == "readonly"
+    )

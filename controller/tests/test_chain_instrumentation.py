@@ -15,6 +15,7 @@ perfectly.
 """
 
 import sys, pathlib
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import numpy as np
@@ -28,8 +29,7 @@ def _guard(enabled=True, depth=-30.0):
 
 
 def _limiter(enabled=True, thr=-1.0, rel=150.0):
-    return em_limiter.Limiter(FS, threshold_db=thr, release_ms=rel,
-                              enabled=enabled)
+    return em_limiter.Limiter(FS, threshold_db=thr, release_ms=rel, enabled=enabled)
 
 
 def _bassy(seconds=1.0, peak_db=-9.0):
@@ -48,8 +48,9 @@ def test_settings_are_reported_for_both_disabled_shapes():
     assert "guard=off" in em_eq.describe_chain([0.0] * 8, False, None, None)
     assert "limiter=off" in em_eq.describe_chain([0.0] * 8, False, None, None)
 
-    line = em_eq.describe_chain([0.0] * 8, False,
-                                _limiter(enabled=False), _guard(enabled=False))
+    line = em_eq.describe_chain(
+        [0.0] * 8, False, _limiter(enabled=False), _guard(enabled=False)
+    )
     assert "guard=off" in line and "limiter=off" in line
 
 
@@ -58,8 +59,9 @@ def test_settings_name_the_values_not_just_on():
     "on" would not have caught the bug this exists for. The depth and the
     ceiling are what a saved change moves, so the line has to carry them.
     """
-    line = em_eq.describe_chain([0.0] * 8, False,
-                                _limiter(thr=-6.0, rel=400.0), _guard(depth=-25.0))
+    line = em_eq.describe_chain(
+        [0.0] * 8, False, _limiter(thr=-6.0, rel=400.0), _guard(depth=-25.0)
+    )
     assert "guard=-25dB" in line
     assert "limiter=-6dB/400ms" in line
 
@@ -92,7 +94,7 @@ def test_activity_reports_real_work_on_bass():
     eq = em_eq.StreamingEQ(FS, [0.0] * 8, False, limiter=_limiter(), guard=guard)
     pcm = _bassy()
     for i in range(0, len(pcm), 4096):
-        eq.process(pcm[i:i + 4096])
+        eq.process(pcm[i : i + 4096])
     assert guard.max_reduction_db > 10.0
     assert "guard_reduction=n/a" not in em_eq.describe_activity(eq.limiter, eq.guard)
 
@@ -103,16 +105,20 @@ def test_a_live_toggle_is_visible_as_a_settings_change():
     change has to make it return True — and a no-op must not, or the log
     fills at ~23 lines a second.
     """
-    eq = em_eq.StreamingEQ(FS, [0.0] * 8, False,
-                           limiter=_limiter(), guard=_guard())
-    kw = dict(bands=[0.0] * 8, loudness=False, limiter_enabled=True,
-              limiter_threshold=-1.0, limiter_release=150.0,
-              guard_enabled=True, guard_db=-30.0)
-    assert eq.update(**kw) is True          # first call always lands
-    assert eq.update(**kw) is False         # steady state is silent
+    eq = em_eq.StreamingEQ(FS, [0.0] * 8, False, limiter=_limiter(), guard=_guard())
+    kw = dict(
+        bands=[0.0] * 8,
+        loudness=False,
+        limiter_enabled=True,
+        limiter_threshold=-1.0,
+        limiter_release=150.0,
+        guard_enabled=True,
+        guard_db=-30.0,
+    )
+    assert eq.update(**kw) is True  # first call always lands
+    assert eq.update(**kw) is False  # steady state is silent
     assert eq.update(**{**kw, "guard_enabled": False}) is True
-    assert "guard=off" in em_eq.describe_chain([0.0] * 8, False,
-                                               eq.limiter, eq.guard)
+    assert "guard=off" in em_eq.describe_chain([0.0] * 8, False, eq.limiter, eq.guard)
 
 
 def test_limiter_reports_the_release_it_was_given():

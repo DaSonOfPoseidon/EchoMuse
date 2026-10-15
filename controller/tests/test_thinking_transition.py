@@ -29,7 +29,10 @@ TREE = ast.parse(SRC)
 
 def _method(name: str):
     for node in ast.walk(TREE):
-        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == name:
+        if (
+            isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+            and node.name == name
+        ):
             return node
     raise AssertionError(f"{name} not found in em_esphome.py — renamed?")
 
@@ -38,10 +41,12 @@ def _self_calls(node) -> list[str]:
     """`self.foo(...)` attribute names called anywhere under node."""
     out = []
     for sub in ast.walk(node):
-        if (isinstance(sub, ast.Call)
-                and isinstance(sub.func, ast.Attribute)
-                and isinstance(sub.func.value, ast.Name)
-                and sub.func.value.id == "self"):
+        if (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Attribute)
+            and isinstance(sub.func.value, ast.Name)
+            and sub.func.value.id == "self"
+        ):
             out.append(sub.func.attr)
     return out
 
@@ -80,8 +85,11 @@ def test_enter_thinking_is_idempotent():
         "_enter_thinking must guard on _thinking_entered — both endpoint "
         "routes can fire within one turn."
     )
-    guards = [n for n in ast.walk(fn)
-              if isinstance(n, ast.If) and "_thinking_entered" in ast.unparse(n.test)]
+    guards = [
+        n
+        for n in ast.walk(fn)
+        if isinstance(n, ast.If) and "_thinking_entered" in ast.unparse(n.test)
+    ]
     assert guards, "_thinking_entered must be TESTED, not merely assigned."
 
 
@@ -93,8 +101,10 @@ def test_the_flag_is_reset_per_turn():
     fn = _method("run_esphome_voice_turn")
     assigned = any(
         isinstance(n, ast.Assign)
-        and any(isinstance(t, ast.Attribute) and t.attr == "_thinking_entered"
-                for t in n.targets)
+        and any(
+            isinstance(t, ast.Attribute) and t.attr == "_thinking_entered"
+            for t in n.targets
+        )
         for n in ast.walk(fn)
     )
     assert assigned, (
@@ -118,9 +128,9 @@ def test_both_known_endpoint_routes_enter_thinking():
     what catches it; this one pins that neither of these two regresses.
     """
     handler = _method("_handle_voice_event")
-    assert "_enter_thinking" in _self_calls(handler), (
-        "the STT_VAD_END branch must call _enter_thinking"
-    )
+    assert "_enter_thinking" in _self_calls(
+        handler
+    ), "the STT_VAD_END branch must call _enter_thinking"
 
     stream = _method("_stream_mic_audio")
     assert "_enter_thinking" in _self_calls(stream), (

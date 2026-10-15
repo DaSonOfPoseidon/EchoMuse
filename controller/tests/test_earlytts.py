@@ -28,7 +28,6 @@ import _sources
 
 import em_earlytts as early
 
-
 # ── the decision ────────────────────────────────────────────────────────────
 
 URL = "http://ha.local:8123/api/tts_proxy/abc.flac"
@@ -38,7 +37,9 @@ def start(progress=None, announced=URL, playing=None, cancelled=False, enabled=T
     return early.should_start(
         enabled=enabled,
         progress={"tts_start_streaming": "1"} if progress is None else progress,
-        announced_url=announced, playing_url=playing, cancelled=cancelled,
+        announced_url=announced,
+        playing_url=playing,
+        cancelled=cancelled,
     )
 
 
@@ -51,13 +52,16 @@ def test_nothing_starts_early_while_the_setting_is_off():
     assert start(enabled=False) is False
 
 
-@pytest.mark.parametrize("progress", [
-    {},                                # a progress event with no field
-    {"tts_start_streaming": "0"},
-    {"tts_start_streaming": ""},
-    {"tts_start_streaming": "true"},   # ESPHome compares against the literal "1"
-    {"other": "1"},
-])
+@pytest.mark.parametrize(
+    "progress",
+    [
+        {},  # a progress event with no field
+        {"tts_start_streaming": "0"},
+        {"tts_start_streaming": ""},
+        {"tts_start_streaming": "true"},  # ESPHome compares against the literal "1"
+        {"other": "1"},
+    ],
+)
 def test_only_the_literal_one_starts_playback(progress):
     assert start(progress=progress) is False
 
@@ -83,6 +87,7 @@ def test_run_start_url():
 
 
 # ── abortable_stream ────────────────────────────────────────────────────────
+
 
 def run(coro):
     return asyncio.run(coro)
@@ -181,7 +186,11 @@ def test_cancelling_the_consumer_while_a_chunk_is_pending_closes_cleanly():
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 2)
         await asyncio.sleep(0.05)
-        return [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
+        return [
+            t
+            for t in asyncio.all_tasks()
+            if t is not asyncio.current_task() and not t.done()
+        ]
 
     leaked = run(go())
     assert errors == []
@@ -225,6 +234,7 @@ def test_source_errors_propagate():
 
 # ── wait_until ──────────────────────────────────────────────────────────────
 
+
 def test_wait_until_returns_at_once_when_already_true():
     assert run(early.wait_until(lambda: True, 1.0)) is True
 
@@ -249,20 +259,29 @@ TREE = ast.parse((CONTROLLER / "em_esphome.py").read_text())
 
 def _function(name):
     for node in ast.walk(TREE):
-        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == name:
+        if (
+            isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+            and node.name == name
+        ):
             return node
     raise AssertionError(f"{name} not found in em_esphome.py — renamed?")
 
 
 def _calls(node, dotted):
     """Every Call under `node` whose func unparses to `dotted`."""
-    return [n for n in ast.walk(node) if isinstance(n, ast.Call) and ast.unparse(n.func) == dotted]
+    return [
+        n
+        for n in ast.walk(node)
+        if isinstance(n, ast.Call) and ast.unparse(n.func) == dotted
+    ]
 
 
 def _branch(func, event):
     """The `if`/`elif` under `func` testing for ET.VOICE_ASSISTANT_<event>."""
     for n in ast.walk(func):
-        if isinstance(n, ast.If) and ast.unparse(n.test).endswith(f"ET.VOICE_ASSISTANT_{event}"):
+        if isinstance(n, ast.If) and ast.unparse(n.test).endswith(
+            f"ET.VOICE_ASSISTANT_{event}"
+        ):
             return n
     raise AssertionError(f"no branch for VOICE_ASSISTANT_{event} in {func.name}")
 
@@ -280,14 +299,21 @@ def test_module_is_imported():
 
 
 def test_run_start_keeps_the_announced_url():
-    body = ast.Module(body=_branch(_function("_handle_voice_event"), "RUN_START").body, type_ignores=[])
-    assert _calls(body, "em_earlytts.run_start_url"), "RUN_START no longer records the announced URL"
+    body = ast.Module(
+        body=_branch(_function("_handle_voice_event"), "RUN_START").body,
+        type_ignores=[],
+    )
+    assert _calls(
+        body, "em_earlytts.run_start_url"
+    ), "RUN_START no longer records the announced URL"
 
 
 def test_intent_progress_starts_playback_through_should_start():
     branch = _branch(_function("_handle_voice_event"), "INTENT_PROGRESS")
     body = ast.Module(body=branch.body, type_ignores=[])
-    assert _calls(body, "em_earlytts.should_start"), "INTENT_PROGRESS no longer asks should_start"
+    assert _calls(
+        body, "em_earlytts.should_start"
+    ), "INTENT_PROGRESS no longer asks should_start"
     text = ast.unparse(body)
     assert "self._tts_streamed_early = True" in text
     assert "self._tts_event.set()" in text
@@ -296,10 +322,12 @@ def test_intent_progress_starts_playback_through_should_start():
 def test_tts_end_does_not_replace_a_url_already_playing():
     branch = _branch(_function("_handle_voice_event"), "TTS_END")
     guarded = [
-        n for n in _own_body_nodes(branch)
+        n
+        for n in _own_body_nodes(branch)
         if isinstance(n, ast.If)
         and "_tts_streamed_early" in ast.unparse(n.test)
-        and "self._tts_audio_url = url" in ast.unparse(ast.Module(body=n.body, type_ignores=[]))
+        and "self._tts_audio_url = url"
+        in ast.unparse(ast.Module(body=n.body, type_ignores=[]))
     ]
     assert guarded, "TTS_END assigns _tts_audio_url unconditionally again"
 
@@ -324,10 +352,13 @@ def _turn_function():
 def test_an_early_stream_is_played_through_abortable_stream():
     turn = _turn_function()
     wrapped = [
-        n for n in ast.walk(turn)
+        n
+        for n in ast.walk(turn)
         if isinstance(n, ast.If)
         and "_tts_streamed_early" in ast.unparse(n.test)
-        and _calls(ast.Module(body=n.body, type_ignores=[]), "em_earlytts.abortable_stream")
+        and _calls(
+            ast.Module(body=n.body, type_ignores=[]), "em_earlytts.abortable_stream"
+        )
     ]
     assert wrapped, "an early stream is no longer wrapped in abortable_stream"
 
@@ -342,58 +373,76 @@ def test_continue_conversation_gets_a_beat_after_an_early_stream():
 
 def test_should_start_is_given_the_per_turn_setting():
     branch = _branch(_function("_handle_voice_event"), "INTENT_PROGRESS")
-    call = _calls(ast.Module(body=branch.body, type_ignores=[]), "em_earlytts.should_start")[0]
+    call = _calls(
+        ast.Module(body=branch.body, type_ignores=[]), "em_earlytts.should_start"
+    )[0]
     given = {kw.arg: ast.unparse(kw.value) for kw in call.keywords}
-    assert given.get("enabled") == "self._stream_reply", (
-        "INTENT_PROGRESS must pass the turn's streamReply setting to should_start")
+    assert (
+        given.get("enabled") == "self._stream_reply"
+    ), "INTENT_PROGRESS must pass the turn's streamReply setting to should_start"
 
 
 def test_the_setting_is_read_from_the_device_at_the_start_of_each_turn():
     reset = next(
-        n for n in ast.walk(TREE)
-        if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef)) and _calls(n, "self._tts_event.clear")
+        n
+        for n in ast.walk(TREE)
+        if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+        and _calls(n, "self._tts_event.clear")
     )
     reads = [
-        ast.unparse(n.value) for n in ast.walk(reset)
-        if isinstance(n, ast.Assign) and any(ast.unparse(t) == "self._stream_reply" for t in n.targets)
+        ast.unparse(n.value)
+        for n in ast.walk(reset)
+        if isinstance(n, ast.Assign)
+        and any(ast.unparse(t) == "self._stream_reply" for t in n.targets)
     ]
-    assert reads and "stream_reply" in reads[0] and "device" in reads[0], (
-        "the turn no longer reads the device's stream_reply setting")
+    assert (
+        reads and "stream_reply" in reads[0] and "device" in reads[0]
+    ), "the turn no longer reads the device's stream_reply setting"
 
 
 # ── the setting: off by default, and carried to the controller's device ─────
+
 
 def _source(name):
     return (CONTROLLER / name).read_text()
 
 
 def test_stream_reply_is_off_by_default_in_config_and_on_the_device():
-    assert re.search(r'"streamReply":\s*False,', _source("em_db.py")), (
-        "streamReply must default to False in em_db's default config")
-    assert re.search(r"self\.stream_reply:\s*bool\s*=\s*False", _source("em_controller.py")), (
-        "Device.stream_reply must default to False")
-    assert 'config.get("streamReply", False)' in _source("em_controller.py"), (
-        "the registration mirror must default to False")
+    assert re.search(
+        r'"streamReply":\s*False,', _source("em_db.py")
+    ), "streamReply must default to False in em_db's default config"
+    assert re.search(
+        r"self\.stream_reply:\s*bool\s*=\s*False", _source("em_controller.py")
+    ), "Device.stream_reply must default to False"
+    assert 'config.get("streamReply", False)' in _source(
+        "em_controller.py"
+    ), "the registration mirror must default to False"
 
 
 def test_stream_reply_is_mirrored_on_live_config_saves():
-    assert 'live.stream_reply = bool(effective["streamReply"])' in _sources.def_source("apply_live_config")
+    assert 'live.stream_reply = bool(effective["streamReply"])' in _sources.def_source(
+        "apply_live_config"
+    )
 
 
 def test_stream_reply_belongs_to_the_playback_section():
     import em_config_sections
+
     assert "streamReply" in em_config_sections.SECTIONS["playback"]["keys"]
 
 
 def test_every_turn_starts_with_the_early_state_cleared():
     """State from an earlier turn must not release the next turn's stream."""
     reset = next(
-        n for n in ast.walk(TREE)
-        if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef)) and _calls(n, "self._tts_event.clear")
+        n
+        for n in ast.walk(TREE)
+        if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+        and _calls(n, "self._tts_event.clear")
     )
     assigned = {
         ast.unparse(t)
-        for n in ast.walk(reset) if isinstance(n, ast.Assign)
+        for n in ast.walk(reset)
+        if isinstance(n, ast.Assign)
         for t in n.targets
     }
     assert {"self._early_tts_url", "self._tts_streamed_early"} <= assigned

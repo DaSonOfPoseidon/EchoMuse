@@ -22,7 +22,7 @@ CONTROLLER = Path(__file__).resolve().parents[1]
 def _turn_src() -> str:
     src = (CONTROLLER / "em_esphome.py").read_text()
     start = src.index("if self._tts_audio_url:")
-    return src[start:start + 6000]
+    return src[start : start + 6000]
 
 
 def test_self_interruption_is_detectable_from_the_persisted_fields():
@@ -33,13 +33,15 @@ def test_self_interruption_is_detectable_from_the_persisted_fields():
     fields persisted as-is.
     """
     src = (CONTROLLER / "em_esphome.py").read_text()
-    rec = src[src.index("turn_record = {"):]
-    rec = rec[:rec.index("}")]
-    assert '"outcome"' in rec and '"trigger"' in rec, \
-        "outcome and trigger must both reach the turns table"
+    rec = src[src.index("turn_record = {") :]
+    rec = rec[: rec.index("}")]
+    assert (
+        '"outcome"' in rec and '"trigger"' in rec
+    ), "outcome and trigger must both reach the turns table"
 
 
 # ─── Both barge paths, because covering one is what caused the bug ───────────
+
 
 def test_each_cause_of_an_early_end_records_its_own_outcome():
     """
@@ -64,11 +66,15 @@ def test_each_cause_of_an_early_end_records_its_own_outcome():
 
     reasons = sorted(
         re.search(r'reason="(\w+)"', c).group(1)
-        for c in calls if re.search(r'reason="(\w+)"', c)
+        for c in calls
+        if re.search(r'reason="(\w+)"', c)
     )
-    assert reasons == ["barged", "barged", "cancelled", "muted"], (
-        f"each cancel path must name its own cause; got {reasons}"
-    )
+    assert reasons == [
+        "barged",
+        "barged",
+        "cancelled",
+        "muted",
+    ], f"each cancel path must name its own cause; got {reasons}"
 
 
 def test_the_outcome_is_the_reason_at_every_phase():
@@ -78,12 +84,15 @@ def test_the_outcome_is_the_reason_at_every_phase():
     fixed the barge it was not written for. All three now record the reason.
     """
     src = (CONTROLLER / "em_esphome.py").read_text()
-    reads = [l.strip() for l in src.splitlines()
-             if l.strip() == 'why = self._turn_end_reason or "cancelled"']
-    assert len(reads) == 3, (
-        f"all three early-end sites must record the reason; found {len(reads)}"
-    )
-    assert 'trace.outcome = why' in src
+    reads = [
+        l.strip()
+        for l in src.splitlines()
+        if l.strip() == 'why = self._turn_end_reason or "cancelled"'
+    ]
+    assert (
+        len(reads) == 3
+    ), f"all three early-end sites must record the reason; found {len(reads)}"
+    assert "trace.outcome = why" in src
 
 
 def test_the_reason_survives_the_module_level_forwarder():
@@ -93,10 +102,11 @@ def test_the_reason_survives_the_module_level_forwarder():
     the reason never arrives, and every outcome quietly reads "cancelled".
     """
     src = (CONTROLLER / "em_esphome.py").read_text()
-    fwd = src[src.index("def cancel_voice_turn("):]
-    fwd = fwd[:fwd.index("\ndef ")]
-    assert "reason=reason" in fwd, \
-        "the forwarder must pass the reason through to cancel_turn"
+    fwd = src[src.index("def cancel_voice_turn(") :]
+    fwd = fwd[: fwd.index("\ndef ")]
+    assert (
+        "reason=reason" in fwd
+    ), "the forwarder must pass the reason through to cancel_turn"
 
 
 def test_the_playback_barge_still_records_without_a_cancel():
@@ -106,11 +116,12 @@ def test_the_playback_barge_still_records_without_a_cancel():
     the reason, or the case #251 was written for goes back to reading "ok".
     """
     src = (CONTROLLER / "em_esphome.py").read_text()
-    abort = src[src.index("def abort_ha_run"):]
-    abort = abort[:abort.index("\n\n\n")] if "\n\n\n" in abort else abort[:2000]
+    abort = src[src.index("def abort_ha_run") :]
+    abort = abort[: abort.index("\n\n\n")] if "\n\n\n" in abort else abort[:2000]
     assert '"barged"' in abort and "_turn_end_reason" in abort
-    assert "_turn_cancelled = True" not in abort, \
-        "abort_ha_run must not mark the turn cancelled — see its docstring"
+    assert (
+        "_turn_cancelled = True" not in abort
+    ), "abort_ha_run must not mark the turn cancelled — see its docstring"
 
 
 def test_the_reason_is_cleared_per_turn():
@@ -120,5 +131,6 @@ def test_the_reason_is_cleared_per_turn():
     """
     src = (CONTROLLER / "em_esphome.py").read_text()
     start = src.index("self._turn_active           = True")
-    assert "_turn_end_reason" in src[start:start + 400], \
-        "_turn_end_reason must be cleared at turn start, not only in __init__"
+    assert (
+        "_turn_end_reason" in src[start : start + 400]
+    ), "_turn_end_reason must be cleared at turn start, not only in __init__"

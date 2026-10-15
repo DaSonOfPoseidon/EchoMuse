@@ -22,7 +22,6 @@ import pytest
 
 import em_db as db
 
-
 EM_DB = Path(db.__file__)
 
 
@@ -49,6 +48,7 @@ def _seed(device_id: str) -> None:
 
 
 # ── The behaviour ────────────────────────────────────────────────────────────
+
 
 def test_reads_racing_writes_do_not_raise_sqlite_misuse(fresh_db):
     """
@@ -125,9 +125,9 @@ def test_a_failing_write_rolls_back_and_leaves_the_lock_free(fresh_db):
 
     # And the partial insert was rolled back — the row must not be there.
     rows = [r["device_id"] for r in db.get_all_devices()]
-    assert "dup" not in rows, (
-        "a failed transaction left a row behind — the rollback did not happen"
-    )
+    assert (
+        "dup" not in rows
+    ), "a failed transaction left a row behind — the rollback did not happen"
 
 
 def test_reads_see_committed_writes_only(fresh_db):
@@ -212,9 +212,12 @@ def test_every_connection_access_is_inside_the_lock():
             continue
 
         accesses = [
-            n for n in ast.walk(node)
-            if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
-            and n.value.id == "_conn" and n.attr in CONN_CALLS
+            n
+            for n in ast.walk(node)
+            if isinstance(n, ast.Attribute)
+            and isinstance(n.value, ast.Name)
+            and n.value.id == "_conn"
+            and n.attr in CONN_CALLS
         ]
         if not accesses:
             continue
@@ -223,9 +226,12 @@ def test_every_connection_access_is_inside_the_lock():
         for w in ast.walk(node):
             if not isinstance(w, (ast.With, ast.AsyncWith)):
                 continue
-            names = {n.id for item in w.items
-                     for n in ast.walk(item.context_expr)
-                     if isinstance(n, ast.Name)}
+            names = {
+                n.id
+                for item in w.items
+                for n in ast.walk(item.context_expr)
+                if isinstance(n, ast.Name)
+            }
             if "_db_lock" in names:
                 # Start from the `with` statement's OWN lineno. _line_of
                 # prefers end_lineno, so using it here gives the END of the
@@ -238,8 +244,9 @@ def test_every_connection_access_is_inside_the_lock():
                 offenders.append(f"{node.name}() line {n.lineno}: _conn.{n.attr}")
 
     assert not offenders, (
-        "connection access outside _db_lock:\n  " + "\n  ".join(offenders) +
-        "\n\nWAL allows concurrent readers only across SEPARATE connections. On "
+        "connection access outside _db_lock:\n  "
+        + "\n  ".join(offenders)
+        + "\n\nWAL allows concurrent readers only across SEPARATE connections. On "
         "the one shared connection this module uses, any two concurrent "
         "operations are a misuse SQLite rejects with SQLITE_MISUSE — which is "
         "what a fleet deploy-all hit on 2026-07-12."
@@ -264,14 +271,17 @@ def test_the_unguarded_exemption_is_still_only_init():
     # And init must still be the one that CREATES it, or the reason it is
     # exempt no longer holds.
     tree = ast.parse(EM_DB.read_text())
-    init_fn = next(n for n in ast.walk(tree)
-                   if isinstance(n, ast.FunctionDef) and n.name == "init")
-    assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-               and isinstance(n.func.value, ast.Name)
-               and n.func.value.id == "sqlite3" and n.func.attr == "connect"
-               for n in ast.walk(init_fn)), (
-        "init no longer creates the connection, so its exemption has no basis"
+    init_fn = next(
+        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "init"
     )
+    assert any(
+        isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and isinstance(n.func.value, ast.Name)
+        and n.func.value.id == "sqlite3"
+        and n.func.attr == "connect"
+        for n in ast.walk(init_fn)
+    ), "init no longer creates the connection, so its exemption has no basis"
 
 
 def test_the_lock_is_not_reentrant_and_there_is_exactly_one():

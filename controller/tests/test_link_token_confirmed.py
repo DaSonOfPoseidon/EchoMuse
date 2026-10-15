@@ -34,7 +34,7 @@ def test_confirming_records_once(fresh_db):
     tok = db.ensure_device_token(DEV)
     assert db.confirm_device_token(DEV, tok) is True
     assert db.get_device_link_auth(DEV) == (tok, True)
-    assert db.confirm_device_token(DEV, tok) is False   # already recorded
+    assert db.confirm_device_token(DEV, tok) is False  # already recorded
 
 
 def test_a_stale_token_cannot_confirm_its_replacement(fresh_db):
@@ -75,15 +75,23 @@ def test_an_unknown_device_has_nothing(fresh_db):
 
 # ── wiring, by ast (em_controller is not importable in this suite) ──────────
 
+
 def _fn(name):
     tree = ast.parse((CONTROLLER / "em_controller.py").read_text())
-    return next(n for n in ast.walk(tree)
-                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name)
+    return next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name
+    )
 
 
 def _calls(fn, attr):
-    return [n for n in ast.walk(fn) if isinstance(n, ast.Call)
-            and getattr(n.func, "attr", getattr(n.func, "id", None)) == attr]
+    return [
+        n
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Call)
+        and getattr(n.func, "attr", getattr(n.func, "id", None)) == attr
+    ]
 
 
 def test_link_auth_passes_the_confirmation_to_the_decision():
@@ -97,5 +105,6 @@ def test_link_auth_passes_the_confirmation_to_the_decision():
 
 def test_data_and_shell_follow_the_control_connection():
     for name in ("handle_data", "handle_shell"):
-        assert _calls(_fn(name), "_not_from_control"), (
-            f"{name} must refuse a connection that is not from the device's control plane")
+        assert _calls(
+            _fn(name), "_not_from_control"
+        ), f"{name} must refuse a connection that is not from the device's control plane"

@@ -16,6 +16,7 @@ are lifted from source and exercised on a bare object, the same approach
 tests/test_deploy.py uses for call-site shape. If they are renamed or moved,
 the lift fails loudly rather than silently testing nothing.
 """
+
 import ast
 import asyncio
 import collections
@@ -30,12 +31,12 @@ def _playback_api():
     """Build a throwaway class carrying only the playback-waiter methods."""
     tree = ast.parse((CONTROLLER / "em_controller.py").read_text())
     device = next(
-        n for n in tree.body
-        if isinstance(n, ast.ClassDef) and n.name == "Device"
+        n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Device"
     )
     wanted = {"begin_playback", "end_playback", "signal_playback_done"}
-    methods = [n for n in device.body
-               if isinstance(n, ast.FunctionDef) and n.name in wanted]
+    methods = [
+        n for n in device.body if isinstance(n, ast.FunctionDef) and n.name in wanted
+    ]
     missing = wanted - {m.name for m in methods}
     assert not missing, (
         f"em_controller.Device no longer defines {sorted(missing)} — if they "
@@ -47,6 +48,7 @@ def _playback_api():
     class Dev:
         def __init__(self):
             self._playback_waiters = collections.deque()
+
     for name in wanted:
         setattr(Dev, name, ns[name])
     return Dev
@@ -112,7 +114,7 @@ def test_a_stray_report_is_dropped_not_saved():
     construction — but only if a spare report is discarded rather than queued.
     """
     d = Dev()
-    d.signal_playback_done()          # nothing waiting
+    d.signal_playback_done()  # nothing waiting
     later = d.begin_playback()
     assert not later.is_set(), (
         "a playback resolved before its audio was sent — a stray report was "
@@ -138,6 +140,6 @@ def test_reports_resolve_in_order(n):
     for i in range(n):
         d.signal_playback_done()
         assert evs[i].is_set()
-        assert not any(e.is_set() for e in evs[i + 1:]), (
-            "a later playback resolved out of order"
-        )
+        assert not any(
+            e.is_set() for e in evs[i + 1 :]
+        ), "a later playback resolved out of order"

@@ -34,9 +34,11 @@ def test_the_status_endpoint_reads_em_state():
 
 def test_the_monitor_writes_em_state():
     src = (CONTROLLER / "em_controller.py").read_text()
-    fn = next(n for n in ast.walk(ast.parse(src))
-              if isinstance(n, ast.AsyncFunctionDef)
-              and n.name == "event_loop_lag_monitor")
+    fn = next(
+        n
+        for n in ast.walk(ast.parse(src))
+        if isinstance(n, ast.AsyncFunctionDef) and n.name == "event_loop_lag_monitor"
+    )
     assert "em_state.loop_lag_peak_ms = " in ast.unparse(fn)
 
 
@@ -48,10 +50,13 @@ def test_no_module_imports_the_running_controller_by_name():
             continue
         tree = ast.parse(path.read_text())
         # An import under `if TYPE_CHECKING:` never runs.
-        typing_only = {id(n) for top in ast.walk(tree)
-                       if isinstance(top, ast.If)
-                       and getattr(top.test, "id", None) == "TYPE_CHECKING"
-                       for n in ast.walk(top)}
+        typing_only = {
+            id(n)
+            for top in ast.walk(tree)
+            if isinstance(top, ast.If)
+            and getattr(top.test, "id", None) == "TYPE_CHECKING"
+            for n in ast.walk(top)
+        }
         for node in ast.walk(tree):
             if id(node) in typing_only:
                 continue
@@ -60,8 +65,9 @@ def test_no_module_imports_the_running_controller_by_name():
                 names = [a.name for a in node.names]
             elif isinstance(node, ast.ImportFrom) and node.module:
                 names = [node.module]
-            assert "em_controller" not in names, \
-                f"{path.name} imports em_controller by name"
+            assert (
+                "em_controller" not in names
+            ), f"{path.name} imports em_controller by name"
 
 
 def test_every_auth_decorator_is_followed_by_the_function_it_decorates():
@@ -83,7 +89,7 @@ def test_every_auth_decorator_is_followed_by_the_function_it_decorates():
     after it. That trap has been hit three times in this tree.
     """
     decorator = re.compile(r"\s*@auth\.require_(\w+)\s*$")
-    handler   = re.compile(r"\s*async def \w+\(\s*request\b")
+    handler = re.compile(r"\s*async def \w+\(\s*request\b")
 
     # Every module, not em_api by name: route areas move out of em_api, and a
     # guard reading one file stops checking a handler the moment it leaves.
@@ -97,7 +103,7 @@ def test_every_auth_decorator_is_followed_by_the_function_it_decorates():
             sites += 1
             j = i + 1
             while j < len(lines) and re.match(r"\s*@", lines[j]):
-                j += 1   # stacked decorators are fine; keep walking
+                j += 1  # stacked decorators are fine; keep walking
             following = lines[j] if j < len(lines) else "<end of file>"
             assert handler.match(following), (
                 f"{module.name}:{i + 1}: @auth.require_{m.group(1)} is followed by "
@@ -107,5 +113,4 @@ def test_every_auth_decorator_is_followed_by_the_function_it_decorates():
             )
 
     # A guard that silently matches nothing is the failure this replaced.
-    assert sites >= 40, \
-        f"expected the full decorator surface, found only {sites} sites"
+    assert sites >= 40, f"expected the full decorator surface, found only {sites} sites"

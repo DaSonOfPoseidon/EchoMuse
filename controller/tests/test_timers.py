@@ -8,8 +8,8 @@ duck applied to the alert while someone speaks over it.
 
 import em_timers as t
 
-
 # ── TimerRegistry ────────────────────────────────────────────────────────────
+
 
 def test_finished_starts_the_ring():
     reg = t.TimerRegistry()
@@ -120,12 +120,17 @@ def test_one_loud_frame_is_not_speech():
 
 def test_speech_frames_must_be_consecutive():
     listen = t.DismissListen(preroll_frames=0, speech_frames=3)
-    assert _feed(listen, [SPEECH, SPEECH, QUIET, SPEECH, SPEECH, SPEECH]) == [False] * 5 + [True]
+    assert _feed(listen, [SPEECH, SPEECH, QUIET, SPEECH, SPEECH, SPEECH]) == [
+        False
+    ] * 5 + [True]
 
 
 def test_the_threshold_is_inclusive():
     listen = t.DismissListen(preroll_frames=0)
-    assert _feed(listen, [t.DISMISS_SPEECH_PROB, t.DISMISS_SPEECH_PROB]) == [False, True]
+    assert _feed(listen, [t.DISMISS_SPEECH_PROB, t.DISMISS_SPEECH_PROB]) == [
+        False,
+        True,
+    ]
     below = t.DismissListen(preroll_frames=0)
     assert not any(_feed(below, [t.DISMISS_SPEECH_PROB - 0.01] * 10))
 
@@ -189,12 +194,12 @@ def test_no_word_list_remains():
     assert not hasattr(t, "is_dismissal_only")
 
 
-
 def test_alert_sound_ships_with_its_licence():
     # CC BY 4.0 requires the attribution to travel with the audio, and there is
     # no synthesised fallback any more — a build without the file cannot ring,
     # so both the sound and its licence are load-bearing.
     import os
+
     assert os.path.exists(t.ALARM_SOUND_FILE), "the alert sound must ship"
     licence = os.path.join(os.path.dirname(t.ALARM_SOUND_FILE), "LICENSE.md")
     assert os.path.exists(licence), "bundled sound must ship with LICENSE.md"

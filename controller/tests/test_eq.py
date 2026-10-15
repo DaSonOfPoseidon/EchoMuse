@@ -40,8 +40,8 @@ def test_band_boost_raises_its_own_frequency_only():
     bands = [6.0, 0, 0, 0, 0, 0, 0, 0]  # +6 dB low shelf
     low_gain = _rms(em_eq.apply(low, RATE, bands=bands)) / _rms(low)
     high_gain = _rms(em_eq.apply(high, RATE, bands=bands)) / _rms(high)
-    assert low_gain > 1.7          # ~+6 dB ≈ ×2
-    assert 0.9 < high_gain < 1.1   # shelf must not leak into the top band
+    assert low_gain > 1.7  # ~+6 dB ≈ ×2
+    assert 0.9 < high_gain < 1.1  # shelf must not leak into the top band
 
 
 def test_cut_reduces_level():
@@ -68,7 +68,7 @@ def test_streaming_eq_matches_batch_apply():
     eq = em_eq.StreamingEQ(RATE, bands=bands)
     out = b""
     for i in range(0, len(pcm), 4096):
-        out += eq.process(pcm[i:i + 4096])
+        out += eq.process(pcm[i : i + 4096])
     # Filter state carries across chunks — output must match the
     # whole-buffer path (same filters, same float32 pipeline).
     got = np.frombuffer(out, dtype=np.int16).astype(np.int32)

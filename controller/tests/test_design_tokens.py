@@ -17,6 +17,7 @@ spacing or palette. The rules are only:
      nothing else acquires new ones (a ratchet, so existing call sites can be
      cleaned pane by pane instead of in one sweep)
 """
+
 from __future__ import annotations
 
 import json
@@ -73,8 +74,10 @@ _LINE_COMMENT = re.compile(r"(?<!:)//[^\n]*")
 
 def _strip_comments(text: str) -> str:
     """Blank out comments, preserving line numbering so owners still resolve."""
+
     def blank(m):
         return "".join(c if c == "\n" else " " for c in m.group(0))
+
     return _LINE_COMMENT.sub(blank, _BLOCK_COMMENT.sub(blank, text))
 
 
@@ -162,9 +165,10 @@ def test_no_new_literal_colours():
     ]
     assert not over, (
         "Literal colours increased — use a token from dashboard.html's "
-        ":root block so it can be themed:\n" + "\n".join(sorted(over))
+        ":root block so it can be themed:\n"
+        + "\n".join(sorted(over))
         + "\n\nIf the colour is genuinely data (a real LED value, a terminal "
-          "palette), add the component to EXEMPT with the reason."
+        "palette), add the component to EXEMPT with the reason."
     )
 
 
@@ -179,7 +183,8 @@ def test_budget_matches_reality():
     ]
     assert not stale, (
         "Budget is looser than reality — re-record it to lock the cleanup "
-        "in:\n" + "\n".join(sorted(stale))
+        "in:\n"
+        + "\n".join(sorted(stale))
         + "\n\n  python tests/test_design_tokens.py --update"
     )
 

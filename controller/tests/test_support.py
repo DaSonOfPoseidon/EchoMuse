@@ -20,6 +20,7 @@ import em_support as S
 
 class Row(dict):
     """Stand-in for sqlite3.Row — supports .keys() and subscripting."""
+
     def keys(self):
         return list(super().keys())
 
@@ -44,25 +45,37 @@ ACCOUNTS = {SECRETS["username"]: "admin", "wil": "admin", "sam": "readonly"}
 
 
 def _bundle():
-    device = Row({
-        "device_id": "G090LF1180130NJG",
-        "label": SECRETS["label"],
-        "approved": 1,
-        "firmware_ver": "v2.9.13",
-        "ip": SECRETS["ip"],
-        "token": SECRETS["token"],
-        "esphome_noise_psk": SECRETS["psk"],
-    })
-    turn = Row({
-        "id": 1, "device_id": "G090LF1180130NJG", "outcome": "ok",
-        "wake_score": 0.98, "total_ms": 1200,
-        "stt_text": SECRETS["speech"],
-    })
-    metric = Row({
-        "device_id": "G090LF1180130NJG", "hour_ts": 0, "rtt_samples": 100,
-        "rtt_excursions": 20, "wifi_bssid_last": SECRETS["bssid"],
-        "wifi_ssid": SECRETS["ssid"],
-    })
+    device = Row(
+        {
+            "device_id": "G090LF1180130NJG",
+            "label": SECRETS["label"],
+            "approved": 1,
+            "firmware_ver": "v2.9.13",
+            "ip": SECRETS["ip"],
+            "token": SECRETS["token"],
+            "esphome_noise_psk": SECRETS["psk"],
+        }
+    )
+    turn = Row(
+        {
+            "id": 1,
+            "device_id": "G090LF1180130NJG",
+            "outcome": "ok",
+            "wake_score": 0.98,
+            "total_ms": 1200,
+            "stt_text": SECRETS["speech"],
+        }
+    )
+    metric = Row(
+        {
+            "device_id": "G090LF1180130NJG",
+            "hour_ts": 0,
+            "rtt_samples": 100,
+            "rtt_excursions": 20,
+            "wifi_bssid_last": SECRETS["bssid"],
+            "wifi_ssid": SECRETS["ssid"],
+        }
+    )
     return S.build(
         controller_version="v2.12.1",
         devices=[device],
@@ -71,18 +84,29 @@ def _bundle():
         turns=[turn],
         metrics=[metric],
         counters=[],
-        device_configs={"G090LF1180130NJG": {"owwModel": "hey_mycroft_v0.1",
-                                             "some_token": SECRETS["token"]}},
-        live_state={"G090LF1180130NJG": {
-            "connected": True,
-            "capabilities": ["mic", "ambient_light"],
-            # A whole stats dict — the path that actually leaked in a REAL
-            # bundle, because it was handed over unfiltered.
-            "stats": S.redact_stats({
-                "cpuPct": 27.5, "wifiRssi": -58, "ambientLux": 16,
-                "wifiBssid": SECRETS["bssid"], "wifiSsid": SECRETS["ssid"],
-            }),
-        }},
+        device_configs={
+            "G090LF1180130NJG": {
+                "owwModel": "hey_mycroft_v0.1",
+                "some_token": SECRETS["token"],
+            }
+        },
+        live_state={
+            "G090LF1180130NJG": {
+                "connected": True,
+                "capabilities": ["mic", "ambient_light"],
+                # A whole stats dict — the path that actually leaked in a REAL
+                # bundle, because it was handed over unfiltered.
+                "stats": S.redact_stats(
+                    {
+                        "cpuPct": 27.5,
+                        "wifiRssi": -58,
+                        "ambientLux": 16,
+                        "wifiBssid": SECRETS["bssid"],
+                        "wifiSsid": SECRETS["ssid"],
+                    }
+                ),
+            }
+        },
         controller_log=[
             "10:00:01 [INFO] echomuse — Barge-in: cancelling playback",
             "10:00:02 [DEBUG] echomuse.esphome — MediaPlayerCommandRequest command=PAUSE",
@@ -103,11 +127,16 @@ def _bundle():
             "Shell session closed by wil",
         ],
         accounts=ACCOUNTS,
-        controller_stats={"cpu_pct_1m": 12.4, "rss_mb": 210.5, "db_mb": 38.2,
-                          "data_free_mb": 51204.0, "uptime_s": 3600,
-                          # Not allowlisted: a data directory carries the
-                          # account name on a bare-metal install.
-                          "data_dir": f"/home/{SECRETS['username']}/echomuse"},
+        controller_stats={
+            "cpu_pct_1m": 12.4,
+            "rss_mb": 210.5,
+            "db_mb": 38.2,
+            "data_free_mb": 51204.0,
+            "uptime_s": 3600,
+            # Not allowlisted: a data directory carries the
+            # account name on a bare-metal install.
+            "data_dir": f"/home/{SECRETS['username']}/echomuse",
+        },
     )
 
 
@@ -119,9 +148,7 @@ def test_no_secret_value_appears_anywhere_in_the_bundle():
     """
     text = S.to_json(_bundle())
     for name, value in SECRETS.items():
-        assert value not in text, (
-            f"{name} leaked into the support bundle: {value!r}"
-        )
+        assert value not in text, f"{name} leaked into the support bundle: {value!r}"
 
 
 def test_speech_is_excluded_with_no_opt_in():
@@ -130,11 +157,12 @@ def test_speech_is_excluded_with_no_opt_in():
     be untickled once the bundle is on a public issue.
     """
     import inspect
+
     sig = inspect.signature(S.build)
     for param in sig.parameters:
-        assert "transcript" not in param.lower(), (
-            f"build() grew a {param!r} parameter — speech must have no opt-in"
-        )
+        assert (
+            "transcript" not in param.lower()
+        ), f"build() grew a {param!r} parameter — speech must have no opt-in"
     assert "stt_text" not in S._TURN_FIELDS
 
 
@@ -155,8 +183,10 @@ def test_the_useful_diagnostics_survive():
     d = b["devices"][0]
     assert d["device_id"] == "G090LF1180130NJG", "serials correlate everything"
     assert d["firmware_ver"] == "v2.9.13"
-    assert d["live"]["capabilities"] == ["mic", "ambient_light"], \
-        "capabilities decide which HA entities exist — the #62 question"
+    assert d["live"]["capabilities"] == [
+        "mic",
+        "ambient_light",
+    ], "capabilities decide which HA entities exist — the #62 question"
     assert d["config"]["owwModel"] == "hey_mycroft_v0.1"
     assert b["turns"][0]["outcome"] == "ok"
     assert b["turns"][0]["wake_score"] == 0.98
@@ -165,16 +195,18 @@ def test_the_useful_diagnostics_survive():
     assert b["controller"]["schema_version"] == 16
 
     log = "\n".join(b["device_log_tail"])
-    assert "Playback chain" in log and "194ms" in log, \
-        "timings are the point of shipping logs at all"
+    assert (
+        "Playback chain" in log and "194ms" in log
+    ), "timings are the point of shipping logs at all"
     assert "RTT excursion: 1450ms" in log
 
 
 def test_transcript_bearing_log_lines_are_dropped_whole():
     b = _bundle()
     log = "\n".join(b["device_log_tail"])
-    assert "[TURN]" not in log, \
-        "turn traces quote transcripts verbatim and must not be sanitised in place"
+    assert (
+        "[TURN]" not in log
+    ), "turn traces quote transcripts verbatim and must not be sanitised in place"
 
 
 def test_announce_request_lines_survive_with_the_text_redacted():
@@ -187,13 +219,17 @@ def test_announce_request_lines_survive_with_the_text_redacted():
     after a bundle showed announcement audio playing with no announcement
     ever received, which is not a state the code can reach.
     """
-    out = "\n".join(S.sanitise_log([
-        "[Kitchen] AnnounceRequest: media_id='http://10.10.1.81:8123/api/tts_proxy/a.mp3' "
-        "text='Dinner is ready' start_conversation=True",
-        # The turn trace is the transcript-bearing line the marker existed
-        # for; it must still go whole, apostrophes and all.
-        "[TURN] trigger=wakeword outcome=ok text=\"what's the weather\" tts_bytes=1",
-    ]))
+    out = "\n".join(
+        S.sanitise_log(
+            [
+                "[Kitchen] AnnounceRequest: media_id='http://10.10.1.81:8123/api/tts_proxy/a.mp3' "
+                "text='Dinner is ready' start_conversation=True",
+                # The turn trace is the transcript-bearing line the marker existed
+                # for; it must still go whole, apostrophes and all.
+                '[TURN] trigger=wakeword outcome=ok text="what\'s the weather" tts_bytes=1',
+            ]
+        )
+    )
     assert "AnnounceRequest" in out
     assert "start_conversation=True" in out
     assert "media_id=<redacted>" in out
@@ -210,7 +246,8 @@ def test_announce_text_with_mixed_quotes_redacts_whole():
     ending the match at it.
     """
     line = (
-        "[Kitchen] AnnounceRequest: text=" + repr("it's \"late\"")
+        "[Kitchen] AnnounceRequest: text="
+        + repr('it\'s "late"')
         + " start_conversation=False"
     )
     out = "\n".join(S.sanitise_log([line]))
@@ -222,10 +259,14 @@ def test_spoken_dismissal_lines_are_dropped():
     The spoken-dismissal line logs the STT transcript by repr. Transcript
     lines go whole, not redacted, like the other speech markers.
     """
-    out = "\n".join(S.sanitise_log([
-        "[Kitchen] Spoken dismissal 'stop the alarm' — stopping alarm locally",
-        "[Kitchen] Device connected: ABC v=v2.9.13",
-    ]))
+    out = "\n".join(
+        S.sanitise_log(
+            [
+                "[Kitchen] Spoken dismissal 'stop the alarm' — stopping alarm locally",
+                "[Kitchen] Device connected: ABC v=v2.9.13",
+            ]
+        )
+    )
     assert "Spoken dismissal" not in out and "stop" not in out
     assert "Device connected" in out
 
@@ -236,11 +277,18 @@ def test_live_stats_are_allowlisted_not_passed_through():
     wifiBssid/wifiSsid into a real bundle. Passing a nested structure through
     unfiltered defeats an allowlist just as surely as using a denylist.
     """
-    out = S.redact_stats({"cpuPct": 27.5, "wifiRssi": -58,
-                          "wifiBssid": "aa:bb:cc:dd:ee:ff",
-                          "wifiSsid": "Some-Home-Network"})
-    assert out == {"cpuPct": 27.5, "wifiRssi": -58}, \
-        "stats must be projected onto the allowlist, not filtered"
+    out = S.redact_stats(
+        {
+            "cpuPct": 27.5,
+            "wifiRssi": -58,
+            "wifiBssid": "aa:bb:cc:dd:ee:ff",
+            "wifiSsid": "Some-Home-Network",
+        }
+    )
+    assert out == {
+        "cpuPct": 27.5,
+        "wifiRssi": -58,
+    }, "stats must be projected onto the allowlist, not filtered"
 
 
 def test_bare_identifiers_in_log_prose_are_stripped():
@@ -248,18 +296,29 @@ def test_bare_identifiers_in_log_prose_are_stripped():
     "Device connected: ... at 10.10.1.60" is neither quoted nor a URL, so the
     first two rules both miss it. Real logs are full of these.
     """
-    out = "\n".join(S.sanitise_log([
-        "Device connected: ABC v=v2.9.13 at 10.10.1.60 caps=[mic]",
-        "associated bssid 24:5a:4c:83:7b:e5 freq 5805",
-    ]))
+    out = "\n".join(
+        S.sanitise_log(
+            [
+                "Device connected: ABC v=v2.9.13 at 10.10.1.60 caps=[mic]",
+                "associated bssid 24:5a:4c:83:7b:e5 freq 5805",
+            ]
+        )
+    )
     assert "10.10.1.60" not in out and "<ip>" in out
     assert "24:5a:4c:83:7b:e5" not in out and "<mac>" in out
     assert "v=v2.9.13" in out, "the diagnostic content must survive"
 
 
 def test_config_redaction_catches_credential_shaped_keys():
-    out = S.redact_config({"owwThreshold": 0.5, "wifiPsk": "x", "api_token": "y",
-                           "somePassword": "z", "eqBands": [1, 2]})
+    out = S.redact_config(
+        {
+            "owwThreshold": 0.5,
+            "wifiPsk": "x",
+            "api_token": "y",
+            "somePassword": "z",
+            "eqBands": [1, 2],
+        }
+    )
     assert out["owwThreshold"] == 0.5
     assert out["eqBands"] == [1, 2]
     for k in ("wifiPsk", "api_token", "somePassword"):
@@ -324,9 +383,12 @@ def test_account_names_are_stripped_from_log_prose():
     dashboard account name in plain prose. Nothing about it is quoted, and it
     has no identifier shape to match, so it survived every rule here.
     """
-    out = "\n".join(S.sanitise_log(
-        ["Shell session opened by wil", "Login failed for wilbowes"],
-        accounts=ACCOUNTS))
+    out = "\n".join(
+        S.sanitise_log(
+            ["Shell session opened by wil", "Login failed for wilbowes"],
+            accounts=ACCOUNTS,
+        )
+    )
     assert "wil" not in out and "wilbowes" not in out
     assert out.count("<admin>") == 2, "a name becomes its role, not an alias"
     assert "Shell session opened by" in out, "the event must survive the name"
@@ -337,8 +399,11 @@ def test_longer_usernames_are_replaced_before_their_prefixes():
     With users `wil` and `wilbowes`, replacing the short one first leaves
     `<user>bowes` — the leak, still legible, wearing a redaction marker.
     """
-    out = "\n".join(S.sanitise_log(["opened by wilbowes"],
-                                   accounts={"wil": "admin", "wilbowes": "admin"}))
+    out = "\n".join(
+        S.sanitise_log(
+            ["opened by wilbowes"], accounts={"wil": "admin", "wilbowes": "admin"}
+        )
+    )
     assert out == "opened by <admin>"
 
 
@@ -347,7 +412,9 @@ def test_username_redaction_does_not_eat_substrings():
     Word boundaries: a user called `sam` must not turn `samples=120` into
     `<user>ples=120` and destroy the diagnostic.
     """
-    out = "\n".join(S.sanitise_log(["stats samples=120 for sam"], accounts={"sam": "readonly"}))
+    out = "\n".join(
+        S.sanitise_log(["stats samples=120 for sam"], accounts={"sam": "readonly"})
+    )
     assert "samples=120" in out and out.endswith("<readonly>")
 
 
@@ -393,8 +460,14 @@ def test_metric_fields_match_what_the_reader_returns():
 
     # The converse is not an error (wifi_bssid_last is excluded on purpose),
     # but the resource figures are the point of the section.
-    for key in ("cpu_avg", "cpu_max", "mem_used_avg", "mem_total_mb",
-                "storage_used_mb", "storage_total_mb"):
+    for key in (
+        "cpu_avg",
+        "cpu_max",
+        "mem_used_avg",
+        "mem_total_mb",
+        "storage_used_mb",
+        "storage_total_mb",
+    ):
         assert key in allow, f"{key} is the reason metrics are in the bundle"
 
 
@@ -416,17 +489,23 @@ def test_the_role_is_published_not_the_person():
     one-to-one alias for a real person. `<admin>` says the thing worth
     knowing — who had the authority to do it — and says nothing about who.
     """
-    out = "\n".join(S.sanitise_log(
-        ["Shell session opened by wil", "config changed by sam"],
-        accounts={"wil": "admin", "sam": "readonly"}))
+    out = "\n".join(
+        S.sanitise_log(
+            ["Shell session opened by wil", "config changed by sam"],
+            accounts={"wil": "admin", "sam": "readonly"},
+        )
+    )
     assert "<admin>" in out and "<readonly>" in out
     assert "wil" not in out and "sam" not in out
 
 
 def test_a_junk_role_does_not_reach_the_published_file():
     """The role is a database column, so it is checked, not trusted."""
-    out = "\n".join(S.sanitise_log(
-        ["opened by bob"], accounts={"bob": "admin<script>alert(1)</script>"}))
+    out = "\n".join(
+        S.sanitise_log(
+            ["opened by bob"], accounts={"bob": "admin<script>alert(1)</script>"}
+        )
+    )
     assert out == "opened by <user>"
 
 
@@ -469,13 +548,14 @@ class TestCpuWindows:
         The whole reason for windows: an hour of idle after a busy hour must
         not read the same as busy now.
         """
-        pts = [(float(t), 0.0) for t in range(0, 1800, 30)]          # idle
+        pts = [(float(t), 0.0) for t in range(0, 1800, 30)]  # idle
         pts += [(float(t), (t - 1800) * 0.9) for t in range(1800, 3660, 30)]  # busy
         h = self._history(pts)
         out = h.windows(3630.0, (3630 - 1800) * 0.9)
         assert out["cpu_pct_1m"] == 90.0, "recent load must show at 1m"
-        assert out["cpu_pct_1h"] < out["cpu_pct_1m"], \
-            "the hour includes the idle half and must read lower"
+        assert (
+            out["cpu_pct_1h"] < out["cpu_pct_1m"]
+        ), "the hour includes the idle half and must read lower"
 
     def test_the_ring_stays_bounded(self):
         """A day of sampling must not accumulate a day of samples."""
@@ -495,8 +575,9 @@ def test_the_controllers_own_log_is_in_the_bundle():
     b = _bundle()
     ctrl = "\n".join(b["controller_log_tail"])
     assert "Barge-in: cancelling playback" in ctrl
-    assert "MediaPlayerCommandRequest command=PAUSE" in ctrl, \
-        "the HA command flow is the evidence #62 turned on"
+    assert (
+        "MediaPlayerCommandRequest command=PAUSE" in ctrl
+    ), "the HA command flow is the evidence #62 turned on"
     assert "device_log_tail" in b, "the per-device log keeps its own key"
     assert b["format"] >= 2, "the shape changed; the format marker must say so"
 
@@ -521,9 +602,11 @@ class TestNoiseThinning:
         assert out[0].endswith("heap_alloc=0KB"), "newest first must be kept"
 
     def test_evidence_is_never_thinned(self):
-        lines = ["Wake word detected (score=1.000)"] + \
-                [f"[mem] heap_alloc={i}KB" for i in range(20)] + \
-                ["Device connected: ABC"]
+        lines = (
+            ["Wake word detected (score=1.000)"]
+            + [f"[mem] heap_alloc={i}KB" for i in range(20)]
+            + ["Device connected: ABC"]
+        )
         out = S.thin_noise(lines, keep=2)
         assert "Wake word detected (score=1.000)" in out
         assert "Device connected: ABC" in out
@@ -539,10 +622,13 @@ class TestNoiseThinning:
 class TestLogRing:
     def test_it_holds_the_most_recent_lines_and_no_more(self):
         import logging
+
         ring = S.LogRing(capacity=5)
         ring.setFormatter(logging.Formatter("%(message)s"))
         for i in range(20):
-            ring.emit(logging.LogRecord("x", logging.INFO, "f", 1, f"line {i}", None, None))
+            ring.emit(
+                logging.LogRecord("x", logging.INFO, "f", 1, f"line {i}", None, None)
+            )
         assert ring.tail() == [f"line {i}" for i in range(15, 20)]
 
     def test_a_broken_record_cannot_take_down_its_call_site(self):
@@ -551,6 +637,7 @@ class TestLogRing:
         observe — and it would do it inside the bundle's own logging.
         """
         import logging
+
         ring = S.LogRing(capacity=5)
         ring.setFormatter(logging.Formatter("%(message)s %(nonexistent)s"))
         ring.emit(logging.LogRecord("x", logging.INFO, "f", 1, "boom", None, None))
@@ -565,10 +652,13 @@ def test_the_ring_ignores_the_dashboards_own_http_chatter():
     someone opened a bundle to report.
     """
     import logging
+
     ring = S.LogRing(capacity=10)
     ring.setFormatter(logging.Formatter("%(message)s"))
-    for name, msg in (("aiohttp.access", "GET /api/devices 200"),
-                      ("echomuse", "Barge-in: cancelling playback")):
+    for name, msg in (
+        ("aiohttp.access", "GET /api/devices 200"),
+        ("echomuse", "Barge-in: cancelling playback"),
+    ):
         ring.emit(logging.LogRecord(name, logging.INFO, "f", 1, msg, None, None))
     assert ring.tail() == ["Barge-in: cancelling playback"]
 
@@ -624,21 +714,31 @@ def test_provision_diagnostics_leak_nothing_identifying():
     check is on the SERIALISED output rather than field by field. A leak
     through a probe nobody thought to parse is the one that gets missed.
     """
-    out = json.dumps(_diag(
-        probes={
-            "props":      _RAW_PROPS,
-            "wpa_status": _RAW_STATUS,
-            "wpa_scan":   _RAW_SCAN,
-            "storage":    "/dev/block/mmcblk0p23 5.0G 3.1G 1.9G 62% /data",
-        },
-        transcript=["Writing config for \"Neptune-Media\"…",
-                    "Connected! IP: 10.10.1.188"],
-        selected_ssid="Neptune-Media",
-    ))
-    for secret in ("Neptune-Media", "Pixel_7793", "Sams Room",
-                   "SamsPhone-Bedroom", "10.10.1.188",
-                   "74:ac:b9:d6:9b:21", "ac:63:be:11:22:33",
-                   "6f1c2b3a"):
+    out = json.dumps(
+        _diag(
+            probes={
+                "props": _RAW_PROPS,
+                "wpa_status": _RAW_STATUS,
+                "wpa_scan": _RAW_SCAN,
+                "storage": "/dev/block/mmcblk0p23 5.0G 3.1G 1.9G 62% /data",
+            },
+            transcript=[
+                'Writing config for "Neptune-Media"…',
+                "Connected! IP: 10.10.1.188",
+            ],
+            selected_ssid="Neptune-Media",
+        )
+    )
+    for secret in (
+        "Neptune-Media",
+        "Pixel_7793",
+        "Sams Room",
+        "SamsPhone-Bedroom",
+        "10.10.1.188",
+        "74:ac:b9:d6:9b:21",
+        "ac:63:be:11:22:33",
+        "6f1c2b3a",
+    ):
         assert secret not in out, f"{secret!r} reached the diagnostics file"
 
 
@@ -652,7 +752,10 @@ def test_the_radio_facts_survive_the_scan_redaction():
     rows = d["probes"]["wpa_scan"]
     assert len(rows) == 3, rows
     assert [r["flags"] for r in rows] == [
-        "[WPA2-PSK-CCMP][ESS]", "[SAE-CCMP][ESS]", "[ESS]"]
+        "[WPA2-PSK-CCMP][ESS]",
+        "[SAE-CCMP][ESS]",
+        "[ESS]",
+    ]
     assert [r["freq"] for r in rows] == ["5180", "2437", "2412"]
     assert [r["network"] for r in rows] == ["network-1", "network-2", "network-3"]
     # Which one they were trying to join is unrecoverable once names are gone.
@@ -712,14 +815,22 @@ def _wpa_ssid_txt(ssid: bytes) -> str:
     """wpa_supplicant 2.10's printf_encode, which is how it prints an SSID."""
     out = ""
     for c in ssid:
-        if c == 0x22:   out += '\\"'
-        elif c == 0x5c: out += "\\\\"
-        elif c == 0x1b: out += "\\e"
-        elif c == 0x0a: out += "\\n"
-        elif c == 0x0d: out += "\\r"
-        elif c == 0x09: out += "\\t"
-        elif 32 <= c <= 126: out += chr(c)
-        else: out += f"\\x{c:02x}"
+        if c == 0x22:
+            out += '\\"'
+        elif c == 0x5C:
+            out += "\\\\"
+        elif c == 0x1B:
+            out += "\\e"
+        elif c == 0x0A:
+            out += "\\n"
+        elif c == 0x0D:
+            out += "\\r"
+        elif c == 0x09:
+            out += "\\t"
+        elif 32 <= c <= 126:
+            out += chr(c)
+        else:
+            out += f"\\x{c:02x}"
     return out
 
 
@@ -727,11 +838,11 @@ def _wpa_ssid_txt(ssid: bytes) -> str:
 # quote-matching scrub gets wrong or a form the cut has to survive.
 _NET_LOG_SSIDS = [
     b"Neptune-Media",
-    b"Bob's WiFi",                       # an apostrophe is NOT escaped
+    b"Bob's WiFi",  # an apostrophe is NOT escaped
     b'Say "hi"',
     b"back\\slash",
     b"Caf\xc3\xa9",
-    b"a' freq=2412 MHz) b",              # looks like the line's own tail
+    b"a' freq=2412 MHz) b",  # looks like the line's own tail
     b'x" auth_failures=1 duration=10 reason=FAKE',
     b"ssid",
     b" lead and trail ",
@@ -748,18 +859,20 @@ def test_the_network_log_keeps_the_diagnosis_and_loses_every_name():
     """
     for raw in _NET_LOG_SSIDS:
         name = _wpa_ssid_txt(raw)
-        log = "\n".join([
-            "[   7365] stage 11 reached",
-            f"wlan0: Trying to associate with SSID '{name}'",
-            f"wlan0: SME: Trying to authenticate with 76:ac:b9:a6:9b:22 (SSID='{name}' freq=5785 MHz)",
-            f"wlan0: Trying to associate with 76:ac:b9:a6:9b:22 (SSID='{name}' freq=5785 MHz)",
-            f'wlan0: CTRL-EVENT-SSID-TEMP-DISABLED id=0 ssid="{name}" auth_failures=2 duration=20 reason=WRONG_KEY',
-            f'wlan0: CTRL-EVENT-SSID-REENABLED id=0 ssid="{name}"',
-            f"wlan0: connected to Access Point `{name}'",
-            "wlan0: CTRL-EVENT-CONNECTED - Connection to 76:ac:b9:a6:9b:22 completed [id=0 id_str=]",
-            "udhcpc: broadcasting discover",
-            "udhcpc: lease of 10.10.1.91 obtained from 10.10.1.1, lease time 86400",
-        ])
+        log = "\n".join(
+            [
+                "[   7365] stage 11 reached",
+                f"wlan0: Trying to associate with SSID '{name}'",
+                f"wlan0: SME: Trying to authenticate with 76:ac:b9:a6:9b:22 (SSID='{name}' freq=5785 MHz)",
+                f"wlan0: Trying to associate with 76:ac:b9:a6:9b:22 (SSID='{name}' freq=5785 MHz)",
+                f'wlan0: CTRL-EVENT-SSID-TEMP-DISABLED id=0 ssid="{name}" auth_failures=2 duration=20 reason=WRONG_KEY',
+                f'wlan0: CTRL-EVENT-SSID-REENABLED id=0 ssid="{name}"',
+                f"wlan0: connected to Access Point `{name}'",
+                "wlan0: CTRL-EVENT-CONNECTED - Connection to 76:ac:b9:a6:9b:22 completed [id=0 id_str=]",
+                "udhcpc: broadcasting discover",
+                "udhcpc: lease of 10.10.1.91 obtained from 10.10.1.1, lease time 86400",
+            ]
+        )
         got = _diag(probes={"net_log": log})["probes"]["net_log"]
         # The same nine lines whatever the name was: nothing of it survives,
         # and the channel, the refusal reason and the lease do.
@@ -790,8 +903,10 @@ def test_the_error_and_transcript_are_scrubbed_not_trusted():
     Both are ours, but our error strings interpolate device output often
     enough that the distinction is not worth relying on.
     """
-    d = _diag(error='Staged config does not contain ssid="Neptune-Media"',
-              transcript=["Connected! IP: 10.10.1.188"])
+    d = _diag(
+        error='Staged config does not contain ssid="Neptune-Media"',
+        transcript=["Connected! IP: 10.10.1.188"],
+    )
     blob = json.dumps(d)
     assert "Neptune-Media" not in blob
     assert "10.10.1.188" not in blob
@@ -823,8 +938,9 @@ def test_the_wizard_probe_list_matches_the_allowlist():
     script with no module boundary to import across, the same reason
     CONFIG_SECTIONS is mirror-checked rather than shared.
     """
-    jsx = (Path(__file__).resolve().parent.parent
-           / "static" / "dashboard.jsx").read_text()
+    jsx = (
+        Path(__file__).resolve().parent.parent / "static" / "dashboard.jsx"
+    ).read_text()
     in_jsx = set()
     # Two lists: one asked over ADB, one over the emOS serial console.
     for const in ("_PROVISION_PROBES", "_EMOS_PROBES"):
@@ -835,10 +951,12 @@ def test_the_wizard_probe_list_matches_the_allowlist():
 
     assert not (in_jsx - in_py), (
         f"the wizard collects {sorted(in_jsx - in_py)}, which em_support drops "
-        f"on arrival — add them to _PROVISION_PROBES")
+        f"on arrival — add them to _PROVISION_PROBES"
+    )
     assert not (in_py - in_jsx), (
         f"em_support allows {sorted(in_py - in_jsx)}, which the wizard never "
-        f"collects")
+        f"collects"
+    )
 
 
 def test_home_assistant_display_names_are_redacted():
@@ -849,10 +967,13 @@ def test_home_assistant_display_names_are_redacted():
     reaching a public issue is the same leak as #62's, from a new source.
     """
     accounts = {"Wil Bowes": "admin", "wil": "admin"}
-    out = S.sanitise_log([
-        "Ingress login: Wil Bowes (admin)",
-        "Shell session opened by wil",
-    ], accounts=accounts)
+    out = S.sanitise_log(
+        [
+            "Ingress login: Wil Bowes (admin)",
+            "Shell session opened by wil",
+        ],
+        accounts=accounts,
+    )
     joined = " ".join(out)
     assert "Wil Bowes" not in joined
     assert "wil" not in joined.replace("<admin>", "")
@@ -863,16 +984,28 @@ def test_devices_carry_their_userspace_and_kernel():
     """#621: stored since schema v21/v23, but missing from the allowlist, so
     #566's bundle could not say which kernel the device booted. A device that
     never reported them (old firmware) simply has no such key."""
-    reported = Row({
-        "device_id": "G090LF1180130NJG", "approved": 1,
-        "base_os": "emos", "kernel_arch": "armv7l",
-        "kernel_release": "3.18.19-gecb8cb46060-dirty",
-    })
+    reported = Row(
+        {
+            "device_id": "G090LF1180130NJG",
+            "approved": 1,
+            "base_os": "emos",
+            "kernel_arch": "armv7l",
+            "kernel_release": "3.18.19-gecb8cb46060-dirty",
+        }
+    )
     old = Row({"device_id": "G090LF1180440EFF", "approved": 1})
     bundle = S.build(
-        controller_version="v2.24.1", devices=[reported, old],
-        fleet_config={}, schema_version=26, turns=[], metrics=[], counters=[],
-        device_configs={}, live_state={}, controller_log=[], device_log=[],
+        controller_version="v2.24.1",
+        devices=[reported, old],
+        fleet_config={},
+        schema_version=26,
+        turns=[],
+        metrics=[],
+        counters=[],
+        device_configs={},
+        live_state={},
+        controller_log=[],
+        device_log=[],
     )
     first, second = bundle["devices"]
     assert first["base_os"] == "emos"
@@ -911,5 +1044,11 @@ def test_the_bundle_says_what_was_actually_being_logged():
             f"{name!r} looks like a path — a bundle is attached to public "
             "issues and carries names only"
         )
-        assert level in ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG",
-                         "NOTSET"), f"{name} has an unrenderable level {level!r}"
+        assert level in (
+            "CRITICAL",
+            "ERROR",
+            "WARNING",
+            "INFO",
+            "DEBUG",
+            "NOTSET",
+        ), f"{name} has an unrenderable level {level!r}"

@@ -32,8 +32,11 @@ def levels_restored():
     something else created, and those have no level to restore.
     """
     table = logging.Logger.manager.loggerDict
-    before = {name: logger.level for name, logger in table.items()
-              if isinstance(logger, logging.Logger)}
+    before = {
+        name: logger.level
+        for name, logger in table.items()
+        if isinstance(logger, logging.Logger)
+    }
     yield
     for name in [name for name in table if name not in before]:
         del table[name]
@@ -49,6 +52,7 @@ def _make(name: str) -> str:
 
 # ── The parse ────────────────────────────────────────────────────────────────
 
+
 def test_empty_spec_is_not_an_error(levels_restored):
     """Unset, empty and whitespace-only are the same thing: no pairs."""
     for spec in ("", "   ", ",", " , "):
@@ -58,26 +62,30 @@ def test_empty_spec_is_not_an_error(levels_restored):
 
 
 def test_one_pair(levels_restored):
-    assert em_loglevel.parse("echomuse.esphome=DEBUG").levels == \
-        {"echomuse.esphome": logging.DEBUG}
+    assert em_loglevel.parse("echomuse.esphome=DEBUG").levels == {
+        "echomuse.esphome": logging.DEBUG
+    }
 
 
 def test_several_pairs(levels_restored):
     parsed = em_loglevel.parse("echomuse.esphome=DEBUG,aiohttp.access=INFO")
-    assert parsed.levels == {"echomuse.esphome": logging.DEBUG,
-                             "aiohttp.access": logging.INFO}
+    assert parsed.levels == {
+        "echomuse.esphome": logging.DEBUG,
+        "aiohttp.access": logging.INFO,
+    }
 
 
 def test_whitespace_around_both_sides(levels_restored):
     """A .env line has spaces after the commas whether or not you wrote them."""
     assert em_loglevel.parse(
-        " echomuse.db = WARNING , aiohttp.access=ERROR ").levels == \
-        {"echomuse.db": logging.WARNING, "aiohttp.access": logging.ERROR}
+        " echomuse.db = WARNING , aiohttp.access=ERROR "
+    ).levels == {"echomuse.db": logging.WARNING, "aiohttp.access": logging.ERROR}
 
 
 def test_level_names_are_case_insensitive(levels_restored):
-    assert em_loglevel.parse("echomuse.db=warning").levels == \
-        {"echomuse.db": logging.WARNING}
+    assert em_loglevel.parse("echomuse.db=warning").levels == {
+        "echomuse.db": logging.WARNING
+    }
 
 
 def test_unknown_level_is_skipped_not_fatal(levels_restored):
@@ -103,7 +111,7 @@ def test_a_dotless_name_that_logs_is_honoured(levels_restored):
     hierarchy is the obvious thing to want to do — and refusing it left the
     documented example of the feature unusable.
     """
-    name = _make("dotless")                       # no dot, and it does log
+    name = _make("dotless")  # no dot, and it does log
     result = em_loglevel.apply(f"{name}=DEBUG")
     assert result.problems == ()
     assert logging.getLogger(name).level == logging.DEBUG
@@ -124,10 +132,10 @@ def test_every_documented_example_applies(levels_restored):
         _make(live)
 
     documented = {
-        "echomuse": logging.DEBUG,           # the dotless root
+        "echomuse": logging.DEBUG,  # the dotless root
         "echomuse.esphome": logging.DEBUG,
         "aiohttp.access": logging.INFO,
-        "aiohttp": logging.DEBUG,            # the other dotless one
+        "aiohttp": logging.DEBUG,  # the other dotless one
     }
     spec = ",".join(f"{n}={logging.getLevelName(lv)}" for n, lv in documented.items())
     result = em_loglevel.apply(spec)
@@ -137,6 +145,7 @@ def test_every_documented_example_applies(levels_restored):
 
 
 # ── Applying it ──────────────────────────────────────────────────────────────
+
 
 def test_apply_sets_the_named_logger(levels_restored):
     name = _make("echomuse.applytest")
@@ -164,8 +173,9 @@ def test_a_name_under_an_existing_logger_is_honoured(levels_restored):
     work on a controller that has not imported em_player yet.
     """
     _make("echomuse.applyroot")
-    assert em_loglevel.apply("echomuse.applyroot.later=DEBUG").levels == \
-        {"echomuse.applyroot.later": logging.DEBUG}
+    assert em_loglevel.apply("echomuse.applyroot.later=DEBUG").levels == {
+        "echomuse.applyroot.later": logging.DEBUG
+    }
 
 
 def test_a_bad_pair_does_not_stop_the_good_ones(levels_restored):
@@ -222,6 +232,7 @@ def test_a_parent_override_reaches_every_child(levels_restored):
 
 # ── The two ways the hierarchy goes wrong again ─────────────────────────────
 
+
 def test_the_controller_does_not_truthiness_test_the_spec():
     """
     The DEBUG trap in the shape it actually appears: every non-empty string
@@ -231,8 +242,9 @@ def test_the_controller_does_not_truthiness_test_the_spec():
     parsed as text by em_loglevel and never asked whether it is true.
     """
     src = (CONTROLLER / "em_controller.py").read_text()
-    assert not re.search(r'if\s+os\.environ\.get\(\s*"LOG_LEVELS"', src), \
-        "LOG_LEVELS is being read as a bare truthiness test"
+    assert not re.search(
+        r'if\s+os\.environ\.get\(\s*"LOG_LEVELS"', src
+    ), "LOG_LEVELS is being read as a bare truthiness test"
 
 
 def test_every_logger_the_controller_defines_is_reachable():
@@ -255,21 +267,27 @@ def test_every_logger_the_controller_defines_is_reachable():
             if found is None:
                 continue
             name = found.group(2)
-            if name is None:            # getLogger(__name__) is the module
+            if name is None:  # getLogger(__name__) is the module
                 offenders.append(f"{path.name}: getLogger(__name__)")
-            elif not (name == "echomuse" or name.startswith("echomuse.")
-                       or name in third_party):
+            elif not (
+                name == "echomuse"
+                or name.startswith("echomuse.")
+                or name in third_party
+            ):
                 offenders.append(f"{path.name}: getLogger({name!r})")
 
     assert not offenders, (
         "logger names outside the echomuse hierarchy — a per-area level "
-        f"cannot reach these: {offenders}")
+        f"cannot reach these: {offenders}"
+    )
+
 
 # ── effective(): what is actually in force (#378) ─────────────────────────────
 #
 # For the support bundle. A bundle whose log tail is thin is ambiguous
 # between "nothing happened" and "it was not being logged", and those want
 # opposite investigations — so the bundle has to say which.
+
 
 def test_effective_reports_the_level_that_was_applied(levels_restored):
     # The parent has to exist first, exactly as it does in the running

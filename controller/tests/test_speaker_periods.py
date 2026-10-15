@@ -40,9 +40,11 @@ def _stream_body() -> str:
     about, so a source search that includes them matches the warning rather
     than the code — which is how the first version of this test failed.
     """
-    fn = next(n for n in ast.walk(ast.parse(SRC))
-              if isinstance(n, ast.AsyncFunctionDef)
-              and n.name == "stream_speaker_chunks")
+    fn = next(
+        n
+        for n in ast.walk(ast.parse(SRC))
+        if isinstance(n, ast.AsyncFunctionDef) and n.name == "stream_speaker_chunks"
+    )
     body = ast.get_source_segment(SRC, fn)
     return "\n".join(
         line for line in body.splitlines() if not line.lstrip().startswith("#")
@@ -52,8 +54,9 @@ def _stream_body() -> str:
 def _tail_bytes() -> int:
     """The real flush tail, measured off a real chain rather than derived."""
     eq = em_eq.StreamingEQ(48000, limiter=em_limiter.Limiter(48000))
-    pcm = (np.random.default_rng(0).integers(-8000, 8000, 48000)
-           .astype(np.int16).tobytes())
+    pcm = (
+        np.random.default_rng(0).integers(-8000, 8000, 48000).astype(np.int16).tobytes()
+    )
     eq.process(pcm)
     return len(eq.flush())
 

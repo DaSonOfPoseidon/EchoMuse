@@ -13,12 +13,14 @@ def test_solo_device_wins_immediately():
     """The winner must not wait. The old design awaited the full window on
     every wake (~364ms measured in the field, on every device) — that is
     the regression this redesign exists to remove."""
+
     async def main():
         arb = WakeArbiter()
         loop = asyncio.get_running_loop()
         t0 = loop.time()
         won = arb.claim("office", WINDOW)
         return won, loop.time() - t0
+
     won, elapsed = run(main())
     assert won == "office"
     assert elapsed < 0.01
@@ -30,16 +32,19 @@ def test_second_device_in_window_loses():
         first = arb.claim("office", WINDOW)
         second = arb.claim("lounge", WINDOW)
         return first, second
+
     first, second = run(main())
     assert first == "office"
-    assert second == "office"   # lounge told to stand down
+    assert second == "office"  # lounge told to stand down
 
 
 def test_three_way_only_first_answers():
     """The 2026-07-20 field case: three devices within 184ms."""
+
     async def main():
         arb = WakeArbiter()
         return [arb.claim(d, WINDOW) for d in ("office", "lounge", "retreat")]
+
     assert run(main()) == ["office"] * 3
 
 
@@ -51,6 +56,7 @@ def test_loser_never_waits_either():
         t0 = loop.time()
         arb.claim("lounge", WINDOW)
         return loop.time() - t0
+
     assert run(main()) < 0.01
 
 
@@ -60,25 +66,29 @@ def test_claim_expires_after_window():
         arb.claim("office", 0.05)
         await asyncio.sleep(0.08)
         return arb.claim("lounge", 0.05)
+
     assert run(main()) == "lounge"
 
 
 def test_same_device_rewaking_is_not_suppressed():
     """A device answering twice in a row is a real second utterance in the
     room it already serves — it must never be told it lost to itself."""
+
     async def main():
         arb = WakeArbiter()
         arb.claim("office", WINDOW)
         return arb.claim("office", WINDOW)
+
     assert run(main()) == "office"
 
 
 def test_release_frees_the_claim_early():
     async def main():
         arb = WakeArbiter()
-        arb.claim("office", 10.0)   # long window
+        arb.claim("office", 10.0)  # long window
         arb.release("office")
         return arb.claim("lounge", 10.0)
+
     assert run(main()) == "lounge"
 
 
@@ -86,21 +96,24 @@ def test_release_by_non_holder_is_ignored():
     async def main():
         arb = WakeArbiter()
         arb.claim("office", 10.0)
-        arb.release("lounge")       # not the holder — must be a no-op
+        arb.release("lounge")  # not the holder — must be a no-op
         return arb.claim("retreat", 10.0)
+
     assert run(main()) == "office"
 
 
 def test_window_rearms_on_each_win():
     """Successive utterances in the same room keep extending suppression,
     so a distant device echoing the winner's TTS stays quiet."""
+
     async def main():
         arb = WakeArbiter()
         arb.claim("office", 0.15)
         await asyncio.sleep(0.10)
-        arb.claim("office", 0.15)   # re-arms from now
+        arb.claim("office", 0.15)  # re-arms from now
         await asyncio.sleep(0.10)
         return arb.claim("lounge", 0.15)
+
     assert run(main()) == "office"
 
 
@@ -109,33 +122,39 @@ def test_zero_window_suppresses_nothing():
         arb = WakeArbiter()
         arb.claim("office", 0.0)
         return arb.claim("lounge", 0.0)
+
     assert run(main()) == "lounge"
 
 
 # ── capture time (docs/listening.md, "Arbitration") ─────────────────────────
 
+
 def test_late_claim_heard_first_still_cedes_to_the_granted_one():
     """A granted claim is never revoked, even to an Echo that heard first."""
+
     async def main():
         arb = WakeArbiter()
         now = asyncio.get_running_loop().time()
         first = arb.claim("office", WINDOW, heard_at=now)
         second = arb.claim("lounge", WINDOW, heard_at=now - 0.05)
         return first, second
+
     assert run(main()) == ("office", "office")
 
 
 def test_claim_delayed_in_flight_cedes_within_slack():
     """The bug this fixes: heard 50ms after the winner, arriving a second
     late, it used to fall outside the window and start a second answer."""
+
     async def main():
         arb = WakeArbiter()
         loop = asyncio.get_running_loop()
         t = loop.time()
         arb.claim("office", WINDOW, heard_at=t)
-        await asyncio.sleep(0.4)            # past the window by arrival
+        await asyncio.sleep(0.4)  # past the window by arrival
         late = arb.claim("lounge", WINDOW, heard_at=t + 0.05, slack_s=1.0)
         return late
+
     assert run(main()) == "office"
 
 
@@ -146,6 +165,7 @@ def test_without_slack_a_late_claim_is_a_new_utterance():
         arb.claim("office", WINDOW, heard_at=t)
         await asyncio.sleep(0.4)
         return arb.claim("lounge", WINDOW, heard_at=t + 0.05)
+
     assert run(main()) == "lounge"
 
 
@@ -155,10 +175,12 @@ def test_separate_utterance_heard_outside_the_window_wins():
         t = asyncio.get_running_loop().time()
         arb.claim("office", WINDOW, heard_at=t - 1.0, slack_s=3.0)
         return arb.claim("lounge", WINDOW, heard_at=t, slack_s=3.0)
+
     assert run(main()) == "lounge"
 
 
 # ── a mixed fleet: one Echo wakes itself, one is scored here ────────────────
+
 
 def _mixed_pair(date_by_capture: bool) -> str:
     """Office wakes on the Echo; Lounge streams and is scored here. Both heard
@@ -176,8 +198,7 @@ def _mixed_pair(date_by_capture: bool) -> str:
         for n in range(40):
             clock.observe(n, t - (40 - n) * 0.08 + 0.004)
         # Office's wake arrives 150ms after capture, reporting its age.
-        arb.claim("office", 0.3, heard_at=em_listen.heard_at(t, 110, 80),
-                  slack_s=1.0)
+        arb.claim("office", 0.3, heard_at=em_listen.heard_at(t, 110, 80), slack_s=1.0)
         # Lounge's crossing frame (captured at t) arrives a second late...
         await asyncio.sleep(1.0)
         arrived = loop.time()
@@ -186,6 +207,7 @@ def _mixed_pair(date_by_capture: bool) -> str:
         await asyncio.sleep(0.5)
         heard = em_listen.captured(frame, 0) if date_by_capture else loop.time()
         return arb.claim("lounge", 0.3, heard_at=heard, slack_s=3.0)
+
     return run(main())
 
 
@@ -206,6 +228,7 @@ HOLD = 0.1
 
 def test_contest_without_hold_is_claim():
     """A fleet that detects one way does not wait."""
+
     async def main():
         arb = WakeArbiter()
         loop = asyncio.get_running_loop()
@@ -213,6 +236,7 @@ def test_contest_without_hold_is_claim():
         won = await arb.contest("office", WINDOW, hold_s=0)
         second = await arb.contest("lounge", WINDOW, hold_s=0)
         return won, second, loop.time() - t0
+
     won, second, elapsed = run(main())
     assert (won, second) == ("office", "office")
     assert elapsed < 0.01
@@ -221,27 +245,33 @@ def test_contest_without_hold_is_claim():
 def test_contest_grants_the_claim_heard_first():
     """The 2026-09-24 case: the far Echo detects on the device and arrives
     16ms ahead of the near one, which was scored here and heard earlier."""
+
     async def main():
         arb = WakeArbiter()
         t = asyncio.get_running_loop().time()
         far = asyncio.create_task(
-            arb.contest("vvv", WINDOW, heard_at=t - 0.078, slack_s=3.0, hold_s=HOLD))
+            arb.contest("vvv", WINDOW, heard_at=t - 0.078, slack_s=3.0, hold_s=HOLD)
+        )
         await asyncio.sleep(0.016)
         near = asyncio.create_task(
-            arb.contest("15le", WINDOW, heard_at=t - 0.110, slack_s=3.0, hold_s=HOLD))
+            arb.contest("15le", WINDOW, heard_at=t - 0.110, slack_s=3.0, hold_s=HOLD)
+        )
         return await far, await near
+
     assert run(main()) == ("15le", "15le")
 
 
 def test_contest_waits_only_until_hold_after_hearing():
     """The hold runs from when the audio was HEARD, so a claim that already
     spent most of it in flight waits only for the rest."""
+
     async def main():
         arb = WakeArbiter()
         loop = asyncio.get_running_loop()
         t0 = loop.time()
         await arb.contest("office", WINDOW, heard_at=t0 - 0.08, hold_s=HOLD)
         return loop.time() - t0
+
     elapsed = run(main())
     assert 0.01 < elapsed < 0.06
 
@@ -251,31 +281,42 @@ def test_contest_solo_claim_wins_after_the_hold():
         arb = WakeArbiter()
         t = asyncio.get_running_loop().time()
         return await arb.contest("office", WINDOW, heard_at=t, hold_s=HOLD)
+
     assert run(main()) == "office"
 
 
 def test_claim_after_the_contest_meets_the_granted_winner():
     """Never revoked: a claim heard earlier but arriving after the decision
     still cedes."""
+
     async def main():
         arb = WakeArbiter()
         t = asyncio.get_running_loop().time()
-        first = await arb.contest("office", WINDOW, heard_at=t, slack_s=3.0, hold_s=HOLD)
-        late = await arb.contest("lounge", WINDOW, heard_at=t - 0.05, slack_s=3.0, hold_s=HOLD)
+        first = await arb.contest(
+            "office", WINDOW, heard_at=t, slack_s=3.0, hold_s=HOLD
+        )
+        late = await arb.contest(
+            "lounge", WINDOW, heard_at=t - 0.05, slack_s=3.0, hold_s=HOLD
+        )
         return first, late
+
     assert run(main()) == ("office", "office")
 
 
 def test_contest_separate_utterance_opens_its_own():
     """A claim heard outside the open contest's window is another utterance:
     it neither joins nor loses, and deciding one contest leaves the other."""
+
     async def main():
         arb = WakeArbiter()
         t = asyncio.get_running_loop().time()
         a = asyncio.create_task(arb.contest("office", WINDOW, heard_at=t, hold_s=HOLD))
         await asyncio.sleep(0)
-        b = asyncio.create_task(arb.contest("lounge", WINDOW, heard_at=t - 0.5, hold_s=HOLD))
+        b = asyncio.create_task(
+            arb.contest("lounge", WINDOW, heard_at=t - 0.5, hold_s=HOLD)
+        )
         return await a, await b
+
     assert run(main()) == ("office", "lounge")
 
 
@@ -294,16 +335,22 @@ def _who(claims):
 
 def test_the_loudest_wins_over_the_first_to_hear():
     """The reported case: the first to hear scraped in and was far quieter."""
-    claims = [Claim(0.000, "far", -73.0), Claim(0.036, "mid", -72.0),
-              Claim(0.078, "near", -48.0)]
+    claims = [
+        Claim(0.000, "far", -73.0),
+        Claim(0.036, "mid", -72.0),
+        Claim(0.078, "near", -48.0),
+    ]
     assert _who(claims) == ("near", "loudest by 24.0dB")
 
 
 def test_there_is_no_margin():
     """Three Echoes side by side on 2026-10-06: one word, heard up to 113ms
     apart and within 2.6dB. The frame grid used to pick; the level does."""
-    claims = [Claim(0.000, "15le", -57.8), Claim(0.054, "c95", -53.0),
-              Claim(0.110, "vvv", -55.6)]
+    claims = [
+        Claim(0.000, "15le", -57.8),
+        Claim(0.054, "c95", -53.0),
+        Claim(0.110, "vvv", -55.6),
+    ]
     assert _who(claims) == ("c95", "loudest by 2.6dB")
     close = [Claim(0.000, "a", -55.0), Claim(0.200, "b", -54.9)]
     assert _who(close)[0] == "b"
@@ -325,16 +372,20 @@ def test_a_missing_level_sends_the_whole_contest_back_to_time():
 
 def test_a_wake_heard_over_playback_is_decided_on_time():
     """Its reading contains the reply or the music the Echo is playing."""
-    claims = [Claim(0.000, "quiet", -70.0),
-              Claim(0.050, "playing", -45.0, over_playback=True)]
+    claims = [
+        Claim(0.000, "quiet", -70.0),
+        Claim(0.050, "playing", -45.0, over_playback=True),
+    ]
     who, why = _who(claims)
     assert who == "quiet" and "over playback" in why
 
 
 def test_different_gain_settings_are_not_compared():
     """MICPGA and digital gain are still inside the reading."""
-    claims = [Claim(0.000, "a", -70.0, gains=(40, 88)),
-              Claim(0.050, "b", -45.0, gains=(59, 88))]
+    claims = [
+        Claim(0.000, "a", -70.0, gains=(40, 88)),
+        Claim(0.050, "b", -45.0, gains=(59, 88)),
+    ]
     who, why = _who(claims)
     assert who == "a" and "gain settings differ" in why
     same = [c._replace(gains=(40, 88)) for c in claims]
@@ -388,8 +439,12 @@ def test_the_house_that_reported_it_gets_the_loudest_echo_every_time():
 def test_the_one_heard_over_playback_is_left_to_time_for_now():
     """The reported wake itself: the nearest Echo was playing, so its reading
     is not trusted yet and the first to hear still wins. Known, not fixed."""
-    claims = [Claim(0.000, "0", -73.0), Claim(0.036, "1", -72.0),
-              Claim(0.078, "2", -48.0, over_playback=True), Claim(0.312, "3", -66.0)]
+    claims = [
+        Claim(0.000, "0", -73.0),
+        Claim(0.036, "1", -72.0),
+        Claim(0.078, "2", -48.0, over_playback=True),
+        Claim(0.312, "3", -66.0),
+    ]
     assert _who(claims)[0] == "0"
 
 
@@ -397,12 +452,19 @@ def test_a_held_contest_gives_the_turn_to_the_loudest():
     async def main():
         arb = WakeArbiter()
         t = asyncio.get_running_loop().time()
-        far = asyncio.create_task(arb.contest(
-            "far", WINDOW, heard_at=t, slack_s=3.0, hold_s=HOLD, level=-70.0))
+        far = asyncio.create_task(
+            arb.contest(
+                "far", WINDOW, heard_at=t, slack_s=3.0, hold_s=HOLD, level=-70.0
+            )
+        )
         await asyncio.sleep(0.05)
-        near = asyncio.create_task(arb.contest(
-            "near", WINDOW, heard_at=t + 0.05, slack_s=3.0, hold_s=HOLD, level=-50.0))
+        near = asyncio.create_task(
+            arb.contest(
+                "near", WINDOW, heard_at=t + 0.05, slack_s=3.0, hold_s=HOLD, level=-50.0
+            )
+        )
         return await far, await near, arb.last_why
+
     assert run(main()) == ("near", "near", "loudest by 20.0dB")
 
 
@@ -412,7 +474,9 @@ def test_a_held_contest_without_levels_still_goes_to_the_first_to_hear():
         t = asyncio.get_running_loop().time()
         a = asyncio.create_task(arb.contest("a", WINDOW, heard_at=t, hold_s=HOLD))
         await asyncio.sleep(0.03)
-        b = asyncio.create_task(arb.contest("b", WINDOW, heard_at=t + 0.03, hold_s=HOLD))
+        b = asyncio.create_task(
+            arb.contest("b", WINDOW, heard_at=t + 0.03, hold_s=HOLD)
+        )
         return await a, await b
-    assert run(main()) == ("a", "a")
 
+    assert run(main()) == ("a", "a")

@@ -40,9 +40,11 @@ def _unreachable(tree: ast.AST) -> list[tuple[str, int]]:
                 if isinstance(stmt, TERMINAL):
                     nxt = block[i + 1]
                     found.append(
-                        (f"{type(stmt).__name__.lower()} on line "
-                         f"{stmt.lineno} is followed by unreachable code",
-                         nxt.lineno)
+                        (
+                            f"{type(stmt).__name__.lower()} on line "
+                            f"{stmt.lineno} is followed by unreachable code",
+                            nxt.lineno,
+                        )
                     )
     return found
 
@@ -55,7 +57,7 @@ def test_no_unreachable_statements(path):
         f"{path.name} has code that can never run:\n"
         + "\n".join(f"  line {ln}: {why}" for why, ln in dead)
         + "\n\nIf it is an initialiser it is not initialising anything — that "
-          "is how Device.playback_send_ms came to be missing."
+        "is how Device.playback_send_ms came to be missing."
     )
 
 

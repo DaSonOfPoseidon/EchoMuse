@@ -20,6 +20,7 @@ def _decide(**kw):
 
 # ── The happy path ────────────────────────────────────────────────────────────
 
+
 def test_genuine_ingress_request_is_authenticated():
     got = _decide(username="wil", display_name="Wil Bowes")
     assert got == ia.IngressIdentity("abc123", "wil", "Wil Bowes")
@@ -45,20 +46,25 @@ def test_no_names_at_all_still_authenticates():
 
 # ── Refusals: the whole point ─────────────────────────────────────────────────
 
+
 def test_standalone_container_never_trusts_the_header():
     # THE bug this module exists to prevent: on the standalone container the
     # header is attacker-supplied, so honouring it is a login bypass.
-    assert ia.decide(
-        ingress_only=False, remote=GATEWAY,
-        user_id="abc123", username="wil",
-    ) is None
+    assert (
+        ia.decide(
+            ingress_only=False,
+            remote=GATEWAY,
+            user_id="abc123",
+            username="wil",
+        )
+        is None
+    )
 
 
 def test_standalone_refuses_even_from_the_gateway_address():
     # Belt and braces — INGRESS_ONLY is the deployment fact, and it alone
     # decides whether the header means anything.
-    assert ia.decide(
-        ingress_only=False, remote=GATEWAY, user_id="abc123") is None
+    assert ia.decide(ingress_only=False, remote=GATEWAY, user_id="abc123") is None
 
 
 def test_lan_request_to_the_addon_is_refused():
@@ -95,6 +101,7 @@ def test_blank_user_id_is_refused():
 
 # ── Shape ─────────────────────────────────────────────────────────────────────
 
+
 def test_the_gateway_address_is_not_configurable_from_a_header():
     # Documents intent: the constant is the only source of the address.
     assert GATEWAY == "172.30.32.2"
@@ -108,6 +115,7 @@ def test_whitespace_is_stripped_from_identity_fields():
 
 # ── Role assignment ───────────────────────────────────────────────────────────
 
+
 def test_first_home_assistant_user_becomes_admin():
     # Mirrors the standalone container, where whoever holds the bootstrap
     # token becomes the owner. This is what removes the bootstrap step.
@@ -115,16 +123,14 @@ def test_first_home_assistant_user_becomes_admin():
 
 
 def test_first_user_is_admin_regardless_of_the_configured_default():
-    assert ia.role_for(
-        existing_ha_admins=0, configured_default="readonly") == "admin"
+    assert ia.role_for(existing_ha_admins=0, configured_default="readonly") == "admin"
 
 
 def test_later_users_are_readonly():
     # HA's ingress view does not gate on admin (requires_auth=False;
     # panel_admin only hides the sidebar entry), so reaching the dashboard is
     # not evidence of being trusted with a root shell to every device.
-    assert ia.role_for(
-        existing_ha_admins=1, configured_default=None) == "readonly"
+    assert ia.role_for(existing_ha_admins=1, configured_default=None) == "readonly"
 
 
 def test_a_local_admin_does_not_deny_admin_to_the_first_ha_user():
@@ -140,8 +146,7 @@ def test_a_local_admin_does_not_deny_admin_to_the_first_ha_user():
     still presents zero here.
     """
     assert ia.role_for(existing_ha_admins=0, configured_default=None) == "admin"
-    assert ia.role_for(
-        existing_ha_admins=0, configured_default="readonly") == "admin"
+    assert ia.role_for(existing_ha_admins=0, configured_default="readonly") == "admin"
 
 
 def test_a_controller_with_no_reachable_admin_can_recover():
@@ -155,19 +160,19 @@ def test_a_controller_with_no_reachable_admin_can_recover():
 
 
 def test_an_operator_can_opt_into_auto_admin():
-    assert ia.role_for(
-        existing_ha_admins=3, configured_default="admin") == "admin"
+    assert ia.role_for(existing_ha_admins=3, configured_default="admin") == "admin"
 
 
 def test_an_unrecognised_configured_role_falls_back_to_readonly():
     # A typo in a config row must never be the thing that grants admin.
     for bad in ("Admin", "administrator", "root", "", "   ", "None"):
-        assert ia.role_for(
-            existing_ha_admins=1, configured_default=bad) == "readonly"
+        assert ia.role_for(existing_ha_admins=1, configured_default=bad) == "readonly"
 
 
 def test_role_for_only_ever_returns_a_known_role():
     for n in (0, 1, 99):
         for d in (None, "admin", "readonly", "nonsense"):
-            assert ia.role_for(
-                existing_ha_admins=n, configured_default=d) in ia.VALID_ROLES
+            assert (
+                ia.role_for(existing_ha_admins=n, configured_default=d)
+                in ia.VALID_ROLES
+            )
