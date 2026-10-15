@@ -50,8 +50,14 @@ class Client:
 
     async def start(self, store: str) -> dict:
         self.proc = await asyncio.create_subprocess_exec(
-            BIN, "-port", str(PORT), "-store", store, *self.args,
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            BIN,
+            "-port",
+            str(PORT),
+            "-store",
+            store,
+            *self.args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         self._reader = asyncio.create_task(self._read())
@@ -153,7 +159,12 @@ async def until(pred, timeout: float, what: str) -> None:
 
 def player_available(server: SendspinServer, cid: str) -> bool:
     c = server.get_client(cid)
-    return c is not None and c.is_connected and c.available and "player@v1" in c.active_role_ids
+    return (
+        c is not None
+        and c.is_connected
+        and c.available
+        and "player@v1" in c.active_role_ids
+    )
 
 
 def check_sync(periods, start_us, label: str, delay_us: int = 0) -> None:
@@ -161,32 +172,50 @@ def check_sync(periods, start_us, label: str, delay_us: int = 0) -> None:
     if len(errs) < 40:
         raise Fail(f"{label}: only {len(errs)} periods played")
     worst = max(abs(e) for e in errs)
-    print(f"   {label}: {len(errs)} periods, mean {statistics.mean(errs):+.0f}us, "
-          f"p99 |err| {sorted(abs(e) for e in errs)[int(len(errs) * 0.99)]:.0f}us, worst {worst:.0f}us")
+    print(
+        f"   {label}: {len(errs)} periods, mean {statistics.mean(errs):+.0f}us, "
+        f"p99 |err| {sorted(abs(e) for e in errs)[int(len(errs) * 0.99)]:.0f}us, worst {worst:.0f}us"
+    )
     if worst > 1000:
         raise Fail(f"{label}: sync error {worst:.0f}us exceeds the spec's 1ms floor")
 
 
 async def scenario_pair_and_play() -> None:
-    print("== pair by token, play, volume, delay, clear, HA takes over, reconnect paired")
+    print(
+        "== pair by token, play, volume, delay, clear, HA takes over, reconnect paired"
+    )
     store = InMemoryServerPairingStore()
-    server = SendspinServer(asyncio.get_running_loop(), Identity.generate(), "interop-server",
-                            pairing_store=store)
+    server = SendspinServer(
+        asyncio.get_running_loop(),
+        Identity.generate(),
+        "interop-server",
+        pairing_store=store,
+    )
     client = Client("-dacppm", "-560")
     ready = await client.start("/tmp/pair.json")
     cid = ready["clientId"]
     try:
         server.connect_to_client(URL)
-        await until(lambda: (c := server.get_client(cid)) is not None and c.is_connected, 10, "never connected")
+        await until(
+            lambda: (c := server.get_client(cid)) is not None and c.is_connected,
+            10,
+            "never connected",
+        )
         if player_available(server, cid):
             raise Fail("unpaired, unapproved client was given playback")
         token = decode_token(ready["token"])
         if token.client_id != cid:
             raise Fail("token names a different client")
-        await server.initiate_pairing(cid, PairingAttempt(PairMethod.PAIRING_PSK, pairing_psk=token.pairing_psk))
+        await server.initiate_pairing(
+            cid, PairingAttempt(PairMethod.PAIRING_PSK, pairing_psk=token.pairing_psk)
+        )
         await until(lambda: server.get_client(cid).is_paired, 10, "not paired")
         print("   paired by token")
-        await until(lambda: player_available(server, cid), 15, "paired player never became available")
+        await until(
+            lambda: player_available(server, cid),
+            15,
+            "paired player never became available",
+        )
         await client.wait("status", 5, lambda e: e.get("paired"))
         print("   client reports paired, clock synced")
 
@@ -194,8 +223,10 @@ async def scenario_pair_and_play() -> None:
         st, start_us = await stream(server, cid, 12, keep=True)
         await asyncio.sleep(1.1)  # a status tick, with audio still queued
         s = client.status()
-        print(f"   client: snaps {s['player']['snaps']} corrections {s['player']['corrections']} "
-              f"underruns {s['player']['underruns']} syncErr {s.get('syncErrUs')}us")
+        print(
+            f"   client: snaps {s['player']['snaps']} corrections {s['player']['corrections']} "
+            f"underruns {s['player']['underruns']} syncErr {s.get('syncErrUs')}us"
+        )
         if s["player"]["underruns"]:
             raise Fail("underrun on a local link")
         await asyncio.sleep(2.5)
@@ -226,15 +257,21 @@ async def scenario_pair_and_play() -> None:
         # The other direction: the Echo's own volume moves (a button, HA) and
         # the server hears it, so Music Assistant's slider follows.
         await client.command("volume 30")
-        await until(lambda: server.get_client(cid).role("player@v1").volume == 30, 5,
-                    "server never heard the device's volume change")
+        await until(
+            lambda: server.get_client(cid).role("player@v1").volume == 30,
+            5,
+            "server never heard the device's volume change",
+        )
         print("   device volume 30: server shows 30")
         # Back to 100: it persists, and without a device volume this harness
         # applies it as gain, which would scale the sawtooth the sync check
         # reads sample positions from.
         await client.command("volume 100")
-        await until(lambda: server.get_client(cid).role("player@v1").volume == 100, 5,
-                    "volume did not return to 100")
+        await until(
+            lambda: server.get_client(cid).role("player@v1").volume == 100,
+            5,
+            "volume did not return to 100",
+        )
 
         # stream/clear (a seek): the buffer empties and play resumes in sync.
         st.clear()
@@ -251,10 +288,16 @@ async def scenario_pair_and_play() -> None:
         # HA takes the music plane: the device goes unavailable and the
         # server stops streaming to it.
         await client.command("external on")
-        await until(lambda: not server.get_client(cid).available, 5, "server still sees the client available")
+        await until(
+            lambda: not server.get_client(cid).available,
+            5,
+            "server still sees the client available",
+        )
         print("   HA took over: client unavailable to the server")
         await client.command("external off")
-        await until(lambda: server.get_client(cid).available, 5, "client never came back")
+        await until(
+            lambda: server.get_client(cid).available, 5, "client never came back"
+        )
         st.stop()
 
         # The controller link drops and returns: the player says goodbye
@@ -262,15 +305,27 @@ async def scenario_pair_and_play() -> None:
         # itself — the firmware relies on it.
         await client.command("relink")
         await client.wait("relinked", 10)
-        await until(lambda: player_available(server, cid), 30, "server never redialled after a restart goodbye")
+        await until(
+            lambda: player_available(server, cid),
+            30,
+            "server never redialled after a restart goodbye",
+        )
         print("   player restarted (link down/up): server redialled on its own")
 
         # Reconnect: the long-term PSK must carry the session with no pairing.
         server.disconnect_from_client(URL)
-        await until(lambda: not server.get_client(cid).is_connected, 5, "did not disconnect")
+        await until(
+            lambda: not server.get_client(cid).is_connected, 5, "did not disconnect"
+        )
         server.connect_to_client(URL)
-        await until(lambda: player_available(server, cid), 15, "paired reconnect never became available")
-        await client.wait("status", 5, lambda e: e.get("paired") and e.get("state") != "listening")
+        await until(
+            lambda: player_available(server, cid),
+            15,
+            "paired reconnect never became available",
+        )
+        await client.wait(
+            "status", 5, lambda e: e.get("paired") and e.get("state") != "listening"
+        )
         print("   reconnected under the long-term PSK")
         n3 = len(client.events)
         _, start_us = await stream(server, cid, 5)
@@ -282,14 +337,22 @@ async def scenario_pair_and_play() -> None:
 
 async def scenario_unpaired() -> None:
     print("== unpaired access off: an approved-but-unpaired server is refused playback")
-    server = SendspinServer(asyncio.get_running_loop(), Identity.generate(), "interop-server",
-                            pairing_store=InMemoryServerPairingStore())
+    server = SendspinServer(
+        asyncio.get_running_loop(),
+        Identity.generate(),
+        "interop-server",
+        pairing_store=InMemoryServerPairingStore(),
+    )
     client = Client()
     ready = await client.start("/tmp/unpaired-off.json")
     cid = ready["clientId"]
     try:
         server.connect_to_client(URL)
-        await until(lambda: (c := server.get_client(cid)) is not None and c.is_connected, 10, "never connected")
+        await until(
+            lambda: (c := server.get_client(cid)) is not None and c.is_connected,
+            10,
+            "never connected",
+        )
         await server.trust_unpaired(cid)
         await asyncio.sleep(2)
         if player_available(server, cid):
@@ -300,16 +363,28 @@ async def scenario_unpaired() -> None:
         await server.close()
 
     print("== unpaired access on: approval alone is enough")
-    server = SendspinServer(asyncio.get_running_loop(), Identity.generate(), "interop-server",
-                            pairing_store=InMemoryServerPairingStore())
+    server = SendspinServer(
+        asyncio.get_running_loop(),
+        Identity.generate(),
+        "interop-server",
+        pairing_store=InMemoryServerPairingStore(),
+    )
     client = Client("-unpaired")
     ready = await client.start("/tmp/unpaired-on.json")
     cid = ready["clientId"]
     try:
         server.connect_to_client(URL)
-        await until(lambda: (c := server.get_client(cid)) is not None and c.is_connected, 10, "never connected")
+        await until(
+            lambda: (c := server.get_client(cid)) is not None and c.is_connected,
+            10,
+            "never connected",
+        )
         await server.trust_unpaired(cid)
-        await until(lambda: player_available(server, cid), 15, "approved unpaired client never available")
+        await until(
+            lambda: player_available(server, cid),
+            15,
+            "approved unpaired client never available",
+        )
         n0 = len(client.events)
         _, start_us = await stream(server, cid, 5)
         check_sync(client.periods(n0), start_us, "unpaired sync")

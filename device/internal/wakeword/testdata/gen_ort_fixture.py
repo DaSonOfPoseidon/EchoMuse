@@ -47,6 +47,7 @@ Format (little-endian):
       float32[76*32] embedding input, float32[96]    its output
       float32[16*96] classifier input, float32[1]    its output
 """
+
 import numpy as np, struct, sys, os
 
 OUT = sys.argv[1]
@@ -77,30 +78,44 @@ cls_in = cls.get_inputs()[0].name
 
 mel_out = []
 orig_mel = af.melspec_model_predict
+
+
 def spy_mel(x):
     o = orig_mel(x)
     mel_out.append((x.shape[1], np.squeeze(o[0]).astype(np.float32)))
     return o
+
+
 af.melspec_model_predict = spy_mel
 
 emb_out = []
 orig_emb = af.embedding_model_predict
+
+
 def spy_emb(x):
     o = orig_emb(x)
     emb_out.append(o.reshape(-1, 96))
     return o
+
+
 af.embedding_model_predict = spy_emb
 
 recs = []
 for i in range(0, len(audio), CH):
     before_mel, before_emb = len(mel_out), len(emb_out)
-    af._streaming_features(audio[i:i + CH])
+    af._streaming_features(audio[i : i + CH])
     feats = af.get_features(16)
     score = float(cls.run(None, {cls_in: feats.astype(np.float32)})[0].squeeze())
     new_mel, new_emb = mel_out[before_mel:], emb_out[before_emb:]
     assert len(new_mel) == 1 and len(new_emb) == 1, (len(new_mel), len(new_emb))
-    recs.append(dict(mel_in_len=new_mel[0][0], mel=new_mel[0][1],
-                     emb=new_emb[0].reshape(-1), score=score))
+    recs.append(
+        dict(
+            mel_in_len=new_mel[0][0],
+            mel=new_mel[0][1],
+            emb=new_emb[0].reshape(-1),
+            score=score,
+        )
+    )
 
 # Probe tensors: deterministic, wide-range, and in the distribution each model
 # expects -- mel values after the /10+2 transform sit around 0..4, embeddings

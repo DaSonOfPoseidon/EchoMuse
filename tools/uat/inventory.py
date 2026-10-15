@@ -33,9 +33,9 @@ def _element(src: str, start: int) -> str:
         elif c == "}":
             depth -= 1
         elif depth == 0 and src.startswith("/>", i):
-            return src[start:i + 2]
+            return src[start : i + 2]
         elif depth == 0 and c == ">" and i > start:
-            return src[start:i + 1]
+            return src[start : i + 1]
         i += 1
     return src[start:]
 
@@ -52,15 +52,19 @@ def controls(src: str | None = None) -> list[dict]:
     out = []
     for m in re.finditer(r"<(%s)\b" % "|".join(KINDS), src):
         el = _element(src, m.start())
-        label = re.search(r'label="([^"]+)"', el) or re.search(r"label=\{[^}]*?'([^']+)'", el)
+        label = re.search(r'label="([^"]+)"', el) or re.search(
+            r"label=\{[^}]*?'([^']+)'", el
+        )
         key = re.search(r"""\bset(?:Conf|Sys)?\(\s*['"](\w+)['"]""", el)
-        out.append({
-            "kind": m.group(1),
-            "label": label.group(1) if label else None,
-            "key": key.group(1) if key else None,
-            "line": src.count("\n", 0, m.start()) + 1,
-            "in": _enclosing_function(src, m.start()),
-        })
+        out.append(
+            {
+                "kind": m.group(1),
+                "label": label.group(1) if label else None,
+                "key": key.group(1) if key else None,
+                "line": src.count("\n", 0, m.start()) + 1,
+                "in": _enclosing_function(src, m.start()),
+            }
+        )
     return out
 
 
@@ -86,6 +90,8 @@ if __name__ == "__main__":
         json.dump({"controls": controls(), "actions": actions()}, sys.stdout, indent=1)
     else:
         for r in controls():
-            print(f"{r['line']:>6} {r['in']:<24} {r['kind']:<11} {str(r['key']):<22} {r['label']}")
+            print(
+                f"{r['line']:>6} {r['in']:<24} {r['kind']:<11} {str(r['key']):<22} {r['label']}"
+            )
         for a in actions():
             print(f"{a['line']:>6} {'action':<24} {a['method']:<11} {a['path']}")

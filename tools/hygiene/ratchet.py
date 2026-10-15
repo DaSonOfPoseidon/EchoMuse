@@ -29,17 +29,25 @@ BASELINE_DIR = pathlib.Path(__file__).resolve().parent / "baseline"
 # One pattern per tool's plain-text output; each yields (path, rule).
 FORMATS = {
     # internal/x/y.go:12:3: message (U1000)
-    "staticcheck": re.compile(r"^(?P<path>[^:\s]+\.go):\d+:\d+: .* \((?P<rule>[A-Z]+\d+)\)$"),
+    "staticcheck": re.compile(
+        r"^(?P<path>[^:\s]+\.go):\d+:\d+: .* \((?P<rule>[A-Z]+\d+)\)$"
+    ),
     # controller/em_x.py:12:3: BLE001 Do not catch blind exception: `Exception`
     "ruff": re.compile(r"^(?P<path>[^:\s]+):\d+:\d+: (?P<rule>[A-Z]+\d+)\b"),
     # controller/em_x.py:12: error: message  [arg-type]
-    "mypy": re.compile(r"^(?P<path>[^:\s]+):\d+(?::\d+)?: error: .*\[(?P<rule>[a-z-]+)\]$"),
+    "mypy": re.compile(
+        r"^(?P<path>[^:\s]+):\d+(?::\d+)?: error: .*\[(?P<rule>[a-z-]+)\]$"
+    ),
 }
 
 # Lines a tool prints that are neither a finding nor a failure.
 NOISE = {
-    "ruff": re.compile(r"^(Found \d+ errors?\.|All checks passed!|\[\*\] .*fixable.*|No fixes available.*)$"),
-    "mypy": re.compile(r"^(Found \d+ errors? in \d+ files? .*|Success: .*|.*: note: .*)$"),
+    "ruff": re.compile(
+        r"^(Found \d+ errors?\.|All checks passed!|\[\*\] .*fixable.*|No fixes available.*)$"
+    ),
+    "mypy": re.compile(
+        r"^(Found \d+ errors? in \d+ files? .*|Success: .*|.*: note: .*)$"
+    ),
 }
 
 Key = tuple[str, str]
@@ -98,7 +106,10 @@ def compare(
 
 def main(argv: list[str]) -> int:
     if "--" not in argv:
-        print("usage: ratchet.py <name> [--update] [--cwd DIR] -- <command...>", file=sys.stderr)
+        print(
+            "usage: ratchet.py <name> [--update] [--cwd DIR] -- <command...>",
+            file=sys.stderr,
+        )
         return 2
     split = argv.index("--")
     ap = argparse.ArgumentParser()
@@ -117,13 +128,17 @@ def main(argv: list[str]) -> int:
     found, unknown = parse(fmt, proc.stdout + proc.stderr)
     if unknown:
         print("\n".join(unknown))
-        print(f"::error::{args.name}: output that is not a finding -- the tool may have failed")
+        print(
+            f"::error::{args.name}: output that is not a finding -- the tool may have failed"
+        )
         return 1
     # Every tool here exits non-zero when it reports findings, so only an
     # exit with nothing reported is suspicious. A crash that printed nothing
     # would otherwise pass as a clean tree.
     if proc.returncode != 0 and not found:
-        print(f"::error::{args.name}: exited {proc.returncode} without reporting a finding")
+        print(
+            f"::error::{args.name}: exited {proc.returncode} without reporting a finding"
+        )
         return 1
 
     path = BASELINE_DIR / f"{args.name}.txt"
@@ -136,7 +151,9 @@ def main(argv: list[str]) -> int:
     if worse:
         print((proc.stdout + proc.stderr).rstrip())
         print("\nNew findings, by file and rule:\n  " + "\n  ".join(worse))
-        print(f"::error::{args.name}: new findings -- fix them; the baseline does not go up")
+        print(
+            f"::error::{args.name}: new findings -- fix them; the baseline does not go up"
+        )
         return 1
     if better:
         print("Fewer findings than the baseline records:\n  " + "\n  ".join(better))

@@ -18,6 +18,7 @@ What it answers, per channel:
     at 16kHz is ~21mm of sound, so on a 72mm array this is an ordering, not
     a position, and needs a clap at two opposite points to mean anything.
 """
+
 import math
 import struct
 import sys
@@ -25,7 +26,12 @@ import sys
 WIDTH = {"s16_le": 2, "s24_le": 4, "s24_3le": 3, "s32_le": 4}
 # 16 samples at 16kHz is ~34cm of sound: several times any Echo's mic array.
 MAX_SPREAD = 16
-FULL = {"s16_le": 32768.0, "s24_le": 8388608.0, "s24_3le": 8388608.0, "s32_le": 2147483648.0}
+FULL = {
+    "s16_le": 32768.0,
+    "s24_le": 8388608.0,
+    "s24_3le": 8388608.0,
+    "s32_le": 2147483648.0,
+}
 
 
 def decode(data, channels, fmt):
@@ -75,7 +81,12 @@ def main():
     if len(sys.argv) < 5:
         print(__doc__)
         sys.exit(2)
-    path, channels, fmt, rate = sys.argv[1], int(sys.argv[2]), sys.argv[3], int(sys.argv[4])
+    path, channels, fmt, rate = (
+        sys.argv[1],
+        int(sys.argv[2]),
+        sys.argv[3],
+        int(sys.argv[4]),
+    )
     claps = [float(t) for t in sys.argv[5:]]
     full = FULL[fmt]
     chans = decode(open(path, "rb").read(), channels, fmt)
@@ -92,18 +103,23 @@ def main():
             continue
         q = xs[:quiet_end]
         dc = sum(q) / len(q)
-        print(f"{c:>2}  no      {dbfs(rms(q), full):>14.1f}  {dbfs(abs(dc), full):>7.1f}  "
-              f"{dbfs(max(abs(v) for v in xs), full):>9.1f}")
+        print(
+            f"{c:>2}  no      {dbfs(rms(q), full):>14.1f}  {dbfs(abs(dc), full):>7.1f}  "
+            f"{dbfs(max(abs(v) for v in xs), full):>9.1f}"
+        )
 
     live = [c for c in range(channels) if c not in silent]
     step = max(1, n // 32000)  # correlation on a decimated copy keeps this quick
     dup = []
     for i, a in enumerate(live):
-        for b in live[i + 1:]:
+        for b in live[i + 1 :]:
             r = corr(chans[a][::step], chans[b][::step])
             if r > 0.999:
                 dup.append((a, b, r))
-    print("\nduplicates (r > 0.999):", ", ".join(f"ch{a}=ch{b} ({r:.4f})" for a, b, r in dup) or "none")
+    print(
+        "\nduplicates (r > 0.999):",
+        ", ".join(f"ch{a}=ch{b} ({r:.4f})" for a, b, r in dup) or "none",
+    )
 
     for t in claps:
         s, e = int(t * rate), min(n, int((t + 1.5) * rate))
@@ -136,7 +152,9 @@ def main():
         # window caught ordinary room noise, and the order above means nothing.
         spread = heard[-1][0] - t0
         if missed or spread > MAX_SPREAD:
-            print(f"  NOT A CLEAN CLAP (spread {spread} samples, {len(missed)} missed) — ignore this order")
+            print(
+                f"  NOT A CLEAN CLAP (spread {spread} samples, {len(missed)} missed) — ignore this order"
+            )
 
 
 if __name__ == "__main__":

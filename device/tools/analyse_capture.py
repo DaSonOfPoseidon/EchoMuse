@@ -27,7 +27,6 @@ import sys
 import argparse
 import numpy as np
 
-
 N_CHANNELS = 9
 SAMPLE_RATE = 16000
 BYTES_PER_SAMPLE = 3  # S24_3LE
@@ -61,7 +60,7 @@ def decode_s24_3le(raw: bytes, n_channels: int = N_CHANNELS) -> np.ndarray:
 
 
 def rms(signal: np.ndarray) -> float:
-    return float(np.sqrt(np.mean(signal ** 2)))
+    return float(np.sqrt(np.mean(signal**2)))
 
 
 def rms_db(signal: np.ndarray) -> float:
@@ -88,8 +87,9 @@ def analyse(raw: bytes, label: str = ""):
     print(f"  Bytes:   {len(raw)}")
     print(f"{'='*60}\n")
 
-    rms_values = [(ch, rms(channels[ch]), rms_db(channels[ch]))
-                  for ch in range(N_CHANNELS)]
+    rms_values = [
+        (ch, rms(channels[ch]), rms_db(channels[ch])) for ch in range(N_CHANNELS)
+    ]
 
     # Sort by RMS descending for the ranking
     ranked = sorted(rms_values, key=lambda x: -x[1])
@@ -101,11 +101,15 @@ def analyse(raw: bytes, label: str = ""):
     for ch, r, db in ranked:
         rel = r / max_rms
         label_str = " ← loudest" if ch == ranked[0][0] else ""
-        print(f"  {ch:>3}  {r:>8.5f}  {db:>7.1f}  {rel:>8.3f}  "
-              f"{bar(r, max_rms)}{label_str}")
+        print(
+            f"  {ch:>3}  {r:>8.5f}  {db:>7.1f}  {rel:>8.3f}  "
+            f"{bar(r, max_rms)}{label_str}"
+        )
 
-    print(f"\n  Loudest channel: {ranked[0][0]}  "
-          f"(RMS {ranked[0][1]:.5f}, {ranked[0][2]:.1f} dBFS)")
+    print(
+        f"\n  Loudest channel: {ranked[0][0]}  "
+        f"(RMS {ranked[0][1]:.5f}, {ranked[0][2]:.1f} dBFS)"
+    )
 
     # Also show original channel order for easy cross-referencing
     print("\n  Channel order (0–8):")
@@ -136,14 +140,18 @@ def plot_channels(raw: bytes, title: str = ""):
 
     for ch in range(N_CHANNELS):
         ax = axes[ch]
-        ax.plot(t, channels[ch], linewidth=0.3, color='steelblue')
-        ax.set_ylabel(f"Ch {ch}\n{rms_db(channels[ch]):.1f}dB",
-                      fontsize=8, rotation=0, labelpad=40)
+        ax.plot(t, channels[ch], linewidth=0.3, color="steelblue")
+        ax.set_ylabel(
+            f"Ch {ch}\n{rms_db(channels[ch]):.1f}dB",
+            fontsize=8,
+            rotation=0,
+            labelpad=40,
+        )
         ax.set_ylim(-1.0, 1.0)
-        ax.axhline(0, color='grey', linewidth=0.3)
+        ax.axhline(0, color="grey", linewidth=0.3)
         # Highlight loudest channel
         if rms_vals[ch] == max_rms:
-            ax.set_facecolor('#fff8e1')
+            ax.set_facecolor("#fff8e1")
 
     axes[-1].set_xlabel("Time (s)")
     plt.tight_layout()
@@ -155,10 +163,12 @@ def main():
         description="Analyse raw 9-channel S24_3LE mic capture from biscuit"
     )
     parser.add_argument("capture_file", help="Raw capture file (capture.raw)")
-    parser.add_argument("--plot", action="store_true",
-                        help="Plot all 9 channels (requires matplotlib)")
-    parser.add_argument("--label", default="",
-                        help="Label for this capture (e.g. '0deg_action_button')")
+    parser.add_argument(
+        "--plot", action="store_true", help="Plot all 9 channels (requires matplotlib)"
+    )
+    parser.add_argument(
+        "--label", default="", help="Label for this capture (e.g. '0deg_action_button')"
+    )
     args = parser.parse_args()
 
     try:

@@ -22,7 +22,11 @@ drift = 40e-6  # server clock 40ppm fast
 for i in range(300):
     # Mostly a clean LAN, with WiFi-shaped spikes and one clock step.
     t += rng.randint(150_000, 3_100_000)
-    rtt = rng.randint(1_500, 9_000) if rng.random() > 0.08 else rng.randint(50_000, 900_000)
+    rtt = (
+        rng.randint(1_500, 9_000)
+        if rng.random() > 0.08
+        else rng.randint(50_000, 900_000)
+    )
     if i == 220:
         true_offset += 40_000  # a server clock adjustment
     off = true_offset + drift * t
@@ -32,13 +36,17 @@ for i in range(300):
     f.update(measurement, max_error, t)
     probes = [t + rng.randint(0, 5_000_000) for _ in range(3)]
     server_probes = [p + round(off) for p in probes]
-    out.append({
-        "m": measurement, "e": max_error, "t": t,
-        "sync": f.is_synchronized,
-        "err": f.error if f.is_synchronized else None,
-        "probes": probes,
-        "server": [f.compute_server_time(p) for p in probes],
-        "server_probes": server_probes,
-        "client": [f.compute_client_time(p) for p in server_probes],
-    })
+    out.append(
+        {
+            "m": measurement,
+            "e": max_error,
+            "t": t,
+            "sync": f.is_synchronized,
+            "err": f.error if f.is_synchronized else None,
+            "probes": probes,
+            "server": [f.compute_server_time(p) for p in probes],
+            "server_probes": server_probes,
+            "client": [f.compute_client_time(p) for p in server_probes],
+        }
+    )
 print(json.dumps(out))

@@ -32,11 +32,13 @@ def decode_s24_3le(raw: bytes) -> np.ndarray:
     """Raw interleaved S24_3LE -> float array [channels, frames], scaled ±1."""
     frame = N_CHANNELS * BYTES_PER_SAMPLE
     n = len(raw) // frame
-    b = np.frombuffer(raw[:n * frame], dtype=np.uint8).reshape(n, N_CHANNELS, 3)
+    b = np.frombuffer(raw[: n * frame], dtype=np.uint8).reshape(n, N_CHANNELS, 3)
     # little-endian 24-bit, sign-extended via the top byte
-    v = (b[:, :, 0].astype(np.int32)
-         | (b[:, :, 1].astype(np.int32) << 8)
-         | (b[:, :, 2].astype(np.int8).astype(np.int32) << 16))
+    v = (
+        b[:, :, 0].astype(np.int32)
+        | (b[:, :, 1].astype(np.int32) << 8)
+        | (b[:, :, 2].astype(np.int8).astype(np.int32) << 16)
+    )
     return (v.astype(np.float32) / (1 << 23)).T
 
 
@@ -88,8 +90,10 @@ def main() -> int:
     ch = decode_s24_3le(open(args.capture, "rb").read())
     frames = ch.shape[1]
     print(f"\n{'=' * 62}")
-    print(f"  {args.label or args.capture}   {frames} frames "
-          f"({frames * 1000 // RATE}ms)")
+    print(
+        f"  {args.label or args.capture}   {frames} frames "
+        f"({frames * 1000 // RATE}ms)"
+    )
     print(f"{'=' * 62}")
 
     rms = [float(np.sqrt(np.mean(ch[i] ** 2))) for i in range(N_CHANNELS)]
@@ -117,8 +121,11 @@ def main() -> int:
         if all(np.any(ch[c]) for c in REF_CHANNELS):
             d = ch[REF_CHANNELS[0]] - ch[REF_CHANNELS[1]]
             same = not np.any(d)
-            verdict = ("BIT-IDENTICAL — duplicates, not a stereo pair" if same
-                       else "DIFFERENT — a genuine stereo pair")
+            verdict = (
+                "BIT-IDENTICAL — duplicates, not a stereo pair"
+                if same
+                else "DIFFERENT — a genuine stereo pair"
+            )
             print(f"\n    ch7 and ch8 are {verdict}")
             if not same:
                 print(f"      difference RMS {float(np.sqrt(np.mean(d ** 2))):.6f}")
@@ -133,12 +140,16 @@ def main() -> int:
             if lag is None:
                 print(f"    ch{c}: no signal")
                 continue
-            print(f"    ch{MIC_CENTRE} behind ch{c}: {lag:+d} samples "
-                  f"= {lag * 1000.0 / RATE:+.2f} ms   (correlation {peak:+.3f})")
-        print("\n    A correlation below ~0.1 means the lag is not to be "
-              "trusted —\n    read it with a broadband signal (the noise "
-              "capture), never a tone:\n    a tone's lag is only known modulo "
-              "its period.")
+            print(
+                f"    ch{MIC_CENTRE} behind ch{c}: {lag:+d} samples "
+                f"= {lag * 1000.0 / RATE:+.2f} ms   (correlation {peak:+.3f})"
+            )
+        print(
+            "\n    A correlation below ~0.1 means the lag is not to be "
+            "trusted —\n    read it with a broadband signal (the noise "
+            "capture), never a tone:\n    a tone's lag is only known modulo "
+            "its period."
+        )
 
     return 0
 

@@ -33,8 +33,8 @@ import numpy as np
 
 N_CHANNELS = 9
 RATE = 16000
-REF = 7          # left echo reference
-MIC = 6          # centre mic — omnidirectional, the sane default
+REF = 7  # left echo reference
+MIC = 6  # centre mic — omnidirectional, the sane default
 # Third-octave centres across the band a 1.6" driver can be asked about.
 #
 # Stops at 6300 deliberately. The next band up is centred 8000, and even 6300's
@@ -42,17 +42,41 @@ MIC = 6          # centre mic — omnidirectional, the sane default
 # the sweep and the 8kHz Nyquist of a 16kHz capture, so it integrates noise and
 # reads as a large fictitious boost. It did exactly that in the self-test:
 # +18.2dB in a synthetic capture with nothing planted above +6.
-BANDS = [50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000,
-         1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300]
+BANDS = [
+    50,
+    63,
+    80,
+    100,
+    125,
+    160,
+    200,
+    250,
+    315,
+    400,
+    500,
+    630,
+    800,
+    1000,
+    1250,
+    1600,
+    2000,
+    2500,
+    3150,
+    4000,
+    5000,
+    6300,
+]
 
 
 def decode(raw: bytes) -> np.ndarray:
     frame = N_CHANNELS * 3
     n = len(raw) // frame
-    b = np.frombuffer(raw[:n * frame], dtype=np.uint8).reshape(n, N_CHANNELS, 3)
-    v = (b[:, :, 0].astype(np.int32)
-         | (b[:, :, 1].astype(np.int32) << 8)
-         | (b[:, :, 2].astype(np.int8).astype(np.int32) << 16))
+    b = np.frombuffer(raw[: n * frame], dtype=np.uint8).reshape(n, N_CHANNELS, 3)
+    v = (
+        b[:, :, 0].astype(np.int32)
+        | (b[:, :, 1].astype(np.int32) << 8)
+        | (b[:, :, 2].astype(np.int8).astype(np.int32) << 16)
+    )
     return (v.astype(np.float32) / (1 << 23)).T
 
 
@@ -137,8 +161,10 @@ def main() -> int:
 
     if b and deltas:
         d = np.array(deltas)
-        print(f"\n  Repeatability: mean |delta| {np.abs(d).mean():.2f} dB, "
-              f"max {np.abs(d).max():.2f} dB")
+        print(
+            f"\n  Repeatability: mean |delta| {np.abs(d).mean():.2f} dB, "
+            f"max {np.abs(d).max():.2f} dB"
+        )
         if np.abs(d).max() > 3.0:
             print("  >>> The two sweeps disagree by more than 3dB somewhere.")
             print("  >>> Nothing downstream of this measurement is worth")

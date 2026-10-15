@@ -35,6 +35,7 @@ in /sys but gets no /dev entries, so create them with
 reading each minor from /sys/class/tty/ttyACM*/dev — it moves between
 re-enumerations. --list does this for you.
 """
+
 import argparse
 import os
 import random
@@ -117,8 +118,10 @@ class Console:
                     continue
             except BlockingIOError:
                 pass
-            if (buf.rstrip(" ").endswith("password:")
-                    and time.time() - quiet_since > 6.5):
+            if (
+                buf.rstrip(" ").endswith("password:")
+                and time.time() - quiet_since > 6.5
+            ):
                 return False
             time.sleep(0.05)
         return False
@@ -147,8 +150,10 @@ class Console:
         tag = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
         self.buf = ""
         # Split so neither marker can appear in the shell's echo of this line.
-        self.send(f'__a=__EM; __b={tag}S__; echo "$__a$__b"; {cmd}; '
-                  f'__b={tag}__; echo "$__a$__b"')
+        self.send(
+            f'__a=__EM; __b={tag}S__; echo "$__a$__b"; {cmd}; '
+            f'__b={tag}__; echo "$__a$__b"'
+        )
         start, end = f"__EM{tag}S__", f"__EM{tag}__"
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -163,7 +168,7 @@ class Console:
                 out = self.buf[:i]
                 j = out.rfind(start)
                 if j >= 0:
-                    out = out[j + len(start):]
+                    out = out[j + len(start) :]
                 return out.lstrip("\r\n")
         raise TimeoutError(f"no answer to {cmd!r}; buffer={self.buf[-300:]!r}")
 
@@ -184,11 +189,10 @@ class Console:
                 time.sleep(0.05)
             i = self.buf.find(needle)
             if i >= 0:
-                out = self.buf[:i + len(needle)]
-                self.buf = self.buf[i + len(needle):]
+                out = self.buf[: i + len(needle)]
+                self.buf = self.buf[i + len(needle) :]
                 return out
-        raise TimeoutError(
-            f"never saw {needle!r}; buffer={self.buf[-400:]!r}")
+        raise TimeoutError(f"never saw {needle!r}; buffer={self.buf[-400:]!r}")
 
     def close(self):
         os.close(self.fd)
@@ -202,6 +206,7 @@ def list_consoles(make_nodes=True):
     other (see the Lounge/Office swap experiment).
     """
     import glob
+
     found = []
     for d in sorted(glob.glob("/sys/class/tty/ttyACM*")):
         name = os.path.basename(d)
@@ -222,20 +227,22 @@ def list_consoles(make_nodes=True):
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(
-        description="Drive an emOS USB serial console.")
-    ap.add_argument("port", nargs="?",
-                    help="/dev/ttyACM*, or a device serial to look up")
+    ap = argparse.ArgumentParser(description="Drive an emOS USB serial console.")
+    ap.add_argument(
+        "port", nargs="?", help="/dev/ttyACM*, or a device serial to look up"
+    )
     # REMAINDER, so a command containing spaces, pipes, quotes or a leading
     # dash reaches the device verbatim instead of being parsed as options.
     # Put every --option BEFORE the port.
     ap.add_argument("cmds", nargs=argparse.REMAINDER)
-    ap.add_argument("--password", default=None,
-                    help="console password, if one is set")
+    ap.add_argument("--password", default=None, help="console password, if one is set")
     ap.add_argument("--timeout", type=int, default=20)
-    ap.add_argument("--list", action="store_true",
-                    help="list attached consoles by serial, creating the "
-                         "/dev nodes if they are missing")
+    ap.add_argument(
+        "--list",
+        action="store_true",
+        help="list attached consoles by serial, creating the "
+        "/dev nodes if they are missing",
+    )
     args = ap.parse_args()
 
     if args.list or not args.port:

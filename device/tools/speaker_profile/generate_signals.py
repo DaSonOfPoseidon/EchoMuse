@@ -53,8 +53,13 @@ def write_wav(path: Path, frames) -> None:
             f.write(struct.pack("<h", max(-32768, min(32767, int(v)))))
 
 
-def tone(seconds: float = 6.0, hz: float = 440.0, amp: int = 20000,
-         left: bool = True, right: bool = True):
+def tone(
+    seconds: float = 6.0,
+    hz: float = 440.0,
+    amp: int = 20000,
+    left: bool = True,
+    right: bool = True,
+):
     out = []
     for i in range(int(RATE * seconds)):
         v = amp * math.sin(2 * math.pi * hz * i / RATE)
@@ -63,8 +68,14 @@ def tone(seconds: float = 6.0, hz: float = 440.0, amp: int = 20000,
     return out
 
 
-def log_sweep(f0: float = 40.0, f1: float = 7500.0, seconds: float = 10.0,
-              amp: int = 12000, fade: float = 0.05, tail: float = 1.0):
+def log_sweep(
+    f0: float = 40.0,
+    f1: float = 7500.0,
+    seconds: float = 10.0,
+    amp: int = 12000,
+    fade: float = 0.05,
+    tail: float = 1.0,
+):
     n = int(RATE * seconds)
     k = seconds * f0 / math.log(f1 / f0)
     rate_of_change = math.log(f1 / f0) / seconds
@@ -78,8 +89,7 @@ def log_sweep(f0: float = 40.0, f1: float = 7500.0, seconds: float = 10.0,
             env = 0.5 * (1 - math.cos(math.pi * t / fade))
         elif t > seconds - fade:
             env = 0.5 * (1 - math.cos(math.pi * (seconds - t) / fade))
-        v = amp * env * math.sin(
-            2 * math.pi * k * (math.exp(rate_of_change * t) - 1))
+        v = amp * env * math.sin(2 * math.pi * k * (math.exp(rate_of_change * t) - 1))
         out.extend([v, v])
     # Silence so the response tail is captured rather than wrapping round.
     out.extend([0, 0] * int(RATE * tail))

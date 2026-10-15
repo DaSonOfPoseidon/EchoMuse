@@ -25,11 +25,19 @@ TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]
 
 def scan(page) -> list[dict]:
     page.add_script_tag(url=AXE)
-    res = page.evaluate("t => axe.run(document, {runOnly: {type: 'tag', values: t}})", TAGS)
-    return [{"id": v["id"], "impact": v["impact"], "help": v["help"],
-             "nodes": len(v["nodes"]),
-             "example": v["nodes"][0]["target"] if v["nodes"] else None}
-            for v in res["violations"]]
+    res = page.evaluate(
+        "t => axe.run(document, {runOnly: {type: 'tag', values: t}})", TAGS
+    )
+    return [
+        {
+            "id": v["id"],
+            "impact": v["impact"],
+            "help": v["help"],
+            "nodes": len(v["nodes"]),
+            "example": v["nodes"][0]["target"] if v["nodes"] else None,
+        }
+        for v in res["violations"]
+    ]
 
 
 def run(out: str) -> dict:
@@ -40,8 +48,10 @@ def run(out: str) -> dict:
         p = b.new_page(viewport={"width": 1400, "height": 1000})
         p.goto(rig.API + "/")
         views["login"] = scan(p)
-        p.fill("#li-user", st["username"]); p.fill("#li-pass", st["password"])
-        p.click("#li-btn"); p.wait_for_url("**/dashboard*", timeout=20000)
+        p.fill("#li-user", st["username"])
+        p.fill("#li-pass", st["password"])
+        p.click("#li-btn")
+        p.wait_for_url("**/dashboard*", timeout=20000)
         p.wait_for_timeout(1500)
         home = p.url
         views["dashboard"] = scan(p)
@@ -57,19 +67,32 @@ def run(out: str) -> dict:
                     p.wait_for_timeout(800)
                     views[f"device/{short}/{tab}"] = scan(p)
                 except Exception as e:
-                    views[f"device/{short}/{tab}"] = [{"id": "uat-error", "help": str(e)[:200]}]
+                    views[f"device/{short}/{tab}"] = [
+                        {"id": "uat-error", "help": str(e)[:200]}
+                    ]
             p.keyboard.press("Escape")
-            p.goto(home); p.wait_for_timeout(1500)
+            p.goto(home)
+            p.wait_for_timeout(1500)
         p.get_by_role("button", name="Settings").click()
         for tab in ("Config", "System", "Users", "Account", "Support"):
             p.get_by_role("button", name=tab, exact=True).click()
             p.wait_for_timeout(600)
             views[f"settings/{tab.lower()}"] = scan(p)
-    json.dump({"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-               "image": st.get("image"), "tags": TAGS, "views": views},
-              open(out, "w"), indent=1)
+    json.dump(
+        {
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "image": st.get("image"),
+            "tags": TAGS,
+            "views": views,
+        },
+        open(out, "w"),
+        indent=1,
+    )
     for v, issues in views.items():
-        print(f"{v:<20} " + (", ".join(f"{i['id']}({i.get('nodes','?')})" for i in issues) or "clean"))
+        print(
+            f"{v:<20} "
+            + (", ".join(f"{i['id']}({i.get('nodes','?')})" for i in issues) or "clean")
+        )
     return views
 
 

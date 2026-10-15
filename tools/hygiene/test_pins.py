@@ -43,8 +43,12 @@ def test_every_hook_tool_is_pinned_the_same_in_ci():
         if name in ("numpy", "scipy"):
             # Not a lint tool: CI takes these from controller/requirements.txt.
             continue
-        assert name in ci, f"{name} is pinned in .pre-commit-config.yaml and installed nowhere in ci.yml"
-        assert ci[name] == {version}, f"{name}: pre-commit {version}, ci.yml {sorted(ci[name])}"
+        assert (
+            name in ci
+        ), f"{name} is pinned in .pre-commit-config.yaml and installed nowhere in ci.yml"
+        assert ci[name] == {
+            version
+        }, f"{name}: pre-commit {version}, ci.yml {sorted(ci[name])}"
 
 
 def test_numpy_matches_the_controller_pin():

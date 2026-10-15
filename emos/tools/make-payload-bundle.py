@@ -13,6 +13,7 @@ Imported by path because emos/ sits outside the controller package — the same
 trick controller/tests/test_emos_build.py uses in the other direction to load
 emos/mkboot.py.
 """
+
 import importlib.util
 import pathlib
 import sys
@@ -25,10 +26,15 @@ def main(argv):
     version, out = argv[1], pathlib.Path(argv[2])
     paths = [pathlib.Path(p) for p in argv[3:]]
 
-    packer = pathlib.Path(__file__).resolve().parents[2] / "controller" / "em_emos_build.py"
+    packer = (
+        pathlib.Path(__file__).resolve().parents[2] / "controller" / "em_emos_build.py"
+    )
     if not packer.is_file():
-        print(f"cannot find the packer at {packer} — run this from a full "
-              f"checkout rather than a copy of emos/ on its own", file=sys.stderr)
+        print(
+            f"cannot find the packer at {packer} — run this from a full "
+            f"checkout rather than a copy of emos/ on its own",
+            file=sys.stderr,
+        )
         return 1
     spec = importlib.util.spec_from_file_location("_eb", packer)
     eb = importlib.util.module_from_spec(spec)

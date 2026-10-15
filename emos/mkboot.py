@@ -20,6 +20,7 @@ The DTBs are carried over verbatim from the reference image. LK selects among
 the three by board revision, and reproducing that selection ourselves is work
 with no upside for a first boot test.
 """
+
 import hashlib
 import struct
 import os
@@ -51,12 +52,14 @@ def mtk_wrap(payload: bytes, name: bytes, header: bytes = b"") -> bytes:
     if header:
         if len(header) != 0x200:
             raise SystemExit(
-                f"the reference kernel header is {len(header)} bytes, expected 512")
+                f"the reference kernel header is {len(header)} bytes, expected 512"
+            )
         magic, size = struct.unpack("<II", header[:8])
         if magic != MTK_MAGIC or size != len(payload):
             raise SystemExit(
                 "the reference kernel header does not describe its own payload "
-                f"(size says {size}, payload is {len(payload)} bytes)")
+                f"(size says {size}, payload is {len(payload)} bytes)"
+            )
         return header + payload
     hdr = struct.pack("<II", MTK_MAGIC, len(payload))
     hdr += name.ljust(32, b"\0")
@@ -76,7 +79,7 @@ def split_reference(ref: bytes):
     ksz, kaddr, rsz, raddr, ssz, saddr, tags, psz, hdrv, osv = f
     if psz != PAGE:
         raise SystemExit(f"unexpected page size {psz}")
-    kernel = ref[PAGE:PAGE + ksz]
+    kernel = ref[PAGE : PAGE + ksz]
     if struct.unpack("<I", kernel[:4])[0] != MTK_MAGIC:
         raise SystemExit("reference kernel is not MTK-wrapped as expected")
     payload = kernel[0x200:]
@@ -84,10 +87,16 @@ def split_reference(ref: bytes):
     i = payload.find(b"\xd0\x0d\xfe\xed")
     if i < 0:
         raise SystemExit("no DTB found in reference kernel payload")
-    return payload[i:], dict(mtkhdr=kernel[:0x200],
-                             kaddr=kaddr, raddr=raddr, saddr=saddr,
-                             tags=tags, hdrv=hdrv, osv=osv,
-                             cmdline=ref[64:64 + 512].rstrip(b"\0"))
+    return payload[i:], dict(
+        mtkhdr=kernel[:0x200],
+        kaddr=kaddr,
+        raddr=raddr,
+        saddr=saddr,
+        tags=tags,
+        hdrv=hdrv,
+        osv=osv,
+        cmdline=ref[64 : 64 + 512].rstrip(b"\0"),
+    )
 
 
 # Point ramoops at the region the VENDOR device tree already reserves:
@@ -180,20 +189,32 @@ def main():
         if not (sys_part.isdigit() and 1 <= int(sys_part) <= 127):
             raise SystemExit(
                 f"EMOS_SYSTEM_PART must be an mmcblk0 partition number "
-                f"(1-127), not {sys_part!r}")
-        cmdline = stamp_cmdline_key(cmdline, SYSTEM_CMDLINE_KEY,
-                                    f"/dev/block/mmcblk0p{int(sys_part)}")
+                f"(1-127), not {sys_part!r}"
+            )
+        cmdline = stamp_cmdline_key(
+            cmdline, SYSTEM_CMDLINE_KEY, f"/dev/block/mmcblk0p{int(sys_part)}"
+        )
     if len(cmdline) > 511:
         raise SystemExit(f"cmdline too long for the 512-byte field: {len(cmdline)}")
 
     kernel = mtk_wrap(zimage + dtbs, b"KERNEL", hf.get("mtkhdr", b""))
 
     hdr = b"ANDROID!"
-    hdr += struct.pack("<10I", len(kernel), hf["kaddr"],
-                       len(ramdisk), hf["raddr"],
-                       0, hf["saddr"], hf["tags"], PAGE, hf["hdrv"], hf["osv"])
-    hdr += b"\0" * 16                       # product name, empty in the vendor image
-    hdr += cmdline.ljust(512, b"\0")        # device cmdline + our ramoops params
+    hdr += struct.pack(
+        "<10I",
+        len(kernel),
+        hf["kaddr"],
+        len(ramdisk),
+        hf["raddr"],
+        0,
+        hf["saddr"],
+        hf["tags"],
+        PAGE,
+        hf["hdrv"],
+        hf["osv"],
+    )
+    hdr += b"\0" * 16  # product name, empty in the vendor image
+    hdr += cmdline.ljust(512, b"\0")  # device cmdline + our ramoops params
     # The Android image id: SHA1 over each region followed by its length, in
     # kernel/ramdisk/second order. Stock carries a real one and reproducing it
     # is free, so there is no reason to ship zeroes and find out the hard way
@@ -203,13 +224,15 @@ def main():
         digest.update(region)
         digest.update(struct.pack("<I", size))
     hdr += digest.digest().ljust(32, b"\0")
-    hdr += b"\0" * 1024                     # extra cmdline
+    hdr += b"\0" * 1024  # extra cmdline
 
     img = pad(hdr) + pad(kernel) + pad(ramdisk)
     open(out_p, "wb").write(img)
 
     print(f"reference : {ref_p} ({len(ref)} bytes)")
-    print(f"  dtb               : {dtb_p or 'carried over from reference'} ({len(dtbs)} bytes)")
+    print(
+        f"  dtb               : {dtb_p or 'carried over from reference'} ({len(dtbs)} bytes)"
+    )
     print(f"  kernel load addr  : 0x{hf['kaddr']:08x}")
     print(f"  ramdisk addr      : 0x{hf['raddr']:08x}")
     print(f"  cmdline           : {cmdline.decode(errors='replace')}")

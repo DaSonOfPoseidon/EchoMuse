@@ -50,6 +50,7 @@ BACKUP = f"{DEVICE_ETC}/uat-backup"
 
 # ─── Controller API ──────────────────────────────────────────────────────────
 
+
 def _state() -> dict:
     p = STATE / "state.json"
     return json.loads(p.read_text()) if p.exists() else {}
@@ -65,17 +66,23 @@ def _save_state(**kw) -> None:
 def api(method: str, path: str, body: dict | None = None, token: str | None = None):
     token = token or _state().get("token")
     req = urllib.request.Request(
-        API + path, method=method,
+        API + path,
+        method=method,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Content-Type": "application/json",
-                 **({"Authorization": f"Bearer {token}"} if token else {})})
+        headers={
+            "Content-Type": "application/json",
+            **({"Authorization": f"Bearer {token}"} if token else {}),
+        },
+    )
     with urllib.request.urlopen(req, timeout=30) as r:
         raw = r.read()
     return json.loads(raw) if raw else None
 
 
 def device(serial: str) -> dict | None:
-    return next((d for d in api("GET", "/api/devices") if d["device_id"] == serial), None)
+    return next(
+        (d for d in api("GET", "/api/devices") if d["device_id"] == serial), None
+    )
 
 
 def wait_for(what: str, fn, timeout: float = 90, every: float = 2):
@@ -93,10 +100,12 @@ def wait_for(what: str, fn, timeout: float = 90, every: float = 2):
 
 # ─── Echo over USB ───────────────────────────────────────────────────────────
 
+
 def adb_serials() -> set[str]:
     try:
-        out = subprocess.run(["adb", "devices"], capture_output=True, text=True,
-                             timeout=10).stdout
+        out = subprocess.run(
+            ["adb", "devices"], capture_output=True, text=True, timeout=10
+        ).stdout
     except (OSError, subprocess.TimeoutExpired):
         return set()
     return {l.split()[0] for l in out.splitlines()[1:] if l.strip().endswith("device")}
@@ -117,6 +126,7 @@ class AdbEcho:
     first on PATH, which also makes them the same commands the emOS console
     runs.
     """
+
     base = "fireos"
     BUSYBOX = "/data/adb/magisk/busybox"
     APPLETS = "/data/local/tmp/uat-bb"
@@ -124,18 +134,28 @@ class AdbEcho:
 
     def __init__(self, serial: str):
         self.serial = serial
-        self._sh(f"mkdir -p {self.APPLETS} && {self.BUSYBOX} --install -s {self.APPLETS}")
+        self._sh(
+            f"mkdir -p {self.APPLETS} && {self.BUSYBOX} --install -s {self.APPLETS}"
+        )
 
     def _sh(self, body: str, timeout: int = 20) -> str:
         with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
             f.write(body + "\n")
         try:
-            subprocess.run(["adb", "-s", self.serial, "push", f.name, self.SCRIPT],
-                           capture_output=True, check=True, timeout=timeout)
+            subprocess.run(
+                ["adb", "-s", self.serial, "push", f.name, self.SCRIPT],
+                capture_output=True,
+                check=True,
+                timeout=timeout,
+            )
         finally:
             os.unlink(f.name)
-        r = subprocess.run(["adb", "-s", self.serial, "shell", f"su -c 'sh {self.SCRIPT}'"],
-                           capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(
+            ["adb", "-s", self.serial, "shell", f"su -c 'sh {self.SCRIPT}'"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
         return r.stdout.replace("\r", "")
 
     def run(self, cmd: str, timeout: int = 20) -> str:
@@ -155,6 +175,7 @@ class AdbEcho:
 
 class EmosEcho:
     """An emOS Echo on its USB serial console, addressed by serial number."""
+
     base = "emos"
 
     def __init__(self, serial: str):
@@ -192,28 +213,69 @@ def _hex(text: str) -> str:
 
 # ─── Commands ────────────────────────────────────────────────────────────────
 
+
 def up(image: str) -> None:
     subprocess.run(["docker", "rm", "-f", CONTAINER], capture_output=True)
     data = STATE / "controller-data"
     subprocess.run(["rm", "-rf", str(data)])
     data.mkdir(parents=True)
-    subprocess.run([
-        "docker", "run", "-d", "--name", CONTAINER,
-        "-p", f"{PORT}:{PORT}", "-p", f"{TLS_PORT}:{TLS_PORT}", "-p", f"{API_PORT}:8768",
-        "-e", f"SERVER_IP={HOST_IP}", "-e", f"SERVER_PORT={PORT}", "-e", "API_PORT=8768",
-        "-e", "DB_PATH=/app/data/echomuse.db", "-e", "DEVICE_APPROVAL=strict",
-        "-e", "VOICE_MODE=esphome", "-e", "MDNS_NAME=em-uat", "-e", "LOG_LEVEL=DEBUG",
-        "-v", f"{data}:/app/data", image], check=True, capture_output=True)
+    subprocess.run(
+        [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            CONTAINER,
+            "-p",
+            f"{PORT}:{PORT}",
+            "-p",
+            f"{TLS_PORT}:{TLS_PORT}",
+            "-p",
+            f"{API_PORT}:8768",
+            "-e",
+            f"SERVER_IP={HOST_IP}",
+            "-e",
+            f"SERVER_PORT={PORT}",
+            "-e",
+            "API_PORT=8768",
+            "-e",
+            "DB_PATH=/app/data/echomuse.db",
+            "-e",
+            "DEVICE_APPROVAL=strict",
+            "-e",
+            "VOICE_MODE=esphome",
+            "-e",
+            "MDNS_NAME=em-uat",
+            "-e",
+            "LOG_LEVEL=DEBUG",
+            "-v",
+            f"{data}:/app/data",
+            image,
+        ],
+        check=True,
+        capture_output=True,
+    )
 
     def setup_token():
-        logs = subprocess.run(["docker", "logs", CONTAINER], capture_output=True, text=True)
+        logs = subprocess.run(
+            ["docker", "logs", CONTAINER], capture_output=True, text=True
+        )
         text = logs.stdout + logs.stderr
         block = text.split("first-run setup", 1)
-        return "".join(re.findall(r"[0-9a-f]{32}", block[1]))[:64] if len(block) > 1 else None
+        return (
+            "".join(re.findall(r"[0-9a-f]{32}", block[1]))[:64]
+            if len(block) > 1
+            else None
+        )
+
     one_time = wait_for("the first-run setup token", setup_token, 60, 1)
     password = os.urandom(12).hex()
-    res = api("POST", "/api/setup",
-              {"token": one_time, "username": "uat", "password": password}, token="")
+    res = api(
+        "POST",
+        "/api/setup",
+        {"token": one_time, "username": "uat", "password": password},
+        token="",
+    )
     _save_state(image=image, username="uat", password=password, token=res["token"])
     print(f"controller up: {image}, dashboard {API}, admin 'uat' (password in {STATE})")
 
@@ -228,13 +290,19 @@ def attach(serial: str) -> None:
             echo.run(f"mkdir -p {BACKUP}")
             for f in ("ca.pem", "token", "controller.json"):
                 echo.run(f"[ -e {DEVICE_ETC}/{f} ] && cp -p {DEVICE_ETC}/{f} {BACKUP}/")
-            echo.run(f"[ -e {DEVICE_ETC}/controller.json ] || touch {BACKUP}/.no-controller-json")
+            echo.run(
+                f"[ -e {DEVICE_ETC}/controller.json ] || touch {BACKUP}/.no-controller-json"
+            )
             echo.run(f"touch {BACKUP}/.saved")
         # Joins as a fresh device: its credentials belong to another
         # controller (they are in the backup, and detach restores them).
         echo.run(f"rm -f {DEVICE_ETC}/ca.pem {DEVICE_ETC}/token")
-        endpoint = json.dumps({"endpoints": [{"host": HOST_IP, "port": PORT,
-                                              "tls_port": TLS_PORT}], "mdns": False})
+        endpoint = json.dumps(
+            {
+                "endpoints": [{"host": HOST_IP, "port": PORT, "tls_port": TLS_PORT}],
+                "mdns": False,
+            }
+        )
         echo.run(f"printf '{_hex(endpoint)}' > {DEVICE_ETC}/controller.json")
         echo.restart_firmware()
     finally:
@@ -242,11 +310,16 @@ def attach(serial: str) -> None:
     wait_for(f"{serial} to reach the rig", lambda: device(serial), 120)
     # Labels must be unique (#650), and there is one per attached Echo.
     api("POST", f"/api/devices/{serial}/approve", {"label": f"UAT {serial[-4:]}"})
-    d = wait_for(f"{serial} connected", lambda: (device(serial) or {}).get("connected")
-                 and device(serial), 180)
+    d = wait_for(
+        f"{serial} connected",
+        lambda: (device(serial) or {}).get("connected") and device(serial),
+        180,
+    )
     _save_state(serials=sorted(set(_state().get("serials") or []) | {serial}))
-    print(f"{serial} attached: firmware {d.get('firmware_ver')}, link "
-          f"{'wss' if d.get('linkTls') else 'plain'}")
+    print(
+        f"{serial} attached: firmware {d.get('firmware_ver')}, link "
+        f"{'wss' if d.get('linkTls') else 'plain'}"
+    )
 
 
 def detach(serial: str) -> None:
@@ -256,7 +329,9 @@ def detach(serial: str) -> None:
             raise SystemExit(f"{serial} has no UAT backup to restore")
         for f in ("ca.pem", "token", "controller.json"):
             echo.run(f"[ -e {BACKUP}/{f} ] && cp -p {BACKUP}/{f} {DEVICE_ETC}/")
-        echo.run(f"[ -e {BACKUP}/.no-controller-json ] && rm -f {DEVICE_ETC}/controller.json")
+        echo.run(
+            f"[ -e {BACKUP}/.no-controller-json ] && rm -f {DEVICE_ETC}/controller.json"
+        )
         echo.run(f"rm -rf {BACKUP}")
         echo.restart_firmware()
         if isinstance(echo, AdbEcho):
@@ -274,13 +349,21 @@ def down() -> None:
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
-    u = sub.add_parser("up"); u.add_argument("--image", required=True)
-    a = sub.add_parser("attach"); a.add_argument("serial")
-    d = sub.add_parser("detach"); d.add_argument("serial")
+    u = sub.add_parser("up")
+    u.add_argument("--image", required=True)
+    a = sub.add_parser("attach")
+    a.add_argument("serial")
+    d = sub.add_parser("detach")
+    d.add_argument("serial")
     sub.add_parser("down")
     args = ap.parse_args()
-    {"up": lambda: up(args.image), "attach": lambda: attach(args.serial),
-     "detach": lambda: detach(args.serial), "down": down}[args.cmd]()
+    {
+        "up": lambda: up(args.image),
+        "attach": lambda: attach(args.serial),
+        "detach": lambda: detach(args.serial),
+        "down": down,
+    }[args.cmd]()

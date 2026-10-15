@@ -100,9 +100,21 @@ def test_baseline_round_trip(tmp_path):
     "fmt,line,key",
     [
         ("staticcheck", SC_B, ("internal/b/b.go", "S1024")),
-        ("ruff", "controller/em_x.py:3:1: BLE001 Do not catch blind exception", ("controller/em_x.py", "BLE001")),
-        ("mypy", "controller/em_x.py:3: error: Bad thing  [arg-type]", ("controller/em_x.py", "arg-type")),
-        ("mypy", "controller/em_x.py:3:7: error: Bad thing  [union-attr]", ("controller/em_x.py", "union-attr")),
+        (
+            "ruff",
+            "controller/em_x.py:3:1: BLE001 Do not catch blind exception",
+            ("controller/em_x.py", "BLE001"),
+        ),
+        (
+            "mypy",
+            "controller/em_x.py:3: error: Bad thing  [arg-type]",
+            ("controller/em_x.py", "arg-type"),
+        ),
+        (
+            "mypy",
+            "controller/em_x.py:3:7: error: Bad thing  [union-attr]",
+            ("controller/em_x.py", "union-attr"),
+        ),
     ],
 )
 def test_each_format_parses(fmt, line, key):
