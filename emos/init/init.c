@@ -1770,7 +1770,12 @@ static int wmt_answer_patches(int fd, const char *dir)
          * higher-numbered file is downloaded first. Observed live; assigning
          * 1,2 in name order sends them in the wrong order. */
         pi.seq = n - i;
-        snprintf(full, sizeof full, "%s%s", dir, names[i]);
+        /* Checked for the same reason as pi.name below: a truncated path is
+         * opened exactly as given. GCC 13 flags it unchecked. */
+        int fn = snprintf(full, sizeof full, "%s%s", dir, names[i]);
+        if (fn < 0 || (size_t)fn >= sizeof full)
+            netlog("wmt: patch path too long (%d bytes, max %d): %s%s\n",
+                   fn, (int)sizeof full - 1, dir, names[i]);
         if (wmt_patch_addr(full, pi.addr))
             netlog("wmt: no header address in %s\n", names[i]);
         /* FULL PATH, not a bare name. wmt_dev_patch_get does not use
@@ -3218,7 +3223,7 @@ static void console_banner(void)
                 char *q = strchr(l + 9, '"');
                 if (q) {
                     *q = 0;
-                    snprintf(ver, sizeof ver, "emOS %s", l + 9);
+                    snprintf(ver, sizeof ver, "emOS %.58s", l + 9); /* 64 less "emOS " and NUL */
                 }
                 break;
             }
