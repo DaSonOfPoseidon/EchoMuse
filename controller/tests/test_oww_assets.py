@@ -502,7 +502,6 @@ def test_the_connect_reconcile_is_not_gated_on_the_wake_word_mode():
     the controller's wake word never got the runtime or the speech gate's
     model, and could not switch mode without an install first."""
     import ast
-    from pathlib import Path
     _, fn = _sources.find_def("em_oww_sync.reconcile")
     for node in ast.walk(fn):
         if isinstance(node, ast.If) and "MODE_OFF" in ast.unparse(node.test):
@@ -515,7 +514,6 @@ def test_the_reconcile_never_changes_a_devices_mode():
     """Repair, never switch: a device missing its model keeps its mode and
     answers the button until the install lands (Wil, 2026-09-22)."""
     import ast
-    from pathlib import Path
     _, fn = _sources.find_def("em_oww_sync.reconcile")
     for node in ast.walk(fn):
         if isinstance(node, (ast.Assign, ast.AugAssign)):

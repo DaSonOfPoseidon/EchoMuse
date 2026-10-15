@@ -489,7 +489,7 @@ async def _post_provision_emos_image(request: web.Request) -> web.Response:
             None, em_emos_build.build_emos_image, reference, init_bin, version,
             "", sbin, system_part)
 
-        log.info(f"[api] emOS image built"
+        log.info("[api] emOS image built"
                  # Not "(older wizard)", which is one of three ways to get
                  # here and was the wrong one when this line last mattered:
                  # the v1 path sends no partition by design, and until #545

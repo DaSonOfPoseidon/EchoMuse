@@ -101,7 +101,7 @@ class Job:
             pgid = os.getpgid(self.proc.pid)
         except ProcessLookupError:
             return
-        self._note(f"\n[forge-ui] cancelled by request — stopping (SIGTERM)\n")
+        self._note("\n[forge-ui] cancelled by request — stopping (SIGTERM)\n")
         try:
             os.killpg(pgid, signal.SIGTERM)
         except ProcessLookupError:

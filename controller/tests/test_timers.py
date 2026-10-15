@@ -5,7 +5,6 @@ to ring. These pin the ring-transition reducer (which is what the async
 orchestrator in em_controller keys off), the spoken-dismissal matcher, and the
 duck applied to the alert while someone speaks over it.
 """
-import pytest
 
 import em_timers as t
 

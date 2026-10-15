@@ -63,7 +63,6 @@ import json
 import logging
 import os
 import socket
-import struct
 import time
 
 import numpy as np

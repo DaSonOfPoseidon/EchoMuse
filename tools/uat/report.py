@@ -90,7 +90,7 @@ def build(version: str, controls: dict, a11y: dict, human: dict | None) -> str:
             ""]
     if human:
         hn = Counter(s["outcome"] for s in human["steps"])
-        out += [f"Guided steps with a person: " + ", ".join(f"{v} {k}" for k, v in hn.items()), ""]
+        out += ["Guided steps with a person: " + ", ".join(f"{v} {k}" for k, v in hn.items()), ""]
 
     out += ["## How this was run", "",
             f"- Controller image `{controls.get('image')}`, isolated rig "

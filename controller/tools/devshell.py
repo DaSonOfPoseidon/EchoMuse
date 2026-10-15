@@ -11,7 +11,7 @@ READ ONLY, in practice: a shell opened here is a CHILD OF THE SERVER, so
 `stop`ping the service kills this shell at the first word and takes the device
 down until it is power cycled. Inspect freely; do not stop the server.
 """
-import asyncio, json, secrets, sqlite3, sys, time
+import asyncio, secrets, sqlite3, sys, time
 import websockets
 
 # Default when neither -d nor --all is given — kept so existing invocations

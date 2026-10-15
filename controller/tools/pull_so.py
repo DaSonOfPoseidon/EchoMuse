@@ -47,7 +47,7 @@ async def main():
             await ws.send(b"\x00busybox stty -echo 2>/dev/null\n"); await drain(b"# ", 5)
             buf.clear()
             await ws.send(b"\x00echo ST\"\"ART; busybox base64 " + SRC.encode() + b"; echo E\"\"ND\n")
-            ok = await drain(b"\nE" + b"ND", 120)
+            await drain(b"\nE" + b"ND", 120)
             text = bytes(buf).decode("utf-8", "replace")
             m = re.search(r"ST" "ART\r?\n(.*?)\r?\nE" "ND", text, re.S)
             if not m: print("FAILED to frame output; got", len(text), "bytes", file=sys.stderr); return

@@ -31,9 +31,8 @@ Format (little-endian):
       uint64 feat_fnv            -- FNV-1a of the 16x96 classifier input
       float32                    -- the classifier's score
 """
-import numpy as np, struct, wave, sys, hashlib
+import numpy as np, struct, wave, sys
 sys.path.insert(0,'/usr/local/lib/python3.12/site-packages')
-import openwakeword
 from openwakeword.utils import AudioFeatures
 import onnxruntime as ort
 

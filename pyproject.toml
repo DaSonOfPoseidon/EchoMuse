@@ -1,0 +1,15 @@
+# Lint and format configuration for the repository's Python (#822). Tool
+# configuration only: nothing here is packaged.
+
+[tool.ruff]
+target-version = "py312"
+extend-exclude = [
+    # Generated protobuf, vendored from aioesphomeapi.
+    "controller/esphome/vendor",
+    "GoTinyAlsa",
+]
+
+[tool.ruff.lint]
+# The full pyflakes set. Undefined names were the only check until #822;
+# they are still the reason this job exists (see ci.yml).
+select = ["F"]

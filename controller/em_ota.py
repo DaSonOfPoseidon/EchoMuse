@@ -346,7 +346,7 @@ async def _run_update_locked(device_id: str, release: dict,
         # Atomic symlink flip + service restart
         await em_events.push_log(device_id, "info", "controller",
                               f"Flipping symlink → {inactive_slot} and restarting")
-        result = await em_shell.run(live,
+        await em_shell.run(live,
             f"ln -sf {inactive_slot} /data/local/bin/server && "
             f"kill $PPID"
         )
@@ -484,7 +484,7 @@ async def run_rollback(device_id: str, target_version: str) -> None:
         await em_events.push_log(device_id, "info", "controller",
                               f"Flipping {active_slot} → {inactive_slot}")
 
-        result = await em_shell.run(live,
+        await em_shell.run(live,
             f"ln -sf {inactive_slot} /data/local/bin/server && "
             f"kill $PPID"
         )

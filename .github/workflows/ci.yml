@@ -65,42 +65,39 @@ jobs:
       - run: python -m pytest oww_forge/tests/ -v
 
   controller-lint:
-    name: Controller lint (undefined names)
+    name: Python lint (ruff)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - name: Install pyflakes
-        run: pip install pyflakes
+      - name: Install ruff
+        run: pip install ruff==0.16.10
       # Why this job exists, in one sentence: `time.monotonic()` was added to
       # em_controller.py, which does not import time, and the resulting
       # NameError killed the wake word listener on the first detection --
       # fleet-wide, in production, on a line no test could reach because the
       # wake loop needs openwakeword and a real utterance to execute.
       #
-      # pyflakes finds that class of bug in milliseconds without importing
+      # A linter finds that class of bug in milliseconds without importing
       # anything, which is what makes it worth a job: the controller's heavy
       # modules (em_controller, em_api, em_esphome) are deliberately NOT
       # imported by the test suite, so every rarely-taken branch in them is
       # untested by construction. Undefined names are the failure mode that
-      # punishes hardest -- silent until executed, then fatal.
+      # punishes hardest -- silent until executed, then fatal. The same goes
+      # for emos/mkboot.py, which cannot run without a boot image off the
+      # user's own device, and runs while somebody is writing to a boot
+      # partition.
       #
-      # Scoped to undefined names ONLY, on purpose. The codebase has pre-existing
-      # unused-variable and f-string warnings that are not worth a churn commit,
-      # and a lint job that fails for style would get ignored or removed.
-      - name: Check for undefined names
-        working-directory: controller
-        run: |
-          out=$(python -m pyflakes em_*.py tools/*.py tests/*.py esphome/*.py 2>&1 \
-                | grep -i "undefined name" || true)
-          if [ -n "$out" ]; then
-            echo "$out"
-            echo "::error::pyflakes found undefined name(s) -- see above"
-            exit 1
-          fi
-          echo "No undefined names."
+      # This job checked undefined names ONLY until #822, on the grounds that
+      # a lint job failing on pre-existing findings would get ignored or
+      # removed. The full pyflakes set (ruff's F) now runs on every Python
+      # file in the repository: its 45 findings were fixed rather than
+      # carried. Rules added later start as ratchets (tools/hygiene), so
+      # existing findings do not fail them. Configuration is pyproject.toml.
+      - name: ruff check
+        run: ruff check --output-format=github .
 
   dashboard-tests:
     name: Dashboard logic tests
@@ -358,7 +355,7 @@ jobs:
       # em_turnclock were split out as pure modules with real coverage.
       # That split is right and should continue. What it leaves behind is a
       # blind spot: em_controller.py is ~4000 lines that nothing in CI ever
-      # parses beyond `pyflakes`, and em_api.py is not far behind.
+      # parses beyond a linter, and em_api.py is not far behind.
       #
       # PR #280 walked straight into it — the control-plane dispatch chain
       # re-indented inside a try/except, +498/-389, in exactly that file.
@@ -696,21 +693,6 @@ jobs:
               sys.exit(1)
           print(f"{n} vectors agree")
           PY
-      # mkboot.py cannot be exercised without a reference boot image, which is
-      # the one input we never ship — it comes off the user's own device. So
-      # this is the same undefined-name check the controller gets, for the
-      # same reason: it is the failure that is silent until the line runs, and
-      # the line here runs while somebody is writing to a boot partition.
-      - name: Check the packer for undefined names
-        run: |
-          pip install pyflakes
-          out=$(python -m pyflakes emos/mkboot.py 2>&1 | grep -i "undefined name" || true)
-          if [ -n "$out" ]; then
-            echo "$out"
-            echo "::error::pyflakes found undefined name(s) in mkboot.py"
-            exit 1
-          fi
-          echo "No undefined names."
 
   device-vet:
     name: Device go vet
