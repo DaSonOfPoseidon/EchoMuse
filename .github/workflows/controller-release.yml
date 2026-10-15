@@ -235,8 +235,8 @@ jobs:
       # ── Supply chain ────────────────────────────────────────────────────
       #
       # The image is what users actually run, and it is the only place the
-      # full dependency set exists: requirements.txt leaves four packages
-      # unpinned, openwakeword is installed with --no-deps, and the Debian
+      # full dependency set exists: the Python packages are hash-pinned in
+      # requirements.txt and requirements-nodeps.txt (#822), but the Debian
       # base contributes ffmpeg and curl. So the SBOM is generated from the
       # built image, never from requirements.txt.
       #

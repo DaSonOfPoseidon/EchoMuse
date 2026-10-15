@@ -28,11 +28,16 @@ jobs:
       # them. onnx is held to the version the image's build stage uses.
       # pyyaml is for the add-on config parity tests (test_channels.py).
       #
-      # -c requirements.txt holds each package to the version the image
-      # ships, so the suite cannot pass against a library we do not run, and
-      # a Dependabot bump there reaches this job with no second edit.
+      # The lock holds each package to the version the image ships, so the
+      # suite cannot pass against a library we do not run, and a Dependabot
+      # bump there reaches this job with no second edit. It is passed as
+      # plain name==version constraints: a constraints file carrying hashes
+      # puts pip in hash-checking mode for the whole install, which the
+      # unhashed test tools here cannot satisfy.
       - name: Install test dependencies
-        run: pip install -c controller/requirements.txt pytest pytest-cov numpy scipy pyyaml aiohttp websockets bcrypt zeroconf protobuf cryptography onnxruntime onnx==1.20.1
+        run: |
+          grep -oE '^[A-Za-z0-9_.-]+==[^ ]+' controller/requirements.txt > /tmp/constraints.txt
+          pip install -c /tmp/constraints.txt pytest pytest-cov numpy scipy pyyaml aiohttp websockets bcrypt zeroconf protobuf cryptography onnxruntime onnx==1.20.1
       # test_emos_update_flow.py runs the emOS update's device commands in a
       # real shell, with busybox as the device has it. Without one the test
       # would skip, so it fails under CI instead — a skipped check of what is
@@ -116,7 +121,8 @@ jobs:
       # only third-party imports those modules have.
       - name: Type check (ratchet)
         run: |
-          pip install -c controller/requirements.txt mypy==2.3.1 numpy scipy
+          grep -oE '^[A-Za-z0-9_.-]+==[^ ]+' controller/requirements.txt > /tmp/constraints.txt
+          pip install -c /tmp/constraints.txt mypy==2.3.1 numpy scipy
           python tools/hygiene/ratchet.py mypy -- mypy --no-incremental
 
   dashboard-tests:
@@ -208,11 +214,11 @@ jobs:
           python-version: "3.12"
       - name: Install pip-audit
         run: pip install pip-audit
-      # This is the FAST check, not the authoritative one. requirements.txt
-      # leaves scipy/tqdm/scikit-learn/requests unpinned and installs
-      # openwakeword separately with --no-deps, so what a user actually runs
-      # is decided at image build time, not here. The published image is the
-      # source of truth and is scanned in security-scan.yml; this job exists
+      # This is the FAST check, not the authoritative one. Since #822 every
+      # Python package is pinned and hashed (requirements.txt, and
+      # requirements-nodeps.txt for openwakeword), but the image also carries
+      # the Debian layer this cannot see. The published image is the source
+      # of truth and is scanned in security-scan.yml; this job exists
       # to fail on a PR that adds a known-vulnerable pin, minutes rather than
       # a release later.
       #
@@ -223,9 +229,28 @@ jobs:
       - name: Audit pinned dependencies
         working-directory: controller
         run: |
-          pip-audit -r requirements.txt --desc 2>&1 | tee audit.txt || true
+          # --disable-pip: both files are complete pins, so there is nothing
+          # to resolve, and resolving openwakeword's declared deps is exactly
+          # what --no-deps exists to avoid.
+          { pip-audit --disable-pip --require-hashes -r requirements.txt --desc 2>&1
+            pip-audit --disable-pip --no-deps -r requirements-nodeps.txt --desc 2>&1; } | tee audit.txt || true
           if grep -qiE "^(Name|found [1-9])" audit.txt; then
             echo "::warning::pip-audit reported findings — see the log"
+          fi
+      # requirements.txt is GENERATED from requirements.in, and a hand edit
+      # to either that skipped pip-compile would ship a lock that no longer
+      # says what the .in asks for. pip-compile keeps existing pins when it
+      # can, so recompiling a current lock changes nothing.
+      - name: The lock matches requirements.in
+        working-directory: controller
+        run: |
+          pip install pip-tools==7.6.2
+          cp requirements.txt /tmp/lock.txt
+          pip-compile --quiet --generate-hashes --allow-unsafe --strip-extras \
+            -o /tmp/lock.txt requirements.in
+          if ! diff <(grep -v '^#' requirements.txt) <(grep -v '^#' /tmp/lock.txt); then
+            echo "::error::requirements.txt is stale -- run: cd controller && pip-compile --generate-hashes --allow-unsafe --strip-extras requirements.in"
+            exit 1
           fi
 
   device-vulncheck:
@@ -293,13 +318,14 @@ jobs:
           fi
           base="${{ github.event.pull_request.base.sha }}"
           files=$(git diff --name-only "$base"...HEAD -- \
-                    controller/Dockerfile controller/requirements.txt)
+                    controller/Dockerfile controller/requirements.txt \
+                    controller/requirements.in controller/requirements-nodeps.txt)
           if [ -n "$files" ]; then
             echo "build=true" >> "$GITHUB_OUTPUT"
             echo "$files"
           else
             echo "build=false" >> "$GITHUB_OUTPUT"
-            echo "Dockerfile and requirements.txt unchanged"
+            echo "Dockerfile and requirements unchanged"
           fi
       - name: Set up Docker Buildx
         if: steps.changed.outputs.build == 'true'

@@ -11,8 +11,9 @@ version: 2
 #
 # Note what Dependabot structurally cannot see here, so nobody reads a green
 # board as "everything is covered":
-#   - openwakeword is installed in the Dockerfile with --no-deps, not from
-#     requirements.txt, so its pin is invisible to the pip ecosystem below.
+#   - openwakeword is installed with --no-deps from requirements-nodeps.txt,
+#     which the pip ecosystem below does see (#822), but its minors and
+#     majors are ignored there for onnxruntime's reason.
 #   - SpeexDSP is vendored C source in device/internal/aec/ with no package
 #     metadata at all.
 #   - ONNX Runtime is dlopen'd on the device, pinned by AAR sha256 in the
@@ -44,6 +45,14 @@ updates:
     # routine. Nothing in CI can catch an inference regression, so the guard
     # has to be here or it does not exist.
     #
+    # openwakeword (requirements-nodeps.txt) is ignored on minor and major for
+    # the same reason as onnxruntime: it IS the wake word scoring. Until #822
+    # it was installed from the Dockerfile and Dependabot never saw it.
+    #
+    # requirements.txt is compiled by pip-compile from requirements.in, and
+    # Dependabot recognises the header and recompiles rather than editing
+    # the lock.
+    #
     # numpy is ignored on MINOR too since it was held at 2.3 (#496): 2.4+
     # wheels need an x86-64-v2 CPU and stop the add-on starting on Proxmox
     # kvm64. A weekly PR offering 2.4 would be red on the kvm64 check every
@@ -54,6 +63,10 @@ updates:
           - version-update:semver-major
           - version-update:semver-minor
       - dependency-name: onnxruntime
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+      - dependency-name: openwakeword
         update-types:
           - version-update:semver-major
           - version-update:semver-minor
