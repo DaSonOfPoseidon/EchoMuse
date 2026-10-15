@@ -517,7 +517,7 @@ async def device_connected(device_id: str, ble_connect: bool = False) -> None:
             if proxy is not None:
                 await proxy.start(_host)
     except Exception as e:
-        log.warning(f"[{device_id}] BT proxy start on connect failed: {e}")
+        log.warning(f"[{device_id}] BT proxy start on connect failed: {e}", exc_info=True)
 
 
 async def device_disconnected(device_id: str) -> None:
@@ -533,7 +533,7 @@ async def device_disconnected(device_id: str) -> None:
                 proxy.link.reset()
                 await proxy.stop()
     except Exception as e:
-        log.warning(f"[{device_id}] BT proxy stop on disconnect failed: {e}")
+        log.warning(f"[{device_id}] BT proxy stop on disconnect failed: {e}", exc_info=True)
 
 
 def gatt_from_device(device_id: str, payload: bytes) -> None:
