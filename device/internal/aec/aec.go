@@ -196,6 +196,9 @@ type Canceller struct {
 	// once-a-second attenuation line.
 	hwFrames  uint64
 	hwMissing uint64
+
+	// dealias rebuilds ch8 from the output without its aliases (dealias.go).
+	dealias *dealias
 }
 
 // SetHardwareRef selects the far-end source. True takes it from ch8 of the
@@ -281,7 +284,7 @@ func (c *Canceller) RefSource() string {
 
 // New returns a disabled Canceller. Call SetParams (config push) to arm it.
 func New() *Canceller {
-	return &Canceller{}
+	return &Canceller{dealias: newDealias()}
 }
 
 // SetParams applies config. On the software tap, any change to delay or tail
@@ -401,6 +404,8 @@ func (c *Canceller) pushLocked(s int16) {
 // crude, but the echo content is voice-band and the canceller adapts to
 // the filter's response like any other part of the echo path).
 func (c *Canceller) WriteFar(period []byte) {
+	// Every period, on either path: the hardware reference is placed in it.
+	c.dealias.feed(period)
 	// Before the lock: see hwRefLive. A period that races a switch to the
 	// software tap is dropped, which the switch's ring reset would have done
 	// anyway.
@@ -482,6 +487,9 @@ func (c *Canceller) Process(mono []byte) []byte {
 // passes through uncancelled rather than being cancelled against silence —
 // which would be indistinguishable from a working AEC with nothing playing.
 func (c *Canceller) ProcessWithRef(mono, ref []byte) []byte {
+	if ref != nil {
+		ref = c.dealias.clean(ref)
+	}
 	return c.process(mono, ref)
 }
 
@@ -661,6 +669,9 @@ func (c *Canceller) noteAttLocked(micRMS, outRMS, refRMS float64, useHW bool, mi
 func (c *Canceller) ProcessMicsWithRef(mics [][]byte, active int, ref []byte) []byte {
 	if active < 0 || active >= len(mics) {
 		return nil
+	}
+	if ref != nil {
+		ref = c.dealias.clean(ref)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

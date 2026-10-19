@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"math"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -179,5 +180,27 @@ func TestSoftwareTapNeverSaves(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if _, err := os.Stat(path); err == nil {
 		t.Fatal("the software tap saved its filter")
+	}
+}
+
+// Saved paths from before the de-aliased reference are removed, and a
+// missing one is not an error.
+func TestRemoveStatesDeletesOnlyWhatIsListed(t *testing.T) {
+	dir := t.TempDir()
+	old, keep := filepath.Join(dir, "aec_echo_path.bin"), filepath.Join(dir, "aec_echo_path.v2.bin")
+	for _, p := range []string{old, keep} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removeStates([]string{old, filepath.Join(dir, "absent")})
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Error("legacy path survived")
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Error("current path removed")
+	}
+	if DefaultStatePath == legacyStatePaths[0] {
+		t.Error("the current path is one of the legacy ones")
 	}
 }

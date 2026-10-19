@@ -162,6 +162,9 @@ func main() {
 	// Local duck at the device's own wake crossing, confirmed or released by
 	// the controller's duck message (OnDuck below).
 	localDuck = speaker.NewLocalDuck(pcmSpeaker.SetDuck, speaker.LocalDuckHold)
+	if benchSpeaker != nil {
+		benchSpeaker(pcmSpeaker)
+	}
 
 	buttonController.SetVolumeCallback(func(direction string) {
 		// Inert without a controller: nothing is playing to be louder or
@@ -196,7 +199,8 @@ func main() {
 
 	dataClient := client.NewDataClient(deviceID, microphone, pcmSpeaker, canceller)
 	canceller.SetStatePath(aec.DefaultStatePath) // saved echo path: loaded on the hardware reference
-	applyAecConfig(canceller, dataClient)        // arm from env defaults before any config push
+	aec.RemoveLegacyState()
+	applyAecConfig(canceller, dataClient) // arm from env defaults before any config push
 
 	// Direction callback — update LED ring to show estimated source angle
 	dataClient.OnDirectionChanged(func(angle float64) {
@@ -1369,6 +1373,10 @@ func speakerPlaying(spk *speaker.PcmSpeaker) func() bool {
 // benchScorer instruments a newly opened scorer; set only in bench builds
 // (trace_bench.go), nil in release.
 var benchScorer func(*shadow.Scorer, *speaker.PcmSpeaker)
+
+// benchSpeaker is handed the speaker at startup; set only in bench builds
+// (play_bench.go).
+var benchSpeaker func(*speaker.PcmSpeaker)
 
 // actsOnCrossings describes what a crossing will DO, for the log line. The
 // distinction is the whole difference between the two live modes and is not
