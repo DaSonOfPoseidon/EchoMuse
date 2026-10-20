@@ -22,4 +22,4 @@ def test_start_script_still_sets_the_mixer():
     # The guard above passes vacuously if the writes disappear altogether.
     text = SCRIPT.read_text()
     for name in ("PCM Playback Volume", "Ext_Speaker_Amp_Switch", "Digital Volume Control"):
-        assert f'tinymix -D 0 "' in text and name in text, name
+        assert 'tinymix -D 0 "' in text and name in text, name

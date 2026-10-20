@@ -111,7 +111,7 @@ def main() -> int:
 
     a, b = norm(a), (norm(b) if b else None)
 
-    print(f"\n  Third-octave response, relative to 1kHz")
+    print("\n  Third-octave response, relative to 1kHz")
     print(f"  mic ch{MIC} against reference ch{REF}\n")
     hdr = "    Hz     dB" + ("    dB(2)   delta" if b else "")
     print(hdr)

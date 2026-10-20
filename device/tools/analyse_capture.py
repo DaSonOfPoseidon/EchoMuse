@@ -24,7 +24,6 @@ Output format of capture.raw:
 """
 
 import sys
-import struct
 import argparse
 import numpy as np
 
@@ -109,7 +108,7 @@ def analyse(raw: bytes, label: str = ""):
           f"(RMS {ranked[0][1]:.5f}, {ranked[0][2]:.1f} dBFS)")
 
     # Also show original channel order for easy cross-referencing
-    print(f"\n  Channel order (0–8):")
+    print("\n  Channel order (0–8):")
     orig = sorted(rms_values, key=lambda x: x[0])
     vals = [f"ch{ch}={db:.1f}dB" for ch, _, db in orig]
     print(f"  {', '.join(vals)}")
@@ -174,7 +173,7 @@ def main():
         sys.exit(1)
 
     label = args.label or args.capture_file
-    ranked = analyse(raw, label)
+    analyse(raw, label)
 
     if args.plot:
         plot_channels(raw, title=label)

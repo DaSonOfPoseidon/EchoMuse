@@ -8,7 +8,6 @@ down, and the fleet's live DB is the only copy of the activity history.
 """
 
 import _sources
-import sqlite3
 
 import pytest
 

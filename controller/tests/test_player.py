@@ -1154,7 +1154,7 @@ def test_a_single_turn_still_ducks_and_releases_once():
         device = FakeDevice()
         device.audio_mix_capable = True
         _wire(device)
-        s = StubSession("office", periods=0)
+        StubSession("office", periods=0)
         await em_player.interrupt("office")
         ducks = [m for m in device.control_msgs if m["type"] == "duck"]
         assert ducks == [{"type": "duck", "on": True}]

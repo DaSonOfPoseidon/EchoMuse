@@ -32,7 +32,7 @@ from abc import abstractmethod
 from typing import Iterable, Optional
 
 import esphome.message_registry as registry
-from esphome.frame_protocol import FrameProtocolError, PlaintextFrameProtocol
+from esphome.frame_protocol import PlaintextFrameProtocol
 from esphome.vendor import api_pb2
 
 log = logging.getLogger("echomuse.esphome.satellite")

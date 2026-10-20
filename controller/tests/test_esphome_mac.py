@@ -104,7 +104,6 @@ def test_an_unregistered_device_still_gets_an_answer(fresh_db):
 
 def _legacy_fleet(tmp_path, serials):
     """A v18 database holding devices, then migrated to current."""
-    import sqlite3
     path = tmp_path / "legacy.db"
     db.init(str(path))
     for i, s in enumerate(serials):

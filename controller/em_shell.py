@@ -381,7 +381,7 @@ async def stream_file(live, data: bytes, dest: str,
 
         # Close heredoc; shell now executes the decode pipeline
         await ws.send(f"{DELIM}\n")
-        log.info(f"[api] Heredoc sent — waiting for TRANSFER_OK")
+        log.info("[api] Heredoc sent — waiting for TRANSFER_OK")
 
         # Wait for confirmation (decode of ~13 MB on ARM takes a few seconds)
         deadline    = time.monotonic() + 120

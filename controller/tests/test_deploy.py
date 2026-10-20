@@ -55,8 +55,6 @@ def test_dashboard_bundle_is_cache_busted():
     Asserted at the source level because the alternative is starting an aiohttp
     app, which this suite deliberately does not do.
     """
-    import re
-    from pathlib import Path
 
     handler = _sources.def_source("_serve_dashboard")
 
@@ -293,7 +291,6 @@ def test_debloat_sync_reconciles_both_halves():
     so a sync that only refreshed the script would have looked like it worked
     and changed nothing on any device.
     """
-    from pathlib import Path
     fn = _sources.def_source("sync_debloat")
 
     assert "echomuse-debloat.sh" in fn, "the boot script half must be synced"
@@ -329,7 +326,6 @@ def test_stale_release_cache_is_not_returned_when_it_has_aged_out():
     The refresh is now awaited when the DB cache has aged past the check
     interval, falling back to the stale value only if the fetch fails.
     """
-    from pathlib import Path
     fn = _sources.def_source("cached_firmware")
 
     assert "await fetch_firmware()" in fn, \
@@ -493,7 +489,6 @@ def test_controller_notes_come_from_the_tag_annotation():
     tag object. Reading them from the releases list would return the newest
     DEVICE firmware release instead — right shape, wrong product.
     """
-    from pathlib import Path
     fn = _sources.def_source("fetch_controller")
     assert "GITHUB_TAGS_URL" in fn and "GITHUB_TAG_OBJECT_URL" in fn, \
         "controller notes must come from the tag annotation, not /releases"

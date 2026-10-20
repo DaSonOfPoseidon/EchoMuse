@@ -1,5 +1,5 @@
 """OTA the built binary to a device via the controller API."""
-import asyncio, json, secrets, sqlite3, sys
+import asyncio, secrets, sqlite3, sys
 import aiohttp
 
 DEVICE = sys.argv[1]

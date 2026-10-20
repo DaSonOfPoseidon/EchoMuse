@@ -11,7 +11,6 @@ running against a newer schema.
 
 import os
 import sqlite3
-import tempfile
 
 import pytest
 

@@ -9,7 +9,6 @@ half-written file is never left where the API would serve it.
 
 import wave
 
-import pytest
 
 import em_recordings as rec
 
