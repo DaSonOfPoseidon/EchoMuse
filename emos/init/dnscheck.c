@@ -260,14 +260,16 @@ int main(void)
         slurp("/tmp/emos-dnscheck.log", got, sizeof got);
         expect("hook: replaces the default route with the first router",
                strstr(got, "route del default\nroute add default gw 10.0.0.1\n") != NULL, got);
-        system("interface=wlan0 ip=10.0.0.9 subnet=255.255.255.0 router=10.0.0.1 dns= "
-               "sh /tmp/emos-dnscheck.sh renew");
+        rc = system("interface=wlan0 ip=10.0.0.9 subnet=255.255.255.0 router=10.0.0.1 dns= "
+                    "sh /tmp/emos-dnscheck.sh renew");
         slurp(UDHCPC_DNS, got, sizeof got);
-        expect("hook: a lease without DNS empties the file", strcmp(got, "\n") == 0, got);
+        expect("hook: a lease without DNS empties the file",
+               rc == 0 && strcmp(got, "\n") == 0, got);
         put(UDHCPC_DNS, "7.7.7.7\n", 8);
-        system("dns=9.9.9.9 sh /tmp/emos-dnscheck.sh deconfig");
+        rc = system("dns=9.9.9.9 sh /tmp/emos-dnscheck.sh deconfig");
         slurp(UDHCPC_DNS, got, sizeof got);
-        expect("hook: other events leave it alone", strcmp(got, "7.7.7.7\n") == 0, got);
+        expect("hook: other events leave it alone",
+               rc == 0 && strcmp(got, "7.7.7.7\n") == 0, got);
         unlink(UDHCPC_DNS);
     }
 

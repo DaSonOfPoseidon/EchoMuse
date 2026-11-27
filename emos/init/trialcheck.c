@@ -149,6 +149,35 @@ int main(void)
         unlink(ROLLBACKREC);
     }
 
+    /* A boot.state that cannot be written stops the trial counter, so a bad
+     * image would never fall back, and nothing else on the device says why.
+     * Both ways it can fail must leave a line in the trail. */
+    {
+        size_t before = trail_len;
+        unlink(BOOTSTATE);
+        if (symlink("/dev/full", BOOTSTATE) != 0) {
+            printf("FAIL  could not point boot.state at /dev/full\n");
+            failures++;
+        }
+        write_state(3);                          /* write: ENOSPC */
+        if (!strstr(trail + before, "boot.state write")) {
+            printf("FAIL  a failed boot.state write is not in the trail\n");
+            failures++;
+        } else
+            printf("ok    a failed boot.state write is in the trail\n");
+
+        unlink(BOOTSTATE);
+        before = trail_len;
+        mkdir(BOOTSTATE, 0755);
+        write_state(3);                          /* open: EISDIR */
+        if (!strstr(trail + before, "boot.state open")) {
+            printf("FAIL  a failed boot.state open is not in the trail\n");
+            failures++;
+        } else
+            printf("ok    a failed boot.state open is in the trail\n");
+        rmdir(BOOTSTATE);
+    }
+
     unlink(BOOTDEV);
     unlink(TRIALMARK);
     if (failures) {

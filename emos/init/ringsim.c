@@ -291,8 +291,10 @@ static void check_run(void)
 static void put_frame(const char *hex)
 {
     int fd = open(LEDDIR "/frame", O_WRONLY | O_TRUNC);
-    write(fd, hex, strlen(hex));
-    close(fd);
+    ck(fd >= 0 && write(fd, hex, strlen(hex)) == (ssize_t)strlen(hex),
+       "the test frame is written");
+    if (fd >= 0)
+        close(fd);
 }
 
 static void check_orbit_join(void)

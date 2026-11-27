@@ -190,7 +190,11 @@ static int mknodes(void)
     mode_t old = umask(0);
     for (int k = 0; k < 2; k++) {
         char dir[64];
-        snprintf(dir, sizeof dir, "%s/%s", SYSDEV, kinds[k]);
+        /* Fits as "/sys/dev"; checked because devcheck.c points SYSDEV at a
+         * temporary directory, and a truncated one is some other directory. */
+        int dn = snprintf(dir, sizeof dir, "%s/%s", SYSDEV, kinds[k]);
+        if (dn < 0 || (size_t)dn >= sizeof dir)
+            continue;
         DIR *d = opendir(dir);
         if (!d)
             continue;
@@ -199,7 +203,11 @@ static int mknodes(void)
             if (de->d_name[0] == '.')
                 continue;
             char p[160], ev[512], path[160];
-            snprintf(p, sizeof p, "%s/%s/uevent", dir, de->d_name);
+            /* A truncated path is a wrong path: skip the entry. GCC 13 flags
+             * it unchecked. */
+            int pn = snprintf(p, sizeof p, "%s/%s/uevent", dir, de->d_name);
+            if (pn < 0 || (size_t)pn >= sizeof p)
+                continue;
             int fd = open(p, O_RDONLY);
             if (fd < 0)
                 continue;
@@ -208,7 +216,9 @@ static int mknodes(void)
             if (n <= 0)
                 continue;
             ev[n] = 0;
-            unsigned ma, mi;
+            /* Set by uevent_node whenever it returns 0; zeroed only because
+             * GCC cannot see that (-Wmaybe-uninitialized). */
+            unsigned ma = 0, mi = 0;
             mode_t mode;
             if (uevent_node(ev, k, path, sizeof path, &ma, &mi, &mode))
                 continue;
@@ -289,7 +299,9 @@ static const char *led_dir(void)
     struct dirent *e;
     while (d && (e = readdir(d))) {
         char p[256], name[64];
-        snprintf(p, sizeof p, "/sys/bus/i2c/devices/%s/name", e->d_name);
+        int pn = snprintf(p, sizeof p, "/sys/bus/i2c/devices/%s/name", e->d_name);
+        if (pn < 0 || (size_t)pn >= sizeof p)
+            continue;
         int fd = open(p, O_RDONLY);
         if (fd < 0)
             continue;
@@ -299,9 +311,13 @@ static const char *led_dir(void)
             continue;
         name[n] = 0;
         name[strcspn(name, "\n")] = 0;
-        if (strcmp(name, LED_DRIVER) == 0 && !found++)
-            snprintf(led_dir_buf, sizeof led_dir_buf,
-                     "/sys/bus/i2c/devices/%s", e->d_name);
+        if (strcmp(name, LED_DRIVER) == 0 && !found++) {
+            int ln = snprintf(led_dir_buf, sizeof led_dir_buf,
+                              "/sys/bus/i2c/devices/%s", e->d_name);
+            /* Truncated, it names some other directory: use the fallback. */
+            if (ln < 0 || (size_t)ln >= sizeof led_dir_buf)
+                found = 2;
+        }
     }
     if (d)
         closedir(d);
@@ -443,7 +459,8 @@ static void led_write(const unsigned char f[LED_N][3])
     int fd = led_open("frame", O_WRONLY);
     if (fd < 0)
         return;
-    write(fd, hex, sizeof hex);
+    /* Best effort: a missed frame is replaced by the next one. */
+    (void)!write(fd, hex, sizeof hex);
     close(fd);
 }
 
@@ -774,10 +791,12 @@ static void anim_claim(void)
             break;
         usleep(20000);
     }
+    /* Best effort: if the claim fails the stock orbit keeps running, which
+     * is what a missing LED driver looks like anyway. */
     int fd = led_open("boot_animation", O_WRONLY);
-    if (fd >= 0) { write(fd, "0", 1); close(fd); }
+    if (fd >= 0) { (void)!write(fd, "0", 1); close(fd); }
     fd = led_open("led_current", O_WRONLY);
-    if (fd >= 0) { write(fd, "3", 1); close(fd); }
+    if (fd >= 0) { (void)!write(fd, "3", 1); close(fd); }
 }
 
 /* The handover: take the lit ring away, and leave the head behind.
@@ -1037,12 +1056,19 @@ static int read_state(void)
 
 static void write_state(int n)
 {
+    /* This is the trial counter: if it does not advance, a bad image is
+     * never rolled back, so a failure goes in the trail rather than nowhere. */
     int fd = open(BOOTSTATE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0)
+    if (fd < 0) {
+        note("boot.state open errno=%d\n", errno);
         return;
+    }
     char b[16];
     int k = snprintf(b, sizeof b, "%d\n", n);
-    write(fd, b, k);
+    ssize_t w = write(fd, b, k);
+    if (w != k)
+        note("boot.state write n=%d of %d errno=%d\n", (int)w, k,
+             w < 0 ? errno : 0);
     fsync(fd);
     close(fd);
 }
@@ -1662,7 +1688,8 @@ static void netlog(const char *fmt, ...)
     int fd = netlog_open();
     if (fd < 0)
         return;
-    write(fd, line, n > (int)sizeof line - 1 ? (int)sizeof line - 1 : n);
+    /* Best effort: this is the log, so a failed write has nowhere to go. */
+    (void)!write(fd, line, n > (int)sizeof line - 1 ? (int)sizeof line - 1 : n);
     close(fd);
 }
 
@@ -2289,7 +2316,12 @@ static int wmt_answer_patches(int fd, const char *dir)
          * higher-numbered file is downloaded first. Observed live; assigning
          * 1,2 in name order sends them in the wrong order. */
         pi.seq = n - i;
-        snprintf(full, sizeof full, "%s%s", dir, names[i]);
+        /* Checked for the same reason as pi.name below: a truncated path is
+         * opened exactly as given. GCC 13 flags it unchecked. */
+        int fn = snprintf(full, sizeof full, "%s%s", dir, names[i]);
+        if (fn < 0 || (size_t)fn >= sizeof full)
+            netlog("wmt: patch path too long (%d bytes, max %d): %s%s\n",
+                   fn, (int)sizeof full - 1, dir, names[i]);
         if (wmt_patch_addr(full, pi.addr))
             netlog("wmt: no header address in %s\n", names[i]);
         /* FULL PATH, not a bare name. wmt_dev_patch_get does not use
@@ -2877,7 +2909,8 @@ static void rdstate(const char *tag)
 {
     char st[64] = {0};
     int f = open(USBDIR "/state", O_RDONLY);
-    if (f >= 0) { read(f, st, sizeof st - 1); close(f); }
+    /* Best effort: st starts zeroed, so a failed read logs "state=". */
+    if (f >= 0) { (void)!read(f, st, sizeof st - 1); close(f); }
     for (char *c = st; *c; c++) if (*c == '\n') *c = 0;
     note("%s state=%s\n", tag, st);
 }
@@ -3083,7 +3116,8 @@ int main(int argc, char **argv)
      * /vendor stays a plain symlink — nothing needs to write there.
      */
     mkdir("/etc", 0755);
-    symlink("/system/vendor", "/vendor");
+    if (symlink("/system/vendor", "/vendor") != 0)
+        note("stage=vendor symlink errno=%d\n", errno);
     /* Probed rather than assumed, for the reason the farm below is: the
      * kernel firmware loader reads through this link, so losing it presents
      * as wlan0 never appearing — a WiFi fault, three layers from a symlink.
@@ -3104,7 +3138,10 @@ int main(int argc, char **argv)
             char src[512], dst[512];
             snprintf(src, sizeof src, "/system/etc/%s", de->d_name);
             snprintf(dst, sizeof dst, "/etc/%s", de->d_name);
-            symlink(src, dst);
+            /* EEXIST is the design: a name the ramdisk already has (build.sh
+             * ships /etc/os-release) is kept, so it is not a failure. */
+            if (symlink(src, dst) != 0 && errno != EEXIST)
+                note("stage=etc link %s errno=%d\n", de->d_name, errno);
         }
         closedir(ed);
     }
@@ -3721,8 +3758,10 @@ static void console_gate(void)
         if (tries >= 3)
             sleep(tries > 8 ? 5 : 2);
 
+        /* Console writes are best effort: a closed port ends the read
+         * below, and there is no other place to report it. */
         const char *p = "\r\nemOS console password: ";
-        write(1, p, strlen(p));
+        (void)!write(1, p, strlen(p));
 
         char in[128];
         int n = 0;
@@ -3742,7 +3781,7 @@ static void console_gate(void)
             in[n++] = ch;
         }
         in[n] = 0;
-        write(1, "\r\n", 2);
+        (void)!write(1, "\r\n", 2);
 
         pw_hash(salt, saltlen, in, iters, got);
         int ok = 1;
@@ -3754,7 +3793,7 @@ static void console_gate(void)
             break;
 
         const char *no = "wrong\r\n";
-        write(1, no, strlen(no));
+        (void)!write(1, no, strlen(no));
     }
 
     if (have_t)
@@ -3846,7 +3885,7 @@ static void console_banner(void)
                 char *q = strchr(l + 9, '"');
                 if (q) {
                     *q = 0;
-                    snprintf(ver, sizeof ver, "emOS %s", l + 9);
+                    snprintf(ver, sizeof ver, "emOS %.58s", l + 9); /* 64 less "emOS " and NUL */
                 }
                 break;
             }
